@@ -352,7 +352,14 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 		return facts
 	}
 	_ = agentProcess
-	if err := waitForHTTPReady(ctx, agentURL+"/api/exec/health", 30*time.Second); err != nil {
+	// 鉴权常开后 /api/exec/health 受 withSecurity 保护，未带凭据的直连探活会稳定收到
+	// 401 而不是 2xx，导致 waitForHTTPReady 超时误判「Agent 没起来」。这里只需要证明
+	// disposable Agent 的 HTTP 服务已经在监听、能应答，不需要读取任何受保护数据，因此
+	// 改打 bypass 白名单里的 /api/security/health——它本就是设计给「探活但还没有凭据」
+	// 的调用方使用（同一契约见 api/security_handler.go securityBypassPath）。
+	readinessEndpoint := agentURL + "/api/security/health"
+	logger.GetLogger().WithEntryName("RuntimeValidationCampaign").WithField("endpoint", readinessEndpoint).Info("等待 disposable Agent HTTP 就绪")
+	if err := waitForHTTPReady(ctx, readinessEndpoint, 30*time.Second); err != nil {
 		facts.runErr = err
 		facts.checks = append(facts.checks, failedCampaignCheck("agent-ready", "agent_readiness_failed", err))
 		return facts

@@ -111,9 +111,21 @@ func ValidateFoundation(root, expectedProfileID string) (CheckResult, error) {
 	if err := readJSONFile(filepath.Join(root, "security.json"), &security); err != nil {
 		return CheckResult{}, fmt.Errorf("read foundation security: %w", err)
 	}
-	authRequired := security.RequireAuth || security.ProvisionState != "open"
-	if authRequired || security.TLSMode != "off" || security.BootstrapTokenHash != "" || security.TokenHash != "" || security.CACert != "" || security.ServerCert != "" || security.ServerKey != "" {
-		return blocked("foundation_security_incompatible", "foundation must use require_auth=false, provision_state=open and tls_mode=off without token/certificate state")
+	// 鉴权常开后 local-access-token 是每次启动都会轮换写入的常态（Task 2），
+	// RequireAuth 字段本身不再是 foundation 不兼容项——packaged MCP 会自举本机凭据
+	// （Task 4：health→local_token_path→读文件），不需要 foundation 显式关闭鉴权。
+	// 仍然拒绝的两类状态：
+	//   - 已被真正 provision 或正等待 provision（state != open）：说明这台机器带着
+	//     真实长期 token/证书素材，不是一台干净的、可复用的验证 foundation；
+	//   - TLS 开启：canonicalLoopbackAgentURL（mcp_process.go）只认无凭据的
+	//     http://127.0.0.1 origin，给验证框架接入 TLS 不在其职责范围内。
+	notOpen := security.ProvisionState != "open"
+	// 下面仍显式核对 token/cert 字段是否为空：正常写入路径下它们只会随
+	// provisioned/pending-bootstrap 一起出现（见 security.Store.Provision /
+	// adoptBootstrapTokenLocked），理论上已被 notOpen 覆盖；但这里是 fail-closed
+	// 校验器，不信任「理应如此」——被篡改或历史遗留的 security.json 必须显式挡住。
+	if notOpen || security.TLSMode != "off" || security.BootstrapTokenHash != "" || security.TokenHash != "" || security.CACert != "" || security.ServerCert != "" || security.ServerKey != "" {
+		return blocked("foundation_security_incompatible", "foundation must use provision_state=open and tls_mode=off without token/certificate state (local access token auth is expected)")
 	}
 	var settings FoundationRuntimeSettings
 	if err := readJSONFile(filepath.Join(root, "settings.json"), &settings); err != nil {

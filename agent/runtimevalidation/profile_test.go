@@ -83,6 +83,24 @@ func TestValidateFoundationRejectsIncompatibleDebugSessionStoreSchema(t *testing
 	require.Equal(t, "foundation_state_schema_invalid", result.Cause.Code)
 }
 
+// 鉴权常开后（agent 身份统一 + MCP 凭据自举），local-access-token 是每次启动都会
+// 轮换写入的常态，不再是「这台机器不是干净 foundation」的信号。RequireAuth=true
+// 是旧 flag 的历史遗留值，foundation 体检不应再因为它而误报
+// foundation_security_incompatible——只要没被真正 provision（state=open）且
+// TLS 关闭，就应该放行。
+func TestFoundationAllowsLocalTokenAuthInOpenState(t *testing.T) {
+	t.Parallel()
+
+	foundation := createValidFoundation(t)
+	writeJSONFile(t, filepath.Join(foundation, "security.json"), FoundationSecurityState{
+		RequireAuth: true, ProvisionState: "open", TLSMode: "off",
+	})
+
+	result, err := ValidateFoundation(foundation, "profile-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusPass, result.Status)
+}
+
 func createValidFoundation(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

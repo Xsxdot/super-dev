@@ -88,7 +88,7 @@ func (b *lockedBuffer) digest() (int, string) {
 	return b.b.Len(), fmt.Sprintf("%x", sum)
 }
 
-// StartMCPProcess 启动真实 packaged MCP 并绑定无鉴权 loopback Agent origin。
+// StartMCPProcess 启动真实 packaged MCP 并绑定 loopback Agent origin。
 //
 // 参数：
 //   - ctx: 启动前取消上下文
@@ -98,7 +98,12 @@ func (b *lockedBuffer) digest() (int, string) {
 //   - 尚未 initialize 的持久 MCPProcess
 //   - Agent origin、pipe、binary 或进程树启动错误
 //
-// 注意：AgentURL 必须是无 user/query/path 的 127.0.0.1 HTTP origin。
+// 注意：
+//   - AgentURL 必须是无 user/query/path 的 127.0.0.1 HTTP origin。
+//   - 鉴权常开后仍不在这里注入 token 环境变量：packaged MCP 与 disposable Agent
+//     同机同用户，靠自身的凭据自举完成鉴权（GET /api/security/health 换
+//     local_token_path → 读本机文件 → 缓存），显式注入反而绕过了这条自举路径，
+//     而它本身就是「credentialed agent 全工具可用」这条验收路径要证明的东西。
 func StartMCPProcess(ctx context.Context, spec MCPProcessSpec) (*MCPProcess, error) {
 	agentURL, err := canonicalLoopbackAgentURL(spec.AgentURL)
 	if err != nil {
