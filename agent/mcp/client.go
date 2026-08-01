@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -168,6 +169,8 @@ func (e AgentError) Error() string {
 type HTTPAgentClient struct {
 	baseURL string
 	http    *http.Client
+	// tokenSource 提供 Authorization 凭据；nil 表示裸连（测试 fake agent 场景）。
+	tokenSource TokenSource
 }
 
 const defaultAgentHTTPTimeout = 60 * time.Second
@@ -185,6 +188,29 @@ func NewHTTPAgentClient(baseURL string, httpClient *http.Client) *HTTPAgentClien
 		httpClient = &http.Client{Timeout: defaultAgentHTTPTimeout}
 	}
 	return &HTTPAgentClient{baseURL: strings.TrimRight(baseURL, "/"), http: httpClient}
+}
+
+// NewHTTPAgentClientWithToken 构造带凭据来源的客户端（生产入口 cmd/superdev-mcp 使用）。
+func NewHTTPAgentClientWithToken(baseURL string, httpClient *http.Client, source TokenSource) *HTTPAgentClient {
+	c := NewHTTPAgentClient(baseURL, httpClient)
+	c.tokenSource = source
+	return c
+}
+
+// applyAuth 把 tokenSource 的当前 token 注入请求头。
+// 拿不到凭据不阻断请求：裸发让 agent 返回 401，错误面统一在 do() 出口。
+func (c *HTTPAgentClient) applyAuth(req *http.Request) {
+	if c.tokenSource == nil {
+		return
+	}
+	token, err := c.tokenSource.Token(req.Context())
+	if err != nil {
+		log.Printf("[SuperDev] mcp: token source unavailable: %v", err)
+		return
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 }
 
 // ListProjects 拉取 agent 当前注册的项目列表。
@@ -976,9 +1002,25 @@ func (c *HTTPAgentClient) postWithApprovalToken(ctx context.Context, path string
 }
 
 func (c *HTTPAgentClient) do(req *http.Request, out any) error {
+	c.applyAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("agent unavailable: %w", err)
+	}
+	// 401 且有凭据来源：token 可能因 agent 重启轮换而过期——失效缓存重取一次。
+	// 只重试一次：重取后仍 401 说明凭据真的无效，交给统一错误面。
+	if resp.StatusCode == http.StatusUnauthorized && c.tokenSource != nil {
+		resp.Body.Close()
+		c.tokenSource.Invalidate()
+		retry, cloneErr := cloneRequestForRetry(req)
+		if cloneErr != nil {
+			return fmt.Errorf("agent error: agent token required (retry setup failed: %v)", cloneErr)
+		}
+		c.applyAuth(retry)
+		resp, err = c.http.Do(retry)
+		if err != nil {
+			return fmt.Errorf("agent unavailable: %w", err)
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -1002,6 +1044,21 @@ func (c *HTTPAgentClient) do(req *http.Request, out any) error {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// cloneRequestForRetry 复制请求用于一次重试。
+// http.NewRequestWithContext + bytes.Reader 会自动设置 GetBody，POST 体可重放；
+// GET/DELETE 无体直接 Clone。
+func cloneRequestForRetry(req *http.Request) (*http.Request, error) {
+	retry := req.Clone(req.Context())
+	if req.GetBody != nil {
+		body, err := req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		retry.Body = body
+	}
+	return retry, nil
 }
 
 func withQuery(path string, q url.Values) string {

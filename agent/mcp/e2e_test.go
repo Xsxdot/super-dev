@@ -14,7 +14,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -48,4 +50,31 @@ func TestMCPStdioListProjectsAgainstFakeAgent(t *testing.T) {
 	require.NoError(t, server.RunStdio(context.Background(), strings.NewReader(input), &output))
 	assert.Contains(t, output.String(), `"demo"`)
 	assert.NotContains(t, output.String(), "SuperDev agent listening")
+}
+
+// credentialed agent 全链路：fake agent 要求 bearer token，
+// stdio server 经 LocalFileTokenSource 自举后 tools/call 应成功。
+func TestMCPStdioWorksAgainstTokenRequiredAgent(t *testing.T) {
+	dir := t.TempDir()
+	tokenFile := dir + "/local-access-token"
+	require.NoError(t, os.WriteFile(tokenFile, []byte("tok-e2e\n"), 0o600))
+	var current atomic.Value
+	current.Store("tok-e2e")
+	agent := newTokenRequiredFakeAgent(t, tokenFile, &current)
+	defer agent.Close()
+
+	client := NewHTTPAgentClientWithToken(agent.URL, agent.Client(), NewLocalFileTokenSource(agent.URL, agent.Client()))
+	server := NewServer(client)
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_projects","arguments":{}}}`,
+		"",
+	}, "\n")
+	var output bytes.Buffer
+
+	require.NoError(t, server.RunStdio(context.Background(), strings.NewReader(input), &output))
+	assert.Contains(t, output.String(), `0 project(s) registered`)
+	assert.NotContains(t, output.String(), "SuperDev agent listening")
+	assert.NotContains(t, output.String(), "tok-e2e", "token 值不得混入 stdout 协议流")
 }
