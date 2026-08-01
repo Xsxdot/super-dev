@@ -72,6 +72,8 @@ func TestBuildMigrationPlan(t *testing.T) {
 	assert.Contains(t, plan.Gitignore.RemoveLines, ".superdev/")
 	assert.Contains(t, plan.Gitignore.AddLines, ".superdev/local.yaml")
 	assert.Contains(t, plan.Gitignore.AddLines, ".superdev/config.yaml.bak")
+	assert.Contains(t, plan.Gitignore.AddLines, ".superdev/*.tmp-*",
+		"原子写临时文件 local.yaml.tmp-* 是机器层明文全文，残留时不能进 git")
 }
 
 // cleanLegacyFixture 是一份「没有任何要提醒的东西」的 legacy 配置：没有
@@ -100,7 +102,7 @@ func TestBuildMigrationPlanCleanProjectMarshalsEmptySlicesNotNull(t *testing.T) 
 	dir := t.TempDir()
 	writeConfig(t, dir, cleanLegacyFixture)
 	// .gitignore 已经是迁移后的目标状态：机器层/备份行都在，整目录忽略不在。
-	mustWriteFile(t, filepath.Join(dir, ".gitignore"), ".superdev/local.yaml\n.superdev/config.yaml.bak\nnode_modules/\n")
+	mustWriteFile(t, filepath.Join(dir, ".gitignore"), ".superdev/local.yaml\n.superdev/config.yaml.bak\n.superdev/*.tmp-*\nnode_modules/\n")
 
 	plan, err := config.BuildMigrationPlan(dir)
 	assert.NoError(t, err)
@@ -174,6 +176,7 @@ func TestApplyMigration(t *testing.T) {
 	assert.NotContains(t, lines, ".superdev/", "整目录忽略行已移除")
 	assert.Contains(t, lines, ".superdev/local.yaml")
 	assert.Contains(t, lines, ".superdev/config.yaml.bak")
+	assert.Contains(t, lines, ".superdev/*.tmp-*", "原子写临时文件（机器层明文全文）残留时不能进 git")
 	assert.Contains(t, lines, "node_modules/", "无关行原样保留")
 
 	// 5. 迁移后 Load 语义等价：合并态与迁移前一致

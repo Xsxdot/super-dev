@@ -243,8 +243,8 @@ type Project struct {
 	// 保存也不改变写入内容，去留仍由人决定。
 	SharedSecretWarnings []SuspectEntry    `json:"shared_secret_warnings,omitempty" yaml:"-"`
 	Variables            map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
-	Environments []Environment     `json:"environments,omitempty"`
-	Services     []Service         `json:"services"             yaml:"services"`
+	Environments         []Environment     `json:"environments,omitempty"`
+	Services             []Service         `json:"services"             yaml:"services"`
 	// AINote 是 AI 可见的非敏感项目说明，会出现在普通配置和运行快照中。
 	AINote string `json:"ai_note,omitempty" yaml:"ai_note,omitempty"`
 	// AuthHint 是 AI 可见的非敏感鉴权提示，仅用于说明登录、换 token 等流程。

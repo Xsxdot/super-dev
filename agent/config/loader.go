@@ -450,6 +450,12 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := f.Chmod(perm); err != nil {
 		return cleanup(fmt.Errorf("chmod temp file for %s: %w", path, err))
 	}
+	// 关闭前先 fsync 临时文件：os.Rename 只保证读者看不到半截文件，不保证内容已
+	// 落盘。少了这一步，断电后可能出现「目录项指向新文件、但文件内容还没刷下去」
+	// 的空洞——对 local.yaml（密钥唯一副本）而言，这正是注释承诺要防住的那种丢失。
+	if err := f.Sync(); err != nil {
+		return cleanup(fmt.Errorf("sync temp file for %s: %w", path, err))
+	}
 	if err := f.Close(); err != nil {
 		return cleanup(fmt.Errorf("close temp file for %s: %w", path, err))
 	}
@@ -458,6 +464,24 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 			log.Printf("[SuperDev] config: failed to clean up temp file %s: %v", tmp, rmErr)
 		}
 		return fmt.Errorf("rename temp file to %s: %w", path, err)
+	}
+	// 改名本身也要落盘：目录项的更新同样缓存在内存里，不 fsync 父目录，断电后
+	// 可能回退到「改名从未发生」——旧的完整文件还在，新写入的内容却丢了。POSIX 上
+	// 对目录 fsync 即持久化其目录项；部分平台该操作是 no-op 并返回 nil，也无妨。
+	// 失败返回而非仅记日志：让调用方知道这次写入的持久性未被确认（安全优先）。
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		log.Printf("[SuperDev] config: failed to open dir %s for fsync after writing %s: %v", dir, path, err)
+		return fmt.Errorf("open dir for fsync %s: %w", dir, err)
+	}
+	if err := dirFile.Sync(); err != nil {
+		dirFile.Close()
+		log.Printf("[SuperDev] config: failed to fsync dir %s after writing %s: %v", dir, path, err)
+		return fmt.Errorf("fsync dir %s after writing %s: %w", dir, path, err)
+	}
+	if err := dirFile.Close(); err != nil {
+		log.Printf("[SuperDev] config: failed to close dir %s after fsync: %v", dir, err)
+		return fmt.Errorf("close dir after fsync %s: %w", dir, err)
 	}
 	return nil
 }

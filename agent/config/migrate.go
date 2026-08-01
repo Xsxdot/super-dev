@@ -579,7 +579,10 @@ func uiStateEnvs(p model.Project) []string {
 var legacyGitignoreLines = []string{".superdev/", ".superdev", "/.superdev/", "/.superdev"}
 
 // addedGitignoreLines 是迁移后应当忽略的机器层文件与迁移备份。
-var addedGitignoreLines = []string{".superdev/local.yaml", ".superdev/config.yaml.bak"}
+// .superdev/*.tmp-* 覆盖 writeFileAtomic 的中间产物：原子写在改名前会留下
+// 一份 local.yaml.tmp-XXXX（机器层明文全文），进程中途被杀就会残留。迁移把
+// .superdev 整目录忽略撤掉了，不显式忽略这些临时文件，残留的密钥明文就会进 git。
+var addedGitignoreLines = []string{".superdev/local.yaml", ".superdev/config.yaml.bak", ".superdev/*.tmp-*"}
 
 // gitignoreDiff 读取 <rootPath>/.gitignore（不存在视为空文件），算出一份
 // diff：RemoveLines 是文件里已存在、需要撤掉的整目录忽略行；AddLines 是
