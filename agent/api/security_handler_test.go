@@ -2,7 +2,10 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -92,6 +95,34 @@ func TestSecurityMiddlewareAccessTokenQueryOnlyForWebSocketPaths(t *testing.T) {
 		"Authorization": "",
 	})
 	require.Equal(t, http.StatusUnauthorized, rec.Code, "HTTP API 不接受 query token")
+}
+
+// loopback 请求可见 local_token_path；非 loopback 不可见。
+// 路径本身不是秘密（可预测），但仍不对远端披露——最小信息面。
+func TestSecurityHealthExposesLocalTokenPathOnlyToLoopback(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/security/health", nil)
+	req.RemoteAddr = "127.0.0.1:55555"
+	rec := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Version        string `json:"version"`
+		LocalTokenPath string `json:"local_token_path"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotEmpty(t, resp.Version)
+	require.True(t, strings.HasSuffix(resp.LocalTokenPath, "local-access-token"), "loopback 请求应拿到 token 文件路径")
+
+	// httptest.NewRequest 默认 RemoteAddr 是 192.0.2.1:1234（TEST-NET，非 loopback）
+	req2 := httptest.NewRequest(http.MethodGet, "/api/security/health", nil)
+	rec2 := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+	require.NotContains(t, rec2.Body.String(), "local_token_path", "非 loopback 不披露")
 }
 
 // bypass 白名单四条在常开语义下仍免鉴权。

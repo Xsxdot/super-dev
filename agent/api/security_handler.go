@@ -14,6 +14,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 
@@ -23,6 +24,9 @@ import (
 type securityHealthResponse struct {
 	Version        string `json:"version"`
 	ProvisionState string `json:"provision_state"`
+	// LocalTokenPath 仅对 loopback 请求返回：本机客户端（superdev-mcp、桌面端 attach）
+	// 凭它定位 local-access-token 文件。路径不是秘密，但 token 值永不经此端点传输。
+	LocalTokenPath string `json:"local_token_path,omitempty"`
 }
 
 func (a *App) securityHealth(w http.ResponseWriter, r *http.Request) {
@@ -30,10 +34,27 @@ func (a *App) securityHealth(w http.ResponseWriter, r *http.Request) {
 	if a.securityStore != nil {
 		state = a.securityStore.State()
 	}
-	jsonOK(w, securityHealthResponse{
+	resp := securityHealthResponse{
 		Version:        agentAPIVersion,
 		ProvisionState: state.ProvisionState,
-	})
+	}
+	// 本端点在 bypass 白名单内、无鉴权保护，是高频 transport 探测路径；
+	// 意图不加逐请求日志，避免探测流量刷屏日志。
+	if isLoopbackRequest(r) {
+		resp.LocalTokenPath = security.LocalTokenPath(a.cfg.DataDir)
+	}
+	jsonOK(w, resp)
+}
+
+// isLoopbackRequest 判断请求是否来自本机 loopback。
+// RemoteAddr 解析失败按非 loopback 处理——宁可少给信息，也不因解析异常误放行。
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (a *App) provisionSecurity(w http.ResponseWriter, r *http.Request) {
