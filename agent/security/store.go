@@ -88,6 +88,9 @@ type Store struct {
 	mu    sync.Mutex
 	path  string
 	state State
+	// localToken 是本进程持有的本机访问 token 明文。
+	// 仅存内存、不落 security.json——重启即换（轮换语义），落盘反而制造陈旧值。
+	localToken string
 }
 
 // NewStore 创建安全状态 Store；文件不存在时根据 Options 初始化。
@@ -280,4 +283,32 @@ func verifyHash(expectedHash string, token string) bool {
 	}
 	actual := hash(token)
 	return subtle.ConstantTimeCompare([]byte(expectedHash), []byte(actual)) == 1
+}
+
+// SetLocalToken 注入当前进程的本机访问 token（启动轮换后调用一次）。
+func (s *Store) SetLocalToken(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.localToken = token
+}
+
+// VerifyLocalToken 用常量时间比较校验本机访问 token。
+//
+// 注意：未注入（空）时恒返回 false——宁可拒绝也不放行。
+func (s *Store) VerifyLocalToken(token string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.localToken == "" || token == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(s.localToken), []byte(token)) == 1
+}
+
+// LocalToken 返回当前进程持有的本机访问 token。
+//
+// 用途：App.LocalAccessToken 访问器与测试注入；调用方不得将返回值写入日志。
+func (s *Store) LocalToken() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.localToken
 }
