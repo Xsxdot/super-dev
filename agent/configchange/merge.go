@@ -163,6 +163,11 @@ func deploymentFromPatch(patch DeploymentPatch) model.Deployment {
 	if patch.ReadOnly != nil {
 		dep.ReadOnly = *patch.ReadOnly
 	}
+	// 与 mergeDeployment 同一条规则：三个环境变量载体必须一致，否则 runtime 里
+	// 那份会在启动时盖掉 patch 声明的值。新建的 deployment 也不例外。
+	if patch.Env != nil {
+		dep.Runtime = withRuntimeEnv(dep.Runtime, patch.Env)
+	}
 	return dep
 }
 
@@ -200,6 +205,13 @@ func mergeDeployment(existing model.Deployment, patch DeploymentPatch) model.Dep
 	}
 	if patch.Env != nil {
 		dep.Env = patch.Env
+		// deployment 的环境变量有三个载体（顶层 env_vars、runtime.env、
+		// runtime.env_vars），只改顶层这一个是不够的：真正拉起进程的两处
+		// （codedebug/manager.go 与 api/handler_deployments.go）读的是
+		// Runtime.EffectiveEnv()，config 的 deploymentEnvView 也把 runtime
+		// 载体叠在最后。少改一个载体，编辑会被陈旧的 runtime 值原样盖回去——
+		// 无报错、无日志、HTTP 200，改动凭空消失。
+		dep.Runtime = withRuntimeEnv(dep.Runtime, patch.Env)
 	}
 	if patch.HostIDs != nil {
 		dep.HostIDs = patch.HostIDs
@@ -223,6 +235,64 @@ func mergeDeployment(existing model.Deployment, patch DeploymentPatch) model.Dep
 		dep.StopCommand = patch.StopCommand
 	}
 	return dep
+}
+
+// withRuntimeEnv 返回 rt 的浅拷贝，其中真正生效的环境变量载体被整体换成 env。
+//
+// 参数：
+//   - rt: 现有 runtime（nil 表示该 deployment 没有 runtime 层，直接返回 nil）
+//   - env: patch 声明的新环境变量全集
+//
+// 返回：
+//   - 新的 RuntimeConfig 指针，调用方原有对象不被就地修改
+//
+// 注意：
+//   - 必须返回拷贝：patch 合并作用在 project 快照上，就地改 Runtime 会串改
+//     调用方内存里的同一个指针，preview 与 apply 就会看到不同的"合并前"状态。
+//   - 写哪个载体跟着 EffectiveEnv 的优先级走：Env 非 nil 时它整体遮蔽 EnvVars，
+//     此时把值写进 EnvVars 等于白写；Env 为 nil 时也不能顺手新建 Env，那会把
+//     原本生效的整个 EnvVars 一次性遮蔽掉。
+//   - 被遮蔽载体里的同名键要一并清掉：它不生效，但仍以明文躺在 project.yaml
+//     里，留着就是一个永远不会被轮换的陈旧密钥副本。
+func withRuntimeEnv(rt *model.RuntimeConfig, env map[string]string) *model.RuntimeConfig {
+	if rt == nil {
+		return nil
+	}
+	cp := *rt
+	if cp.Env != nil {
+		cp.Env = copyEnv(env)
+		cp.EnvVars = withoutKeys(rt.EnvVars, env)
+		return &cp
+	}
+	cp.EnvVars = copyEnv(env)
+	return &cp
+}
+
+// copyEnv 返回 m 的副本；nil 原样返回 nil（不凭空造出一个空 map）。
+func copyEnv(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// withoutKeys 返回去掉 drop 中所有键的 m 副本；m 为 nil 时返回 nil。
+func withoutKeys(m, drop map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if _, dropped := drop[k]; dropped {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func findEnvironmentIndex(items []model.Environment, target model.Environment) int {

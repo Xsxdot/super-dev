@@ -605,3 +605,41 @@ func ptrBool(v bool) *bool {
 func ptrLanguage(v model.ServiceLanguage) *model.ServiceLanguage {
 	return &v
 }
+
+// TestApplyChangeSyncsEnvIntoRuntimeCarrier 钉住 apply_config_change 对环境变量
+// 的编辑真的会生效。
+//
+// deployment 的环境变量有三个载体（顶层 env_vars、runtime.env、runtime.env_vars），
+// 真正拉起进程的两处读的是 Runtime.EffectiveEnv()。只 patch 顶层 env 的话，改动
+// 会被 runtime 里那份陈旧值原样盖回去——无报错、无日志、HTTP 200，编辑凭空消失。
+func TestApplyChangeSyncsEnvIntoRuntimeCarrier(t *testing.T) {
+	project := sampleProject()
+	project.Services[0].Deployments[0].Env = map[string]string{"OPENAI_API_KEY": "old-key-value"}
+	original := &model.RuntimeConfig{
+		Type:    model.RuntimeTypeLanguage,
+		Env:     map[string]string{"OPENAI_API_KEY": "old-key-value"},
+		EnvVars: map[string]string{"OPENAI_API_KEY": "old-shadowed-value"},
+	}
+	project.Services[0].Deployments[0].Runtime = original
+
+	updated, err := Apply(project, ChangeRequest{
+		Kind:      KindServiceUpsert,
+		ProjectID: "p1",
+		Service: &ServicePatch{
+			ID:          "svc-worker",
+			Deployments: []DeploymentPatch{{ID: "dep-worker-dev", Env: map[string]string{"OPENAI_API_KEY": "NEW-key-value"}}},
+		},
+	})
+	require.NoError(t, err)
+
+	dep := updated.Services[0].Deployments[0]
+	assert.Equal(t, "NEW-key-value", dep.Env["OPENAI_API_KEY"], "顶层载体更新")
+	require.NotNil(t, dep.Runtime)
+	assert.Equal(t, "NEW-key-value", dep.Runtime.EffectiveEnv()["OPENAI_API_KEY"], "真正拉起进程读的载体必须一起更新")
+	assert.NotContains(t, dep.Runtime.EnvVars, "OPENAI_API_KEY", "被遮蔽载体里的同名陈旧明文要一并清掉，避免留下永不轮换的副本")
+
+	// 合并必须换一个新的 RuntimeConfig，而不是就地改调用方仍然持有的那一个：
+	// preview 与 apply 跑在同一份快照上，就地改会让"合并前"的状态跟着变。
+	assert.NotSame(t, original, dep.Runtime, "runtime 必须是拷贝")
+	assert.Equal(t, "old-key-value", original.Env["OPENAI_API_KEY"], "原 runtime 不被就地改写")
+}
