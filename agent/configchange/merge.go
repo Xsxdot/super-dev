@@ -255,7 +255,7 @@ func mergeDeployment(existing model.Deployment, patch DeploymentPatch) model.Dep
 //     原本生效的整个 EnvVars 一次性遮蔽掉。
 //   - 叠加保留未提及键：runtime 载体里可能有只存在于机器层(local.yaml)的密钥，
 //     patch 若整体替换该载体，未提及的密钥会从内存里消失，随后空的 local.yaml
-//     被删掉，唯一副本永久丢失。故用 overlayEnv 叠加而非 copyEnv 替换。
+//     被删掉，唯一副本永久丢失。故用 overlayEnv 叠加而非整体替换。
 //   - 被遮蔽载体里的同名键要一并清掉：它不生效，但仍以明文躺在 project.yaml
 //     里，留着就是一个永远不会被轮换的陈旧密钥副本。
 func withRuntimeEnv(rt *model.RuntimeConfig, env map[string]string) *model.RuntimeConfig {
@@ -288,18 +288,6 @@ func overlayEnv(base, patch map[string]string) map[string]string {
 		out[k] = v
 	}
 	for k, v := range patch {
-		out[k] = v
-	}
-	return out
-}
-
-// copyEnv 返回 m 的副本；nil 原样返回 nil（不凭空造出一个空 map）。
-func copyEnv(m map[string]string) map[string]string {
-	if m == nil {
-		return nil
-	}
-	out := make(map[string]string, len(m))
-	for k, v := range m {
 		out[k] = v
 	}
 	return out
