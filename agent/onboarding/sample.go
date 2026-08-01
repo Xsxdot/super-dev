@@ -26,12 +26,16 @@ import (
 
 const samplePort = 18191
 
-// 历史模板只用于识别旧版 Windows 首启生成的精确坏配置；新配置统一由 Loader 序列化。
-// 文件名沿用 project.yaml.tmpl 只是为了不再暗示"新示例落地成 legacy 格式"，
-// 内容仍是旧版 config.yaml 生成物的逐字节快照——不能因改名而清洗内容，
-// 否则会让 isLegacyGeneratedSampleConfig 的比对永远匹配不上真实的旧坏配置。
+// legacy-config.yaml.tmpl 不是新示例的模板——新示例的内容由 writeSampleConfig 拼装
+// model.Project 结构体后交给 Loader.Save 序列化，从不读这个文件。它是旧版单文件
+// config.yaml 生成物的逐字节冻结快照（含 env_selected_service_ids、无 split 分层），
+// 唯一用途是供 isLegacyGeneratedSampleConfig 做精确字节比对，从而判断磁盘上一个
+// 加载失败的旧配置是否就是"当年内置生成器的产物"、能否安全自动重写。因此这份内容
+// 必须保持与旧版生成器逐字节一致，不能因为"示例项目应该是干净的 split 格式"而删掉
+// env_selected_service_ids 或改写结构——那样只会让真实旧版 Windows 装机的自动修复
+// 永远匹配失败。
 //
-//go:embed assets/superdev-sample/README.md assets/superdev-sample/main.go assets/superdev-sample/.superdev/project.yaml.tmpl
+//go:embed assets/superdev-sample/README.md assets/superdev-sample/main.go assets/superdev-sample/.superdev/legacy-config.yaml.tmpl
 var sampleAssets embed.FS
 
 // ProjectRegistry 抽象项目路径注册表，用于隔离示例落地和 registry 的具体实现。
@@ -136,8 +140,8 @@ func repairLegacySampleConfig(target string, binaryPath string) (bool, error) {
 		return false, nil
 	}
 	// 这里必须固定读 config.yaml：它是旧版 Windows 首启真实写盘的文件名，
-	// 与内嵌资产改名为 project.yaml.tmpl 无关——改成读 project.yaml 会让本函数
-	// 永远找不到需要修复的旧坏配置（新版从不会在这里留下 project.yaml）。
+	// 与内嵌 legacy-config.yaml.tmpl 资产的文件名无关——改成读 project.yaml 会让
+	// 本函数永远找不到需要修复的旧坏配置（新版从不会在这里留下 project.yaml）。
 	configPath := filepath.Join(target, ".superdev", "config.yaml")
 	raw, err := os.ReadFile(configPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -147,7 +151,7 @@ func repairLegacySampleConfig(target string, binaryPath string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read seeded sample config %s: %w", configPath, err)
 	}
-	legacyTemplate, err := sampleAssets.ReadFile("assets/superdev-sample/.superdev/project.yaml.tmpl")
+	legacyTemplate, err := sampleAssets.ReadFile("assets/superdev-sample/.superdev/legacy-config.yaml.tmpl")
 	if err != nil {
 		return false, fmt.Errorf("read legacy sample config template: %w", err)
 	}

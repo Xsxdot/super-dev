@@ -100,6 +100,10 @@ func TestSeedSampleProjectCopiesRegistersAndMarks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), bin)
 	assert.Contains(t, string(raw), "is_dev: false")
+	// 直接断言头条保证：新鲜落地的示例项目加载后就是 split 格式，不需要任何迁移步骤。
+	loadedProject, err := config.NewLoader(projectDir).Load()
+	require.NoError(t, err)
+	assert.Equal(t, string(config.FormatSplit), loadedProject.ConfigFormat)
 	loaded, err := settings.Load()
 	require.NoError(t, err)
 	assert.True(t, loaded.SampleSeeded)
