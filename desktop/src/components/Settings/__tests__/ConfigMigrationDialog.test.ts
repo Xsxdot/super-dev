@@ -102,3 +102,45 @@ describe('ConfigMigrationDialog', () => {
     expect(wrapper.find('[data-test="migration-apply"]').exists()).toBe(false)
   })
 })
+
+describe('ConfigMigrationDialog 流水线疑似密钥（只告警）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // 机器层 local.yaml 对流水线没有任何 schema 表达，用户即便想把 DEPLOY_TOKEN
+  // 按到本机层也无处可放。给这类条目渲染去向单选，等于诱导用户点一个什么也不会
+  // 发生的按钮——只能明确告诉他「这条会随 git 提交出去」。
+  it('warn_only 条目不渲染去向单选，且不进 decisions', async () => {
+    const { getConfigMigrationPreview, applyConfigMigration } = await import('@/api/agent')
+    vi.mocked(getConfigMigrationPreview).mockResolvedValue(plan({
+      suspects: [
+        { scope: 'variables' as const, key: 'API_TOKEN', masked_value: 'sk-1********', reason: '键名疑似密钥' },
+        {
+          scope: 'pipeline_variables' as const,
+          pipeline: 'release',
+          key: 'DEPLOY_TOKEN',
+          masked_value: 'ghp_********',
+          reason: '键名疑似密钥',
+          warn_only: true,
+        },
+      ],
+    }))
+    vi.mocked(applyConfigMigration).mockResolvedValue(project())
+    const wrapper = mountDialog()
+    await vi.waitFor(() => expect(wrapper.findAll('[data-test^="suspect-row-"]')).toHaveLength(2))
+
+    // 可处置的那条照旧有单选；warn_only 那条只有告警文案。
+    expect(wrapper.find('[data-test="suspect-local-0"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="suspect-local-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="suspect-shared-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="suspect-warn-only-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="suspect-pipeline-1"]').text()).toContain('release')
+
+    await wrapper.find('[data-test="migration-apply"]').trigger('click')
+    await vi.waitFor(() => expect(applyConfigMigration).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(applyConfigMigration).mock.calls[0][1]).toEqual([
+      { scope: 'variables', service: undefined, env: undefined, key: 'API_TOKEN', disposition: 'local' },
+    ])
+  })
+})

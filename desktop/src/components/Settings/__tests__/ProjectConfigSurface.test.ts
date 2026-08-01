@@ -103,3 +103,50 @@ describe('ProjectConfigSurface 配置迁移集成', () => {
     expect(wrapper.find('[data-test="config-migration-dialog"]').exists()).toBe(false)
   })
 })
+
+describe('ProjectConfigSurface 只读告警横幅', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  // 队友迁移后提交了 project.yaml，本机 pull 下来时旁边还压着自己那份
+  // gitignore 的 config.yaml。split 胜出，本机的路径与密钥被整份忽略，而
+  // config_format 报的是 'split'，迁移横幅不触发——用户拿到的现象只有
+  // 「服务起不来」。这条横幅是唯一能让它可诊断的东西。
+  it('config_stale_legacy 为真时提示并存的 config.yaml 已不生效', async () => {
+    const { getConfigMigrationPreview } = await import('@/api/agent')
+    vi.mocked(getConfigMigrationPreview).mockResolvedValue(emptyPlan())
+
+    const wrapper = mountSurface({ ...splitProject(), config_stale_legacy: true })
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="config-stale-legacy-banner"]').exists()).toBe(true)
+    // 迁移横幅只认 legacy 格式，不该被这条状态误触发。
+    expect(wrapper.find('[data-test="config-migration-banner"]').exists()).toBe(false)
+  })
+
+  it('干净的 split 项目不出现任何告警横幅', async () => {
+    const wrapper = mountSurface(splitProject())
+    await new Promise(r => setTimeout(r))
+    expect(wrapper.find('[data-test="config-stale-legacy-banner"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="shared-secret-warning-banner"]').exists()).toBe(false)
+  })
+
+  // 「不挡、只亮」：共享层里的疑似密钥必须看得见（脱敏），但保存按钮照常可用。
+  it('shared_secret_warnings 逐条渲染脱敏值，且不禁用保存', async () => {
+    const wrapper = mountSurface({
+      ...splitProject(),
+      shared_secret_warnings: [
+        { scope: 'variables', key: 'OPENAI_KEY', masked_value: 'sk-l********', reason: '键名疑似密钥' },
+      ],
+    })
+    await new Promise(r => setTimeout(r))
+
+    const banner = wrapper.find('[data-test="shared-secret-warning-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('OPENAI_KEY')
+    expect(banner.text()).toContain('sk-l********')
+    expect((wrapper.find('[data-test="config-save"]').element as HTMLButtonElement).disabled).toBe(false)
+  })
+})

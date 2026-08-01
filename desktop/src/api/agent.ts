@@ -587,6 +587,17 @@ export interface Project {
   root_path: string
   /** 运行时探测的配置格式，不持久化；desktop 用它决定是否显示迁移横幅。 */
   config_format?: 'legacy' | 'split'
+  /**
+   * split 格式下旁边仍并存着一份被忽略的 config.yaml。
+   * config_format 此时是 'split'，迁移横幅不会触发，必须靠这个标记单独提示
+   * ——否则用户只看得到「服务起不来」这个现象。
+   */
+  config_stale_legacy?: boolean
+  /**
+   * 共享层 project.yaml（入库文件）里扫到的疑似密钥，值已由后端脱敏。
+   * 「不挡、只亮」：只用于提示，后端不会因此拒绝保存。
+   */
+  shared_secret_warnings?: MigrationSuspect[]
   variables?: Record<string, string>
   services: Service[]
   debug_credentials?: DebugCredential[]
@@ -601,14 +612,32 @@ export interface Project {
 
 // ===== 配置分层迁移（legacy config.yaml → project.yaml + local.yaml） =====
 
-/** MigrationSuspect 是迁移预览中的疑似密钥条目。 */
+/**
+ * MigrationSuspect 是一条疑似密钥线索（迁移预览与共享层告警共用）。
+ *
+ * scope 前两个取值是可处置作用域（机器层 local.yaml 有对应 schema）；
+ * pipeline_* 开头的只能告警——机器层对流水线没有任何表达能力。
+ */
 export interface MigrationSuspect {
-  scope: 'variables' | 'env_vars'
+  scope:
+    | 'variables'
+    | 'env_vars'
+    | 'pipeline_variables'
+    | 'pipeline_env_variables'
+    | 'pipeline_dag_variables'
+    | 'pipeline_step_with'
+    | 'pipeline_sync_command'
   service?: string
   env?: string
   key: string
   masked_value: string
   reason: string
+  /** pipeline_* 作用域下的流水线 ID/名称。 */
+  pipeline?: string
+  /** pipeline_step_with 下的步骤定位（phase/step）。 */
+  detail?: string
+  /** true 表示只能告警、无法处置：机器层没地方放，去留只能由人自己改配置。 */
+  warn_only?: boolean
 }
 
 /** MigrationPlan 是配置分层迁移的预览结果。 */

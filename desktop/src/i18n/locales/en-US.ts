@@ -852,6 +852,9 @@ export default {
   configMigration: {
     banner: 'Config is still the legacy single-file format (config.yaml is gitignored and cannot be shared via git)',
     bannerAction: 'Split config…',
+    staleLegacyBanner: 'A legacy .superdev/config.yaml sits next to project.yaml and is being ignored — none of its values (local paths, secrets) are in effect. Merge what you still need into project.yaml / local.yaml, then delete or rename it.',
+    sharedSecretBanner: '{count} suspected secret(s) are in the shared project.yaml, which is committed to git. Move them to .superdev/local.yaml if they should not be shared.',
+    warnOnly: 'Warning only — will be committed',
     title: 'Split project config',
     summary: '{services} services in total; {paths} absolute paths will become relative',
     suspectsTitle: 'Suspected secrets (choose where each one goes, defaults to local)',

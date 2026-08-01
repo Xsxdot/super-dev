@@ -852,6 +852,9 @@ export default {
   configMigration: {
     banner: '配置仍是旧单文件格式（config.yaml 被 gitignore，无法随 git 共享）',
     bannerAction: '拆分配置…',
+    staleLegacyBanner: 'project.yaml 旁边还留着一份旧的 .superdev/config.yaml，它已被整份忽略——里面的本机路径、密钥都不生效。请把还需要的内容并进 project.yaml / local.yaml，然后删除或改名。',
+    sharedSecretBanner: '共享层 project.yaml（会随 git 提交）里有 {count} 个疑似密钥。不该共享的请移到 .superdev/local.yaml。',
+    warnOnly: '仅告警 —— 会随 git 提交',
     title: '拆分项目配置',
     summary: '共 {services} 个服务；{paths} 个绝对路径将转为相对路径',
     suspectsTitle: '疑似密钥（逐项选择去向，默认留在本机）',

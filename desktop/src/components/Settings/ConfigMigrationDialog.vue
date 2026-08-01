@@ -7,6 +7,8 @@ ConfigMigrationDialog：legacy 单文件配置 → 分层配置（project.yaml +
     .gitignore 变更 diff
   - 收集用户对每条疑似密钥的处置（「不挡、只亮」——默认本机层，用户显式选
     共享层才会入库），执行迁移（POST /config-migration）并展示成功/失败态
+  - warn_only 条目（流水线里的疑似密钥）只展示不给处置：机器层 local.yaml 对
+    流水线没有 schema 表达，能做的只有把「这些会随 git 提交出去」讲清楚
   - 项目已是 split 格式时（后端返回 not_needed）直接展示已完成态，不当作错误
 
 边界：
@@ -53,6 +55,8 @@ async function load() {
     plan.value = result
     dispositions.value = result.suspects.map(() => 'local')
     phase.value = 'preview'
+    // 下标必须与 plan.suspects 严格一一对应（含 warn_only 条目），否则勾选会串行。
+
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : String(err)
     phase.value = 'error'
@@ -74,13 +78,18 @@ async function apply() {
   try {
     // 逐条显式带上 disposition：省略未处置项虽然后端也会按 local 兜底，但
     // 显式传递让「用户到底选了什么」在请求体里一目了然，便于排查和测试。
-    const decisions = plan.value.suspects.map((suspect, index) => ({
-      scope: suspect.scope,
-      service: suspect.service,
-      env: suspect.env,
-      key: suspect.key,
-      disposition: dispositions.value[index],
-    }))
+    // warn_only 条目（流水线里的疑似密钥）不进 decisions：机器层没有承接它们的
+    // schema，后端也不会搬动，传一个永远无效的处置只会让请求体自相矛盾。
+    const decisions = plan.value.suspects
+      .map((suspect, index) => ({ suspect, disposition: dispositions.value[index] }))
+      .filter(row => !row.suspect.warn_only)
+      .map(row => ({
+        scope: row.suspect.scope,
+        service: row.suspect.service,
+        env: row.suspect.env,
+        key: row.suspect.key,
+        disposition: row.disposition,
+      }))
     const updated = await applyConfigMigration(props.projectId, decisions)
     phase.value = 'done'
     emit('migrated', updated)
@@ -153,8 +162,16 @@ function dismiss() {
                   <code class="settings-mono suspect-masked">{{ suspect.masked_value }}</code>
                   <span class="suspect-reason">{{ suspect.reason }}</span>
                   <span v-if="suspect.service" class="suspect-scope">{{ suspect.service }} · {{ suspect.env }}</span>
+                  <span v-if="suspect.pipeline" class="suspect-scope" :data-test="`suspect-pipeline-${index}`">
+                    {{ suspect.pipeline }}<template v-if="suspect.env"> · {{ suspect.env }}</template><template v-if="suspect.detail"> · {{ suspect.detail }}</template>
+                  </span>
                 </div>
-                <div class="suspect-disposition">
+                <!-- warn_only：机器层对流水线没有 schema，给不出「搬去本机」这个选项，
+                     渲染成单选只会诱导用户点一个什么也不会发生的按钮。 -->
+                <div v-if="suspect.warn_only" class="suspect-warn-only" :data-test="`suspect-warn-only-${index}`">
+                  {{ t('configMigration.warnOnly') }}
+                </div>
+                <div v-else class="suspect-disposition">
                   <label class="dep-choice">
                     <input
                       type="radio"
@@ -308,6 +325,12 @@ function dismiss() {
   display: flex;
   flex-shrink: 0;
   gap: 12px;
+}
+.suspect-warn-only {
+  flex-shrink: 0;
+  color: var(--status-failed);
+  font-size: 11px;
+  white-space: nowrap;
 }
 .dep-choice {
   display: inline-flex;

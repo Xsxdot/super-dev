@@ -8,8 +8,11 @@ ProjectConfigSurface：项目运行配置的可复用编辑主体。
   - 取消：丢弃本地草稿并 emit cancel
   - project 仍是 legacy 配置格式时展示迁移横幅，打开 ConfigMigrationDialog；
     迁移成功后走 reloadProject → resetDraft 同一条刷新路径
+  - 展示两条只读告警横幅：并存的陈旧 config.yaml（config_stale_legacy）、
+    共享层里扫到的疑似密钥（shared_secret_warnings）
 
 边界：
+  - 告警横幅「不挡、只亮」：不禁用保存、不改草稿内容，只把风险摆到人眼前
   - 不编辑项目级流水线（由 ProjectPipelineEditor 负责）
   - 不负责创建/关闭 modal 外壳
   - 删除运行中 service 的最终守卫在后端
@@ -109,6 +112,10 @@ onMounted(async () => {
 watch(() => props.project.id, () => resetDraft())
 
 watch([draft, activeEnv, activeServiceId, renamingEnv, errors, saveError], emitState, { deep: true })
+
+// sharedSecretWarnings 直接读 project 而非草稿：告警描述的是磁盘上那份入库
+// 文件的现状，草稿里还没保存的改动不该让它提前消失或提前出现。
+const sharedSecretWarnings = computed(() => props.project.shared_secret_warnings ?? [])
 
 const currentServices = computed(() => draft.value.services)
 const currentEnv = computed(() => draft.value.environments.find(e => e.name === activeEnv.value) ?? null)
@@ -293,6 +300,31 @@ async function handleMigrated() {
           {{ t('configMigration.bannerAction') }}
         </button>
       </div>
+      <!--
+        并存的 config.yaml：split 胜出，这份文件里的路径与密钥全部不生效。
+        config_format 报的是 'split'，迁移横幅不会触发，只有这条能让人看出问题。
+      -->
+      <div v-if="project.config_stale_legacy" class="settings-alert settings-alert-warning" data-test="config-stale-legacy-banner">
+        {{ t('configMigration.staleLegacyBanner') }}
+      </div>
+      <!--
+        共享层疑似密钥：project.yaml 是入库文件，这些值下一次 commit 就出去了。
+        「不挡、只亮」——只提示，不禁用保存，也不替用户改任何东西。
+      -->
+      <div
+        v-if="sharedSecretWarnings.length"
+        class="settings-alert settings-alert-warning shared-secret-banner"
+        data-test="shared-secret-warning-banner"
+      >
+        <span>{{ t('configMigration.sharedSecretBanner', { count: sharedSecretWarnings.length }) }}</span>
+        <ul class="shared-secret-list">
+          <li v-for="(w, i) in sharedSecretWarnings" :key="`${w.scope}:${w.key}:${i}`" :data-test="`shared-secret-row-${i}`">
+            <code class="settings-mono">{{ w.key }}</code>
+            <code class="settings-mono shared-secret-masked">{{ w.masked_value }}</code>
+            <span>{{ w.reason }}</span>
+          </li>
+        </ul>
+      </div>
       <ul v-if="errors.length" class="settings-alert settings-alert-danger err-list">
         <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
       </ul>
@@ -440,6 +472,27 @@ async function handleMigrated() {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+.shared-secret-banner {
+  display: grid;
+  gap: 6px;
+}
+.shared-secret-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+}
+.shared-secret-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.shared-secret-masked {
+  color: var(--text-tertiary);
 }
 .config-env-shell,
 .editor-right {
