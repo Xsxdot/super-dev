@@ -688,6 +688,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/rules", a.getProjectRules)
 	mux.HandleFunc("PUT /api/projects/{id}/rules", a.putProjectRules)
 	mux.HandleFunc("GET /api/projects/{id}/config", a.getProjectConfig)
+	mux.HandleFunc("GET /api/projects/{id}/config-migration", a.getConfigMigration)
+	mux.HandleFunc("POST /api/projects/{id}/config-migration", a.postConfigMigration)
 	mux.HandleFunc("GET /api/debug-credentials", a.debugCredentials)
 	mux.HandleFunc("POST /api/debug-credential-leases", a.createDebugCredentialLease)
 	mux.HandleFunc("DELETE /api/debug-credential-leases/{id}", a.deleteDebugCredentialLease)
