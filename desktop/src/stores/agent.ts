@@ -2,13 +2,30 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { api, type Deployment, type Project, type RuntimeIntent, type RuntimeSchema, type Service, type ServiceLanguage } from '@/api/agent'
 import { useLogLifecycleStore } from '@/stores/logLifecycle'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 
+/**
+ * AgentConnectionInfo 描述桌面端本次启动与 agent 的连接形态。
+ *
+ * - mode: 'sidecar' 表示桌面自己拉起了 agent 子进程；'attached' 表示挂接到
+ *   已存在的服务化安装（或 headless）agent；'unknown' 表示两者都无法判定
+ *   （通常是探测命令本身失败前的兜底态）。
+ * - version / addr: attached 模式下用于在底栏展示对端 agent 的版本与地址；
+ *   sidecar 模式通常没有独立版本号，可为空。
+ */
+export interface AgentConnectionInfo {
+  mode: 'sidecar' | 'attached' | 'unknown'
+  version?: string | null
+  addr?: string
+}
+
 export const useAgentStore = defineStore('agent', () => {
   const projects = ref<Project[]>([])
   const connected = ref(false)
+  const connectionInfo = ref<AgentConnectionInfo | null>(null)
   const languageRuntimeSchemas = ref<Partial<Record<ServiceLanguage, RuntimeSchema>>>({})
   const logLifecycleStore = useLogLifecycleStore()
   let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -47,11 +64,29 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   function startPolling() {
+    void fetchConnectionInfo()
     void connectWithRetry()
     pollTimer = setInterval(() => {
       if (!connected.value) void fetchProjects()
       else void refreshProjectSnapshot()
     }, 2000)
+  }
+
+  /**
+   * fetchConnectionInfo 只在启动时拉一次连接形态（sidecar/attached/unknown）。
+   *
+   * 之所以不放进轮询：attach 还是 sidecar 在桌面进程启动时就已定型
+   * （由 Tauri 侧决定是否拉起子进程），生命周期内不会变化，重复轮询
+   * 只会浪费一次 IPC 而拿不到新信息。
+   */
+  async function fetchConnectionInfo() {
+    try {
+      connectionInfo.value = await invoke<AgentConnectionInfo>('agent_connection_info')
+    } catch {
+      // 非 Tauri 环境（纯浏览器 dev / vitest）没有该命令，这是正常降级路径，
+      // 不视为错误，因此不打日志，避免在预期状态下制造噪音。
+      connectionInfo.value = null
+    }
   }
 
   /** agent 由 Tauri 异步拉起，启动后需重试几次才能连上 */
@@ -275,10 +310,12 @@ export const useAgentStore = defineStore('agent', () => {
   return {
     projects,
     connected,
+    connectionInfo,
     allServices,
     startPolling,
     stopPolling,
     fetchProjects,
+    fetchConnectionInfo,
     addProject,
     probeProject,
     deleteProject,

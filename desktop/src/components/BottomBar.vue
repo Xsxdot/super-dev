@@ -255,9 +255,18 @@ function toggleLogDisplayNode(deploymentId: string, hostId: string) {
   toggleNode(deploymentId, hostId)
 }
 
-const connectionText = computed(() =>
-  agentStore.connected ? t('bottomBar.connected') : t('bottomBar.disconnected'),
-)
+// 已连接时区分 attach（服务化安装/headless agent）与 sidecar：
+// attach 场景下附带展示对端 agent 版本，帮助用户确认接的是哪个安装。
+const connectionText = computed(() => {
+  if (!agentStore.connected) return t('bottomBar.disconnected')
+  const info = agentStore.connectionInfo
+  if (info?.mode === 'attached') {
+    return info.version
+      ? t('bottomBar.connectedAttached', { version: info.version })
+      : t('bottomBar.connectedAttachedNoVersion')
+  }
+  return t('bottomBar.connected')
+})
 
 async function toggleApprovalsPopover() {
   approvalsPopoverOpen.value = !approvalsPopoverOpen.value

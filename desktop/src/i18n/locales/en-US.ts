@@ -1175,6 +1175,8 @@ export default {
     agent: 'Agent',
     mcp: 'MCP',
     connected: 'Connected',
+    connectedAttached: 'Attached to local agent (service install · v{version})',
+    connectedAttachedNoVersion: 'Attached to local agent (service install)',
     disconnected: 'Disconnected',
     approvals: 'Approvals',
     logDisplay: 'Log Display',

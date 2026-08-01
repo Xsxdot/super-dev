@@ -1175,6 +1175,8 @@ export default {
     agent: 'Agent',
     mcp: 'MCP',
     connected: '已连接',
+    connectedAttached: '已连接本机 agent（服务化安装 · v{version}）',
+    connectedAttachedNoVersion: '已连接本机 agent（服务化安装）',
     disconnected: '未连接',
     approvals: '审批',
     logDisplay: '日志显示',

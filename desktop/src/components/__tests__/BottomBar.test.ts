@@ -237,6 +237,27 @@ describe('BottomBar', () => {
     expect(tauriMocks.routerPush).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'approvals' } })
   })
 
+  it('attach 模式显示服务化安装徽标与版本', async () => {
+    const { wrapper } = await mountBottomBarWithServices()
+    const agentStore = useAgentStore()
+    agentStore.connected = true
+    agentStore.connectionInfo = { mode: 'attached', version: '0.2.3' }
+    await nextTick()
+
+    expect(wrapper.find('[data-test="agent-status"]').text()).toContain('已连接本机 agent（服务化安装 · v0.2.3）')
+  })
+
+  it('sidecar 模式保持既有已连接文案', async () => {
+    const { wrapper } = await mountBottomBarWithServices()
+    const agentStore = useAgentStore()
+    agentStore.connected = true
+    agentStore.connectionInfo = { mode: 'sidecar' }
+    await nextTick()
+
+    expect(wrapper.find('[data-test="agent-status"]').text()).toContain('已连接')
+    expect(wrapper.find('[data-test="agent-status"]').text()).not.toContain('服务化安装')
+  })
+
   it('不再渲染旧的同步录制控件', async () => {
     const { wrapper } = await mountBottomBarWithServices()
 
