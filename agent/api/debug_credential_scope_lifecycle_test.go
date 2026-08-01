@@ -77,8 +77,10 @@ func TestConfigSaveServiceRemovalAndSameIDRebuildDoesNotRestoreRevokedLease(t *t
 
 	withoutFirst := project
 	withoutFirst.Services = append([]model.Service(nil), project.Services[1])
-	require.NoError(t, app.saveConfigChangeProject(withoutFirst))
-	require.NoError(t, app.saveConfigChangeProject(project))
+	_, err := app.saveConfigChangeProject(withoutFirst)
+	require.NoError(t, err)
+	_, err = app.saveConfigChangeProject(project)
+	require.NoError(t, err)
 
 	assert.Empty(t, readLeaseLifecycleCredentials(t, srv.URL, project.ID, firstServiceID))
 	assert.Equal(t, []string{"service-two-secret"}, readLeaseLifecycleCredentials(t, srv.URL, project.ID, secondServiceID))

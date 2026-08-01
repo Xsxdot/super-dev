@@ -176,6 +176,50 @@ func TestConfigChangeProjectUpsertCanCreateProjectThroughAgent(t *testing.T) {
 	assert.Equal(t, applied.Project.ID, projects[0].ID)
 }
 
+// TestConfigChangeProjectUpsertBackfillsConfigFormat 钉住
+// resolveConfigChangeProject 的 ErrNotFound 分支曾经的缺口：手工拼出的骨架
+// Project 不经过 Loader.Load，ConfigFormat 天然为空；saveConfigChangeProject
+// 落盘后必须回填成 Loader 探测到的真实磁盘格式（全新目录 → split），否则后续
+// PUT env-selected 会读到 ConfigFormat=="" 误走 legacy 分支，
+// Loader.Save 按磁盘真实格式（已经是 split）落盘时静默丢弃
+// env_selected_service_ids——与 addProject 的同类缺口对称（见
+// TestAddProject_EmptyDirConfigFormatIsSplit）。
+func TestConfigChangeProjectUpsertBackfillsConfigFormat(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	root := t.TempDir()
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	body := map[string]any{
+		"kind":      configchange.KindProjectUpsert,
+		"root_path": root,
+		"project": map[string]any{
+			"name": "created-by-agent",
+			"environments": []map[string]any{{
+				"name":   "dev",
+				"is_dev": true,
+			}},
+		},
+	}
+
+	required := postJSONForRawTest(t, srv.URL+"/api/config-changes/apply", body, http.StatusForbidden)
+	approvalID := required["approval"].(map[string]any)["id"].(string)
+	_ = postJSONForTest[map[string]any](t, srv.URL+"/api/operation-approvals/"+approvalID+"/approve", map[string]any{}, http.StatusOK)
+	detail := getJSONForTest[operationApprovalDetailResponse](t, srv.URL+"/api/operation-approvals/"+approvalID, http.StatusOK)
+
+	applied := postJSONWithHeadersForTest[configchange.PreviewResult](t, srv.URL+"/api/config-changes/apply", body, map[string]string{
+		"X-SuperDev-Approval-Token": detail.ApprovalToken,
+	}, http.StatusOK)
+	assert.Equal(t, "split", applied.Project.ConfigFormat, "apply 响应应带上刚落盘探测到的格式")
+
+	// putEnvSelected 读的是 a.projects（内存态），不是 apply 的响应体，所以真正
+	// 要钉住的是 GET /api/projects 里的值。
+	projects := getJSONForTest[[]model.Project](t, srv.URL+"/api/projects", http.StatusOK)
+	require.Len(t, projects, 1)
+	assert.Equal(t, "split", projects[0].ConfigFormat, "内存中的项目必须带上刚落盘的格式，否则 putEnvSelected 会误走 legacy 分支")
+}
+
 func TestConfigChangeOperationPreflightReturnsPlan(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)

@@ -24,6 +24,33 @@ import (
 	"github.com/xsxdot/super-dev/agent/operation"
 )
 
+// saveProjectAndBackfillFormat 落盘 project 并回填 Save 之后才能确定的磁盘格式。
+//
+// 参数：
+//   - loader: 已绑定目标项目 rootPath 的 Loader
+//   - p: 待落盘并回填 ConfigFormat 的 Project；Save 成功后原地写入 p.ConfigFormat
+//
+// 返回：
+//   - Save 失败时返回错误，此时不修改 p.ConfigFormat
+//
+// 注意：
+//   - 必须先 Save 再探测格式——对全新目录（既无 config.yaml 也无 project.yaml）
+//     而言，磁盘格式是 Save 那一刻才确定的（Loader.DetectFormat 对空目录默认
+//     返回 split），Save 之前探测没有意义
+//   - 手工拼出的骨架 Project 不经过 Loader.Load，天然带着 ConfigFormat==""；
+//     遗漏这一步会让这样的项目带着空格式进入 a.projects，导致后续
+//     putEnvSelected 误判走 legacy 分支——Loader.Save 内部按磁盘真实格式
+//     （已经是 split）落盘时会静默丢弃 env_selected_service_ids。addProject
+//     和 saveConfigChangeProject 都曾各自踩过这个坑，因此收敛成一个函数，
+//     而不是继续各处各写一份、后续再漏一处
+func saveProjectAndBackfillFormat(loader *config.Loader, p *model.Project) error {
+	if err := loader.Save(*p); err != nil {
+		return err
+	}
+	p.ConfigFormat = string(loader.DetectFormat())
+	return nil
+}
+
 // jsonOK 将 v 序列化为 JSON 并以 200 状态码响应。
 func jsonOK(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -103,14 +130,12 @@ func (a *App) addProject(w http.ResponseWriter, r *http.Request) {
 	a.mu.RUnlock()
 	assignIDsAvoiding(&p, &used)
 
-	// 持久化 ID，避免 agent 重启后 service ID 变化导致重复启动
-	if err := loader.Save(p); err != nil {
+	// 持久化 ID，避免 agent 重启后 service ID 变化导致重复启动；
+	// 同时回填 Save 后才确定的磁盘格式，供后续 putEnvSelected 正确分流。
+	if err := saveProjectAndBackfillFormat(loader, &p); err != nil {
 		jsonError(w, http.StatusInternalServerError, "failed to save project config: "+err.Error())
 		return
 	}
-	// Save 刚落盘，此时磁盘格式才确定（空目录→split）。内存项目必须带上格式，
-	// 否则后续 putEnvSelected 会误走 legacy 分支，UI 状态被静默丢弃。
-	p.ConfigFormat = string(loader.DetectFormat())
 
 	// 写入注册表
 	if err := a.registry.Add(req.RootPath); err != nil {

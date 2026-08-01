@@ -57,11 +57,15 @@ func (a *App) applyConfigChange(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		return
 	}
-	if err := a.saveConfigChangeProject(preview.Project); err != nil {
+	saved, err := a.saveConfigChangeProject(preview.Project)
+	if err != nil {
 		a.appendOperationExecutionFailure(r, preview.Plan, approval, "failed to save config change")
 		jsonError(w, http.StatusInternalServerError, "failed to save config change: "+err.Error())
 		return
 	}
+	// 用落盘后回填了真实格式的快照替换响应体里的 Project，避免 config_format
+	// 停留在骨架 Project 落盘前的旧值（详见 saveConfigChangeProject 的返回值说明）。
+	preview.Project = saved
 	jsonOK(w, preview)
 }
 
@@ -168,12 +172,27 @@ func (a *App) resolveConfigChangeProject(req configchange.ChangeRequest) (model.
 	return project, http.StatusOK, ""
 }
 
-func (a *App) saveConfigChangeProject(project model.Project) error {
-	if err := config.NewLoader(project.RootPath).Save(project); err != nil {
-		return err
+// saveConfigChangeProject 落盘并把 project 纳入内存态。
+//
+// 返回：
+//   - 落盘成功时返回回填了真实磁盘格式的 project 副本；调用方（尤其
+//     applyConfigChange 的 HTTP 响应体）必须使用这个返回值而不是入参，
+//     否则响应体里的 config_format 会滞留在调用前的旧值（骨架 Project 场景
+//     下是空字符串），即使内存态 a.projects 已经正确
+//   - Save/注册表写入失败时返回错误和零值 Project
+//
+// 注意：
+//   - resolveConfigChangeProject 的 ErrNotFound 分支手工拼出骨架 Project，
+//     不经过 Loader.Load，ConfigFormat 在此之前一直是空值；Save 之后借同一个
+//     loader 回填，否则后续 putEnvSelected 会误判走 legacy 分支静默丢弃 UI
+//     状态（与 addProject 曾经的缺口同源，见 saveProjectAndBackfillFormat 注释）
+func (a *App) saveConfigChangeProject(project model.Project) (model.Project, error) {
+	loader := config.NewLoader(project.RootPath)
+	if err := saveProjectAndBackfillFormat(loader, &project); err != nil {
+		return model.Project{}, err
 	}
 	if err := a.registry.Add(project.RootPath); err != nil {
-		return err
+		return model.Project{}, err
 	}
 
 	var affected []model.Project
@@ -188,12 +207,12 @@ func (a *App) saveConfigChangeProject(project model.Project) error {
 			affected = unionProjectsForReconcile(existing, project)
 			a.mu.Unlock()
 			a.reconcileProjectsAsync(affected...)
-			return nil
+			return project, nil
 		}
 	}
 	a.appendProjectLocked(project)
 	affected = []model.Project{project}
 	a.mu.Unlock()
 	a.reconcileProjectsAsync(affected...)
-	return nil
+	return project, nil
 }
