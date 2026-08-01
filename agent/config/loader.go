@@ -268,6 +268,14 @@ func (l *Loader) saveSplit(p model.Project) error {
 // 存在的 project.yaml，复用这份序列化逻辑而不必重复实现。logRules 为 nil
 // 时不写该键。
 func (l *Loader) saveSplitProject(p model.Project, logRules interface{}) error {
+	// Save 会在分发前建目录，但 saveSplitWithRules（迁移路径）是直接进来的第二个
+	// 入口。与其让本方法依赖「.superdev 恰好已经存在」这条隐含前提，不如自己保证
+	// ——MkdirAll 幂等，代价是一次 syscall，换掉的是一类只在新入口上才复现的
+	// "no such file or directory"。
+	if err := os.MkdirAll(filepath.Join(l.rootPath, ".superdev"), 0o755); err != nil {
+		return fmt.Errorf("mkdir .superdev: %w", err)
+	}
+
 	lf, err := loadLocal(l.rootPath)
 	if err != nil {
 		return fmt.Errorf("load local.yaml: %w", err)
@@ -294,6 +302,31 @@ func (l *Loader) saveSplitProject(p model.Project, logRules interface{}) error {
 	}
 	log.Printf("[SuperDev] config: saved %s format=split services=%d localOverrides=%d", l.projectPath(), len(shared.Services), len(updated.Deployments))
 	return nil
+}
+
+// saveSplitWithRules 以调用方显式给定的 log_rules 写出 split 两层文件。
+//
+// 参数：
+//   - p: 合并态 Project（本机键仍在其中，由 splitOwnership 按 local.yaml 已
+//     声明的归属剥离到机器层）
+//   - rules: 要写入 project.yaml 的 log_rules；为空切片或 nil 时不写该键
+//
+// 返回：
+//   - error：读机器层 / 序列化 / 落盘任一环节的错误
+//
+// 注意：
+//   - 常规 Save 路径下 log_rules 从已有 project.yaml 回填，而 legacy → split
+//     迁移时 project.yaml 尚不存在、log_rules 还躺在旧 config.yaml 里，只能由
+//     调用方显式搬运。这是本方法存在的唯一理由——它必须一直是 saveSplitProject
+//     的薄封装，绝不能长出第二套字段拼装/序列化逻辑。
+func (l *Loader) saveSplitWithRules(p model.Project, rules []model.LogRule) error {
+	// 空规则要退化成 nil：saveSplitProject 只判 logRules != nil，把一个长度为 0
+	// 的切片塞进 interface{} 会得到非 nil 的接口值，凭空写出 "log_rules: []" 这
+	// 个噪音键——共享层是入库文件，不该因为迁移多出一个从未存在过的字段。
+	if len(rules) == 0 {
+		return l.saveSplitProject(p, nil)
+	}
+	return l.saveSplitProject(p, rules)
 }
 
 // LoadLogRules 从当前格式的主配置文件中读取 log_rules 列表。

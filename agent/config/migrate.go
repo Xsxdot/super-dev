@@ -4,7 +4,6 @@
 //   - BuildMigrationPlan：读 legacy 配置，产出预览（疑似密钥、路径相对化
 //     清单、UI 状态去向、.gitignore 变更）
 //   - ApplyMigration：按用户处置决定落两层 + uistate + 备份 + gitignore
-//     （Task 7 落地，本文件目前只有 preview 半部）
 //
 // 边界：
 //   - 迁移永远显式触发（desktop preview→apply 人审），本文件不做静默转换
@@ -131,6 +130,185 @@ func BuildMigrationPlan(rootPath string) (MigrationPlan, error) {
 
 	log.Printf("[SuperDev] config: migration plan built project=%s suspects=%d relativized=%d", rootPath, len(plan.Suspects), len(plan.RelativizedPaths))
 	return plan, nil
+}
+
+// dispositionShared 是 MigrationDecision.Disposition 里唯一需要精确识别的取值。
+// 另一个合法值 "local" 不必命名：判定写成「不等于 shared 即去本机层」，空串、
+// 大小写写错、桌面端传来一个没见过的新值，全都自动落到安全的一侧。
+const dispositionShared = "shared"
+
+// ApplyMigration 执行 legacy → split 拆分。
+//
+// 参数：
+//   - rootPath: 项目根
+//   - decisions: 疑似密钥处置（缺省条目按 disposition=local 处理——安全默认）
+//   - uiStore: UI 状态的目标 store
+//
+// 返回：
+//   - error：ErrNotFound（无任何配置可迁）、ErrAlreadyMigrated（已是 split），
+//     或某一步的 I/O 失败（错误消息带 "migration step N" 步骤上下文）
+//
+// 执行顺序（崩溃安全：project.yaml 落盘是格式翻转点，翻转前的中间产物
+// 均可安全重跑；翻转后 config.yaml 残留只触发 DetectFormat 告警不破坏）：
+//  1. 校验：legacy 存在且未迁移（否则 ErrNotFound / ErrAlreadyMigrated）
+//  2. Load legacy → 按 decisions 拆出 localYAML（未决疑似项默认 local）
+//  3. saveLocal 写机器层
+//  4. uiStore.ReplaceEnvSelected 写 UI 状态
+//  5. 写 project.yaml（复用 split Save 组装；保留 log_rules）
+//  6. os.Rename config.yaml → config.yaml.bak
+//  7. 重写 .gitignore（移除整目录忽略行、追加机器层忽略行）
+//
+// 注意：
+//   - 步骤 6/7 失败不回滚 1-5：迁移已生效（split 可读），残留问题
+//     以 error 返回并由日志揭示，人工可修
+//   - 步骤 3 必须早于步骤 5：local.yaml 是「哪些键归机器层」的唯一声明，
+//     步骤 5 内部的 splitOwnership 正是照着它把密钥从共享层剥掉的。顺序
+//     一旦颠倒，密钥会先被写进准备入库的 project.yaml——那就是泄露本身。
+func ApplyMigration(rootPath string, decisions []MigrationDecision, uiStore *UIStateStore) error {
+	log.Printf("[SuperDev] config: migration started project=%s decisions=%d", rootPath, len(decisions))
+	loader := NewLoader(rootPath)
+
+	// 步骤 1：校验。与 BuildMigrationPlan 同一套判定——DetectFormat 对全新空目录
+	// 也返回 FormatSplit，必须再看 project.yaml 是否真的存在，才能区分「已经迁移
+	// 过」与「压根没有任何配置」。
+	if loader.DetectFormat() == FormatSplit {
+		if _, err := os.Stat(loader.projectPath()); err == nil {
+			return ErrAlreadyMigrated
+		}
+		return ErrNotFound
+	}
+
+	// 步骤 2：读 legacy 合并态与 log_rules，并据处置决定算出机器层内容。
+	// 此刻 DetectFormat 仍是 legacy，两次读取都落在 config.yaml 上。
+	project, err := loader.Load()
+	if err != nil {
+		return fmt.Errorf("migration step 2 (load legacy config): %w", err)
+	}
+	rules, err := loader.LoadLogRules()
+	if err != nil {
+		return fmt.Errorf("migration step 2 (load legacy log_rules): %w", err)
+	}
+	local := buildLocalLayer(project, decisions)
+
+	// 步骤 3：机器层落盘。此时 project.yaml 还不存在，格式仍是 legacy，config.yaml
+	// 原封不动——崩在这里等于什么都没发生，重跑即可。
+	if err := saveLocal(rootPath, local); err != nil {
+		return fmt.Errorf("migration step 3 (write local.yaml): %w", err)
+	}
+	log.Printf("[SuperDev] config: migration wrote local.yaml keys=%d", localKeyCount(local))
+
+	// 步骤 4：UI 状态搬去 agent 本地 store。同样在翻转点之前，可重跑。
+	if err := uiStore.ReplaceEnvSelected(rootPath, project.EnvSelectedServiceIDs); err != nil {
+		return fmt.Errorf("migration step 4 (write ui state): %w", err)
+	}
+
+	// 步骤 5：写 project.yaml —— 格式翻转点。传的是合并态 project 而非删过键的
+	// 副本：splitOwnership 会照步骤 3 落下的 local.yaml 把归机器层的键剥离，
+	// 剥离逻辑因此只有一份（Save 与迁移共用），不会两处分叉。
+	if err := loader.saveSplitWithRules(project, rules); err != nil {
+		return fmt.Errorf("migration step 5 (write project.yaml): %w", err)
+	}
+	log.Printf("[SuperDev] config: migration wrote project.yaml services=%d", len(project.Services))
+
+	// 步骤 6：旧文件改名为备份。os.Rename 在同目录内是原子的，不存在"备份写了一半"
+	// 的中间态；崩在这一步之前只是两个文件并存，DetectFormat 已判 split 且会告警。
+	if err := os.Rename(loader.legacyPath(), loader.legacyPath()+".bak"); err != nil {
+		return fmt.Errorf("migration step 6 (backup config.yaml): %w", err)
+	}
+	log.Printf("[SuperDev] config: migration backed up config.yaml -> config.yaml.bak")
+
+	// 步骤 7：改写 .gitignore。纯 git 可见性问题，失败不影响配置可读。
+	removed, added, err := rewriteGitignore(rootPath)
+	if err != nil {
+		return fmt.Errorf("migration step 7 (rewrite .gitignore): %w", err)
+	}
+	log.Printf("[SuperDev] config: migration updated .gitignore removed=%d added=%d", removed, added)
+
+	log.Printf("[SuperDev] config: migration completed project=%s", rootPath)
+	return nil
+}
+
+// buildLocalLayer 依据疑似密钥扫描结果与人的处置决定，算出应写入机器层的键值。
+//
+// 参数：
+//   - p: legacy 加载出的合并态 Project（值都还在里面）
+//   - decisions: 人对疑似项的处置列表
+//
+// 返回：
+//   - localYAML：归机器层的 variables 与 per-deployment env_vars
+//
+// 注意：
+//   - 未被显式判为 shared 的疑似项一律去本机层。这不是保守，是代价不对称：
+//     一个值错留本机，成本是人手动搬一次；一个值错发共享层并入库，成本是一次
+//     泄露且无法撤回。
+//   - 只有 scanSuspects 认定的疑似项参与拆分。decisions 里指向非疑似键的条目
+//     被忽略——decisions 是「对疑似项的处置」，不是任意搬迁指令。
+func buildLocalLayer(p model.Project, decisions []MigrationDecision) localYAML {
+	// 复用 preview 的同一份扫描：人在对话框里看到的疑似清单，与这里实际拆分的
+	// 集合必须逐条对得上，否则会出现「预览没提示、迁移却把它搬走了」。
+	suspects := map[string]bool{}
+	for _, s := range scanSuspects(p) {
+		suspects[decisionKey(s.Scope, s.Service, s.Env, s.Key)] = true
+	}
+	dispositions := map[string]string{}
+	for _, d := range decisions {
+		dispositions[decisionKey(d.Scope, d.Service, d.Env, d.Key)] = d.Disposition
+	}
+	goesLocal := func(scope, service, env, key string) bool {
+		k := decisionKey(scope, service, env, key)
+		return suspects[k] && dispositions[k] != dispositionShared
+	}
+
+	lf := localYAML{}
+	for key, val := range p.Variables {
+		if !goesLocal("variables", "", "", key) {
+			continue
+		}
+		if lf.Variables == nil {
+			lf.Variables = map[string]string{}
+		}
+		lf.Variables[key] = val
+	}
+
+	for _, svc := range p.Services {
+		for _, dep := range svc.Deployments {
+			for key, val := range dep.Env {
+				if !goesLocal("env_vars", svc.Name, dep.EnvName, key) {
+					continue
+				}
+				// overrideKey 与 mergeLocal/splitOwnership 用的是同一个函数，
+				// 机器层的键才能在下一次 Load 时被认回同一个 deployment。
+				k := overrideKey(svc, dep.EnvName)
+				o := lf.Deployments[k]
+				if o.EnvVars == nil {
+					o.EnvVars = map[string]string{}
+				}
+				o.EnvVars[key] = val
+				if lf.Deployments == nil {
+					lf.Deployments = map[string]depOverrideYAML{}
+				}
+				lf.Deployments[k] = o
+			}
+		}
+	}
+	return lf
+}
+
+// decisionKey 把「作用域 + 服务 + 环境 + 键名」压成一个可比较的查表键。
+// 用 \x00 分隔而非常见的 "/"：服务名与环境名都可能含有 "/"，用可打印字符
+// 分隔会让 ("a/b", "c") 和 ("a", "b/c") 撞成同一个键。
+func decisionKey(scope, service, env, key string) string {
+	return scope + "\x00" + service + "\x00" + env + "\x00" + key
+}
+
+// localKeyCount 统计机器层承载的键总数（variables + 各 deployment 的 env_vars），
+// 仅用于迁移日志里报一个可核对的数量。
+func localKeyCount(lf localYAML) int {
+	n := len(lf.Variables)
+	for _, o := range lf.Deployments {
+		n += len(o.EnvVars)
+	}
+	return n
 }
 
 // scanSuspects 扫描 p.Variables 与各 service 每个 deployment 的 Env，返回
@@ -281,6 +459,82 @@ func gitignoreDiff(rootPath string) GitignoreChange {
 		}
 	}
 	return change
+}
+
+// gitignoreBlockHeader 是迁移追加的忽略块抬头——让人在自己的 .gitignore 里
+// 一眼看出这几行是谁加的、为什么加。
+const gitignoreBlockHeader = "# SuperDev 机器层配置与迁移备份（不入库）"
+
+// rewriteGitignore 按 gitignoreDiff 的结论就地改写项目根 .gitignore：精确移除
+// 整目录忽略行，在末尾补上尚不存在的机器层/备份忽略行，其余行（含空行与注释）
+// 原样保留。
+//
+// 参数：
+//   - rootPath: 项目根目录
+//
+// 返回：
+//   - removed: 实际被删掉的行数
+//   - added: 实际追加的行数
+//   - error: 读写 .gitignore 的 I/O 错误
+//
+// 注意：
+//   - 是改写而非重建。用户自己的忽略规则（node_modules/ 之类）与迁移无关，
+//     被迁移顺手吃掉是无法接受的副作用。
+//   - 文件不存在按空文件处理：项目此前没有 .gitignore 是正常状态，此时会
+//     新建一个只含机器层忽略块的文件。
+//   - 无增无删时直接返回，不触碰文件——避免仅仅因为跑了一次迁移就在 git
+//     里制造一个纯格式化的 diff。
+func rewriteGitignore(rootPath string) (removed, added int, err error) {
+	// 复用预览用的 gitignoreDiff：preview 给人看的增删清单与 apply 实际执行的
+	// 动作必须来自同一处判定，否则「预览说要删 A，实际删了 B」这类偏差没有任何
+	// 机制能发现。
+	change := gitignoreDiff(rootPath)
+	if len(change.RemoveLines) == 0 && len(change.AddLines) == 0 {
+		return 0, 0, nil
+	}
+
+	path := filepath.Join(rootPath, ".gitignore")
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, 0, fmt.Errorf("read .gitignore: %w", err)
+	}
+
+	drop := map[string]bool{}
+	for _, line := range change.RemoveLines {
+		drop[line] = true
+	}
+
+	kept := []string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		// 与 gitignoreLineSet 用同一套裁剪规则（只去尾部 \r），保证 diff 判定
+		// 命中的行在这里一定也命中。
+		if drop[strings.TrimRight(line, "\r")] {
+			removed++
+			continue
+		}
+		kept = append(kept, line)
+	}
+	// strings.Split 对以换行结尾的内容会多出一个空尾元素。先摘掉它、最后统一补
+	// 一个换行：既不会吃掉用户写在中间的空行，也保证结果始终以换行收尾（原文件
+	// 无尾换行时顺带补上）。
+	if n := len(kept); n > 0 && kept[n-1] == "" {
+		kept = kept[:n-1]
+	}
+
+	if len(change.AddLines) > 0 {
+		// 与用户既有规则之间空一行，纯可读性；原文件本就以空行收尾时不再叠加。
+		if n := len(kept); n > 0 && kept[n-1] != "" {
+			kept = append(kept, "")
+		}
+		kept = append(kept, gitignoreBlockHeader)
+		kept = append(kept, change.AddLines...)
+		added = len(change.AddLines)
+	}
+
+	if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")+"\n"), 0o644); err != nil {
+		return 0, 0, fmt.Errorf("write .gitignore: %w", err)
+	}
+	return removed, added, nil
 }
 
 // gitignoreLineSet 读取 .gitignore 并按非空行去重成集合，便于 gitignoreDiff
