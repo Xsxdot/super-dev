@@ -157,16 +157,19 @@ func (p productionHostAgentInstaller) UpdateBinary(ctx context.Context, host mod
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
 type App struct {
-	cfg                    AppConfig
-	mu                     sync.RWMutex
-	closeOnce              sync.Once
-	closeFn                func() // 仅供包内测试注入，生产环境 nil 时执行真实清理。
-	projects               []model.Project
-	managers               map[string]*process.Manager // projectID → manager
-	buf                    *logbuf.Buffer
-	store                  *store.Store
-	registry               *config.Registry
-	settings               *config.SettingsStore
+	cfg       AppConfig
+	mu        sync.RWMutex
+	closeOnce sync.Once
+	closeFn   func() // 仅供包内测试注入，生产环境 nil 时执行真实清理。
+	projects  []model.Project
+	managers  map[string]*process.Manager // projectID → manager
+	buf       *logbuf.Buffer
+	store     *store.Store
+	registry  *config.Registry
+	settings  *config.SettingsStore
+	// uiState 持久化纯 UI 偏好（如各环境勾选的服务列表），split 格式项目的
+	// env_selected_service_ids 唯一归宿，不与项目配置文件混在一起。
+	uiState                *config.UIStateStore
 	procMgr                *process.Manager // 远端 collector 复用的进程管理器
 	collector              *collector.Manager
 	managedStore           *ManagedStore
@@ -310,6 +313,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 	buf := logbuf.New(storeWriter{s: s}, 2000, id.NodeID, seqWatermarks)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
+	// uiState 与 registry/settings 同级：agent 数据目录下的独立 JSON 文件，
+	// 承载 split 格式项目的 env_selected_service_ids UI 偏好。
+	uiState := config.NewUIStateStore(cfg.DataDir)
 	result, seedErr := onboarding.SeedSampleProject(onboarding.SampleSeedConfig{
 		DataDir:          cfg.DataDir,
 		SampleBinaryPath: cfg.SampleBinaryPath,
@@ -488,6 +494,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		store:                       s,
 		registry:                    registry,
 		settings:                    settingsStore,
+		uiState:                     uiState,
 		procMgr:                     procMgr,
 		collector:                   colMgr,
 		managedStore:                managedStore,
@@ -1000,6 +1007,14 @@ func (a *App) loadRegisteredProjects() {
 				"path":       path,
 				"project_id": p.ID,
 			}).Error("持久化项目标识失败")
+		}
+		// split 格式下 UI 勾选状态活在 agent store，不在 yaml；载入后叠加。
+		// 放在 ID 回填 Save 之后：避免刚叠加的选中值触发 Save 里 split 分支的
+		// "dropped env_selected_service_ids" 留痕日志，在每次启动时都误报噪音。
+		if p.ConfigFormat == string(config.FormatSplit) {
+			if sel := a.uiState.EnvSelected(path); sel != nil {
+				p.EnvSelectedServiceIDs = sel
+			}
 		}
 		a.mu.Lock()
 		a.appendProjectLocked(p)

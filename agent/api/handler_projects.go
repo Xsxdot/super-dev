@@ -14,6 +14,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"path/filepath"
 
@@ -313,12 +314,21 @@ func (a *App) putEnvSelected(w http.ResponseWriter, r *http.Request) {
 	}
 	newEnvSelected[req.EnvName] = req.Names
 
-	// 先持久化，成功后再更新内存
-	p.EnvSelectedServiceIDs = newEnvSelected
-	loader := config.NewLoader(p.RootPath)
-	if err := loader.Save(p); err != nil {
-		jsonError(w, http.StatusInternalServerError, "failed to save env selection: "+err.Error())
-		return
+	// 先持久化，成功后再更新内存。
+	// split 格式：UI 状态只进 agent 本地 store，不再写入 project.yaml——
+	// legacy：维持写 config.yaml 的旧行为，迁移前不改变其落盘位置。
+	if p.ConfigFormat == string(config.FormatSplit) {
+		if err := a.uiState.SetEnvSelected(p.RootPath, req.EnvName, req.Names); err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to save env selection: "+err.Error())
+			return
+		}
+		log.Printf("[SuperDev] uistate: env selection saved project=%s env=%s count=%d", p.RootPath, req.EnvName, len(req.Names))
+	} else {
+		p.EnvSelectedServiceIDs = newEnvSelected
+		if err := config.NewLoader(p.RootPath).Save(p); err != nil {
+			jsonError(w, http.StatusInternalServerError, "failed to save env selection: "+err.Error())
+			return
+		}
 	}
 
 	// 持久化成功，更新内存
