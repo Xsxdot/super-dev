@@ -14,6 +14,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 本机 agent 落盘的 local-access-token 文件名，须与 agent 侧
+/// agent/security.LocalTokenFileName 保持一致（否则 sidecar 模式读不到 token）。
+pub(crate) const LOCAL_TOKEN_FILE_NAME: &str = "local-access-token";
+
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -536,7 +540,9 @@ fn main() {
             generic_mcp_connection_material,
             mcp_status,
             uninstall_mcp,
-            mcp_docs
+            mcp_docs,
+            agent::agent_connection_info,
+            agent::local_agent_token
         ])
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .setup(|app| {

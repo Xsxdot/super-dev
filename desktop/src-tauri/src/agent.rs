@@ -12,7 +12,9 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
-const AGENT_HEALTH_ENDPOINT: &str = "/api/exec/health";
+/// 探测端点：必须用 bypass 白名单里的 security health——
+/// 鉴权常开后 /api/exec/health 受保护，探测会永远 401 并误判「不兼容」。
+const AGENT_HEALTH_ENDPOINT: &str = "/api/security/health";
 const AGENT_START_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 const AGENT_PORT_RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -29,14 +31,25 @@ const AGENT_SIDECAR_LOG_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 enum ProbeOutcome {
-    Compatible,
+    /// 200：接口兼容。version 来自响应体 JSON 的 "version" 字段，解析失败为 None——
+    /// 版本只用于 UI 呈现/升级提示，不是兼容性判定依据。
+    Compatible {
+        version: Option<String>,
+    },
     Unreachable,
-    InvalidResponse { endpoint: &'static str },
-    Incompatible { endpoint: &'static str, status: u16 },
+    InvalidResponse {
+        endpoint: &'static str,
+    },
+    Incompatible {
+        endpoint: &'static str,
+        status: u16,
+    },
 }
 
+/// EndpointProbe 是 probe_endpoint 的底层结果：连通性 + 原始状态码/响应体，
+/// 由上层（probe_agent_health / fetch_local_token_path）按各自需要解读 body。
 enum EndpointProbe {
-    Status(u16),
+    Response { status: u16, body: String },
     Unreachable,
     Invalid,
 }
@@ -44,6 +57,19 @@ enum EndpointProbe {
 #[derive(Debug, PartialEq, Eq)]
 enum AgentPortState {
     StartSidecar,
+    /// 端口上已有兼容的 agent：直接复用，不启动 sidecar（见 prepare_agent_port）。
+    AttachExisting {
+        version: Option<String>,
+    },
+}
+
+/// 桌面端与本机 agent 的连接形态。
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentMode {
+    /// 桌面端自己拉起的 sidecar 子进程（退出时须优雅停掉，孤儿修复语义保留）。
+    Sidecar,
+    /// 复用本机既有 agent（服务化/headless 安装）：桌面端只是客户端，退出时不动它。
+    Attached { version: Option<String> },
 }
 
 /// TerminateOutcome 记录一次优雅终止的最终结果，用于日志与测试断言。
@@ -55,7 +81,15 @@ enum TerminateOutcome {
     ForceKilled,
 }
 
-pub struct AgentProcess(pub Mutex<Option<CommandChild>>);
+/// AgentProcess 持有桌面端与本机 agent 的连接状态。
+///
+/// 字段：
+///   - child: 仅 Sidecar 模式下为 Some——桌面端自己拉起并需要负责终止的子进程句柄。
+///   - mode: 当前连接形态（见 AgentMode），stop() 据此决定是否终止 child。
+pub struct AgentProcess {
+    pub child: Mutex<Option<CommandChild>>,
+    pub mode: Mutex<Option<AgentMode>>,
+}
 
 fn open_agent_sidecar_log(data_dir: &Path, max_bytes: u64) -> Result<fs::File, String> {
     fs::create_dir_all(data_dir)
@@ -111,39 +145,37 @@ impl AgentProcess {
     ///
     /// 参数：无。
     ///
-    /// 返回：持有可选 sidecar 子进程句柄的状态对象。
+    /// 返回：持有可选 sidecar 子进程句柄与连接模式的状态对象（初始均为 None）。
     ///
-    /// 注意：实际 agent 进程只在 start 中启动。
+    /// 注意：实际 agent 启动/attach 决策只在 start 中发生。
     pub fn new() -> Self {
-        AgentProcess(Mutex::new(None))
+        AgentProcess {
+            child: Mutex::new(None),
+            mode: Mutex::new(None),
+        }
     }
 
-    /// start 启动本地 agent sidecar。
+    /// start 启动本地 agent，或复用端口上已兼容的既有 agent。
     ///
     /// 参数：
     ///   - app: Tauri AppHandle，用于解析并启动 sidecar。
     ///
     /// 返回：
-    ///   - Ok 表示当前桌面端自带的 agent 已启动并就绪
-    ///   - Err 表示 sidecar 缺失、启动失败，或端口被其他进程占用
+    ///   - Ok 表示当前桌面端已就绪可用的 agent（自带 sidecar 或复用既有 agent）
+    ///   - Err 表示 sidecar 缺失、启动失败，或端口被不兼容进程占用且恢复不安全
     ///
     /// 注意：
     ///   - dev 模式使用 57018，正式构建使用 57017
-    ///   - 端口上已有 superdev-agent 时先停止旧进程，避免复用后退出时无法清理
+    ///   - 端口上已有兼容 agent 时直接 attach 复用，绝不停止它（可能是服务化/headless
+    ///     安装，有自己的生命周期）；仅端口上是不兼容/坏响应的占用者时才按原逻辑尝试恢复
     pub fn start(&self, app: &AppHandle) -> Result<(), String> {
-        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_some() {
             return Ok(());
         }
 
-        // debug_assertions 在 `tauri dev` 时为 true，`tauri build` 时为 false，
-        // 以此区分开发版（57018）和正式版（57017），避免同时运行时端口冲突。
-        let (addr, data_dir_name) = if cfg!(debug_assertions) {
-            ("127.0.0.1:57018", ".superdev-dev")
-        } else {
-            ("127.0.0.1:57017", ".superdev")
-        };
-        let data_dir_path = resolve_user_home_dir()?.join(data_dir_name);
+        let (addr, data_dir_path) = agent_addr_and_data_dir()?;
+        let addr = addr.as_str();
         tracing::info!(
             address = addr,
             data_dir = %data_dir_path.display(),
@@ -157,6 +189,16 @@ impl AgentProcess {
             stop_existing_superdev_agent,
         )? {
             AgentPortState::StartSidecar => {}
+            // 兼容 agent 已在端口上运行：attach 复用，不 spawn sidecar，也不碰它的生命周期。
+            AgentPortState::AttachExisting { version } => {
+                eprintln!(
+                    "[SuperDev] 复用本机既有 agent（v{}），不启动 sidecar",
+                    version.clone().unwrap_or_else(|| "unknown".into())
+                );
+                *self.mode.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(AgentMode::Attached { version });
+                return Ok(());
+            }
         }
 
         if let Some(resource_dir) = resolve_resource_dir(app) {
@@ -237,6 +279,7 @@ impl AgentProcess {
         }
 
         println!("[SuperDev] agent started");
+        *self.mode.lock().unwrap_or_else(|e| e.into_inner()) = Some(AgentMode::Sidecar);
         *guard = Some(child);
         Ok(())
     }
@@ -248,34 +291,157 @@ impl AgentProcess {
     /// 返回：无。
     ///
     /// 注意：
-    ///   - 先对 agent 发 SIGTERM，给它时间停掉所有托管服务（避免孤儿进程），
+    ///   - 仅 Sidecar 模式会真正终止子进程；Attached 模式的 agent 不是我们的子进程，
+    ///     它有自己的生命周期（launchd/systemd），退出时必须保持运行，见 stop_with_mode_gate。
+    ///   - Sidecar 终止先发 SIGTERM，给它时间停掉所有托管服务（避免孤儿进程），
     ///     超时未退出再 SIGKILL 兜底。
     ///   - 非 Unix 平台无 SIGTERM 语义，直接走 child.kill()。
     pub fn stop(&self) {
-        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(child) = guard.take() {
-            #[cfg(unix)]
-            {
-                let pid = child.pid();
-                println!("[SuperDev] stopping agent gracefully pid={pid}");
-                let outcome = terminate_pid_gracefully(
-                    pid,
-                    AGENT_TERM_GRACE,
-                    || send_sigterm(pid),
-                    || pid_alive(pid),
-                    || force_sigkill(pid),
-                );
-                let _ = outcome;
-                // 兜底强杀直接对 pid 发 SIGKILL，而不是调用 child.kill()，避免闭包消费 child 所有权。
-                drop(child);
+        let mode = self.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        stop_with_mode_gate(mode.as_ref(), || {
+            let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(child) = guard.take() {
+                #[cfg(unix)]
+                {
+                    let pid = child.pid();
+                    println!("[SuperDev] stopping agent gracefully pid={pid}");
+                    let outcome = terminate_pid_gracefully(
+                        pid,
+                        AGENT_TERM_GRACE,
+                        || send_sigterm(pid),
+                        || pid_alive(pid),
+                        || force_sigkill(pid),
+                    );
+                    let _ = outcome;
+                    // 兜底强杀直接对 pid 发 SIGKILL，而不是调用 child.kill()，避免闭包消费 child 所有权。
+                    drop(child);
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = child.kill();
+                }
+                println!("[SuperDev] agent stopped");
             }
-            #[cfg(not(unix))]
-            {
-                let _ = child.kill();
-            }
-            println!("[SuperDev] agent stopped");
-        }
+        });
     }
+}
+
+/// stop_with_mode_gate 是 stop() 的核心决策逻辑：只有 Sidecar 模式才终止子进程。
+///
+/// 参数：
+///   - mode: 当前记录的连接形态（None 视为未记录/尚未启动，同样不终止）。
+///   - terminate: 终止子进程的实际动作，抽成闭包便于单测注入计数断言。
+///
+/// 注意：Attached 模式的 agent 不归桌面端管理，退出时保持运行——绝不能对它发信号，
+/// 否则会杀掉一个可能承载其他客户端连接的服务化/headless agent。
+fn stop_with_mode_gate<T: FnMut()>(mode: Option<&AgentMode>, mut terminate: T) {
+    if !matches!(mode, Some(AgentMode::Sidecar)) {
+        eprintln!("[SuperDev] attached agent 不归桌面端管理，退出时保持运行");
+        return;
+    }
+    terminate();
+}
+
+/// agent_addr_and_data_dir 解析桌面端自带 sidecar 使用的监听地址与数据目录。
+///
+/// 返回：
+///   - addr: 形如 "127.0.0.1:57017" 的本机回环地址。
+///   - data_dir: 桌面端自带 sidecar 的用户数据目录。
+///
+/// 注意：
+///   - dev 构建（`tauri dev`）与正式构建各用独立端口/目录，避免同时运行时冲突。
+///   - 仅对 Sidecar/尚未 attach 的场景有意义；Attached 模式下真实数据目录未必是这里
+///     算出来的值（headless 安装可能自定义 --data），local_agent_token 会改问 agent 本身。
+fn agent_addr_and_data_dir() -> Result<(String, PathBuf), String> {
+    let (addr, data_dir_name) = if cfg!(debug_assertions) {
+        ("127.0.0.1:57018", ".superdev-dev")
+    } else {
+        ("127.0.0.1:57017", ".superdev")
+    };
+    let data_dir = resolve_user_home_dir()?.join(data_dir_name);
+    Ok((addr.to_string(), data_dir))
+}
+
+/// 前端底栏呈现用的桌面端-agent 连接形态快照。
+#[derive(serde::Serialize, Clone)]
+pub struct AgentConnectionInfo {
+    pub mode: String, // "sidecar" | "attached" | "unknown"
+    pub version: Option<String>,
+    pub addr: String,
+}
+
+/// Tauri 命令：返回当前与本机 agent 的连接形态（前端底栏呈现用）。
+///
+/// 注意：addr 解析用户目录失败时（极端场景）退化为空字符串，不让这个只读信息
+/// 查询命令因为目录解析失败而报错阻断前端渲染。
+#[tauri::command]
+pub fn agent_connection_info(state: tauri::State<'_, AgentProcess>) -> AgentConnectionInfo {
+    let addr = agent_addr_and_data_dir()
+        .map(|(addr, _)| addr)
+        .unwrap_or_default();
+    match state
+        .mode
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        Some(AgentMode::Sidecar) => AgentConnectionInfo {
+            mode: "sidecar".to_string(),
+            version: None,
+            addr,
+        },
+        Some(AgentMode::Attached { version }) => AgentConnectionInfo {
+            mode: "attached".to_string(),
+            version: version.clone(),
+            addr,
+        },
+        None => AgentConnectionInfo {
+            mode: "unknown".to_string(),
+            version: None,
+            addr,
+        },
+    }
+}
+
+/// Tauri 命令：读取本机 agent 的 local-access-token 交给 webview 作 Authorization 头。
+///
+/// 参数：无（连接模式从 AgentProcess 状态读取）。
+///
+/// 返回：
+///   - Ok: token 明文（已 trim）。
+///   - Err: 面向用户的中文指引（不含 token 值，只含路径与排查建议）。
+///
+/// 注意：sidecar 模式直接读桌面端已知数据目录；attach 模式经 /api/security/health
+/// 发现路径——因为 attach 的既有 agent 可能是 headless 安装且自定义了 --data，
+/// 桌面端算出来的默认数据目录未必是它真实使用的目录，必须以 agent 自己披露的为准。
+#[tauri::command]
+pub fn local_agent_token(state: tauri::State<'_, AgentProcess>) -> Result<String, String> {
+    let (addr, data_dir) = agent_addr_and_data_dir()?;
+    let path = match state
+        .mode
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        Some(AgentMode::Attached { .. }) => {
+            // attach：数据目录未必是桌面端默认值（headless 安装可自定义 --data），
+            // 以 agent 自己披露的路径为准。
+            fetch_local_token_path(&addr)
+                .map_err(|e| format!("向本机 agent 查询凭据路径失败: {e}"))?
+        }
+        _ => data_dir
+            .join(crate::LOCAL_TOKEN_FILE_NAME)
+            .to_string_lossy()
+            .into_owned(),
+    };
+    std::fs::read_to_string(&path)
+        .map(|s| s.trim().to_string())
+        .map_err(|e| {
+            eprintln!("[SuperDev] 读取本机 agent 凭据失败 path={path}: {e}");
+            format!(
+                "读取本机 agent 凭据失败（{path}）。若 agent 为系统级安装（属主非当前用户），请以相同用户运行桌面端或改用远程接入: {e}"
+            )
+        })
 }
 
 /// terminate_pid_gracefully 以「先 SIGTERM、轮询、超时再 SIGKILL」的策略终止进程。
@@ -459,7 +625,7 @@ fn wait_for_compatible_agent(addr: &str, timeout: Duration) -> Result<(), String
     let deadline = Instant::now() + timeout;
     loop {
         match probe_agent_health(addr, AGENT_PROBE_TIMEOUT) {
-            ProbeOutcome::Compatible => return Ok(()),
+            ProbeOutcome::Compatible { .. } => return Ok(()),
             ProbeOutcome::Unreachable => {
                 if Instant::now() >= deadline {
                     return Err(format!("agent 启动超时：{addr} 未在 {:?} 内就绪", timeout));
@@ -482,6 +648,10 @@ where
 {
     match probe_agent_health(addr, probe_timeout) {
         ProbeOutcome::Unreachable => Ok(AgentPortState::StartSidecar),
+        // 兼容 agent 在跑：attach 复用，绝不杀——它可能是服务化/headless 安装，
+        // 有自己的生命周期（launchd/systemd），桌面端只是它的一个客户端。
+        ProbeOutcome::Compatible { version } => Ok(AgentPortState::AttachExisting { version }),
+        // 不兼容/坏响应：保留既有恢复路径（仅对进程名为 superdev-agent* 的占用者 SIGTERM）
         outcome => {
             let error = format_existing_agent_error(addr, &outcome);
             if !stop_existing_agent(addr, &outcome)? {
@@ -512,7 +682,10 @@ fn wait_for_released_agent_port(addr: &str, timeout: Duration) -> Result<AgentPo
 }
 
 fn stop_existing_superdev_agent(addr: &str, outcome: &ProbeOutcome) -> Result<bool, String> {
-    if outcome == &ProbeOutcome::Compatible {
+    // 走到这里时 outcome 只可能是 Incompatible/InvalidResponse：Compatible 已经在
+    // prepare_agent_port 里被 attach 分支接住，不会再调用本函数。分支保留是为了
+    // 防御性兼容未来其他调用方直接传入 Compatible。
+    if matches!(outcome, ProbeOutcome::Compatible { .. }) {
         eprintln!("[SuperDev] found existing agent on {addr}; taking sidecar ownership");
     } else {
         eprintln!(
@@ -577,7 +750,7 @@ fn is_superdev_agent_process(pid: &str) -> Result<bool, String> {
 
 fn format_probe_error(addr: &str, outcome: &ProbeOutcome) -> String {
     match outcome {
-        ProbeOutcome::Compatible => format!("agent 已监听且接口兼容：{addr}"),
+        ProbeOutcome::Compatible { .. } => format!("agent 已监听且接口兼容：{addr}"),
         ProbeOutcome::Unreachable => format!("agent 未监听：{addr}"),
         ProbeOutcome::InvalidResponse { endpoint } => format!(
             "agent 兼容性检查失败：{addr}{endpoint} 返回了无法解析的响应，请确认端口没有被其他进程占用"
@@ -589,7 +762,7 @@ fn format_probe_error(addr: &str, outcome: &ProbeOutcome) -> String {
 }
 
 fn format_existing_agent_error(addr: &str, outcome: &ProbeOutcome) -> String {
-    if outcome == &ProbeOutcome::Compatible {
+    if matches!(outcome, ProbeOutcome::Compatible { .. }) {
         return format!(
             "agent 端口已被已有进程占用：{addr}；SuperDev 需要启动当前桌面端自带的 agent，请退出占用该端口的旧 SuperDev 或 agent 后重启"
         );
@@ -599,8 +772,10 @@ fn format_existing_agent_error(addr: &str, outcome: &ProbeOutcome) -> String {
 
 fn probe_agent_health(addr: &str, timeout: Duration) -> ProbeOutcome {
     match probe_endpoint(addr, AGENT_HEALTH_ENDPOINT, timeout) {
-        EndpointProbe::Status(200) => ProbeOutcome::Compatible,
-        EndpointProbe::Status(status) => ProbeOutcome::Incompatible {
+        EndpointProbe::Response { status: 200, body } => ProbeOutcome::Compatible {
+            version: parse_health_version(&body),
+        },
+        EndpointProbe::Response { status, .. } => ProbeOutcome::Incompatible {
             endpoint: AGENT_HEALTH_ENDPOINT,
             status,
         },
@@ -608,6 +783,47 @@ fn probe_agent_health(addr: &str, timeout: Duration) -> ProbeOutcome {
         EndpointProbe::Invalid => ProbeOutcome::InvalidResponse {
             endpoint: AGENT_HEALTH_ENDPOINT,
         },
+    }
+}
+
+/// 从 security health 的 JSON body 解析 version；解析失败返回 None（不阻断 attach，
+/// 版本只用于 UI 呈现与升级提示，不是兼容性门槛）。
+fn parse_health_version(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("version")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// 从 security health 的 JSON body 解析 local_token_path；用于 attach 模式下
+/// local_agent_token 定位既有 agent 实际使用的数据目录（可能是自定义 --data）。
+fn parse_local_token_path(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("local_token_path")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// fetch_local_token_path 向本机 agent 的 security health 端点查询它自己披露的
+/// local-access-token 文件路径。
+///
+/// 注意：仅 loopback 请求才会拿到 local_token_path（agent 侧的隐私边界，见
+/// agent/api/security_handler.go 的 isLoopbackRequest）；桌面端与 agent 只通过
+/// 127.0.0.1 通信，天然满足这个条件。
+fn fetch_local_token_path(addr: &str) -> Result<String, String> {
+    match probe_endpoint(addr, AGENT_HEALTH_ENDPOINT, AGENT_PROBE_TIMEOUT) {
+        EndpointProbe::Response { status: 200, body } => {
+            parse_local_token_path(&body).ok_or_else(|| {
+                format!("agent 响应缺少 local_token_path 字段：{addr}{AGENT_HEALTH_ENDPOINT}")
+            })
+        }
+        EndpointProbe::Response { status, .. } => Err(format!(
+            "agent 健康检查返回非预期状态 {status}：{addr}{AGENT_HEALTH_ENDPOINT}"
+        )),
+        EndpointProbe::Unreachable => Err(format!("无法连接本机 agent：{addr}")),
+        EndpointProbe::Invalid => Err(format!("agent 响应无法解析：{addr}{AGENT_HEALTH_ENDPOINT}")),
     }
 }
 
@@ -624,17 +840,19 @@ fn probe_endpoint(addr: &str, endpoint: &'static str, timeout: Duration) -> Endp
         return EndpointProbe::Invalid;
     }
 
+    // Connection: close 让 agent 写完响应后主动关闭连接；读到 EOF 才能拿到完整
+    // body（旧实现只读到首个 \r\n 就断，version/local_token_path 这类字段还没
+    // 传完就被截断，parse_health_version 永远拿不到值）。
     let mut response = Vec::with_capacity(256);
-    let mut buf = [0_u8; 128];
+    let mut buf = [0_u8; 512];
     loop {
-        let n = match stream.read(&mut buf) {
+        match stream.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => n,
+            Ok(n) => response.extend_from_slice(&buf[..n]),
             Err(_) => return EndpointProbe::Invalid,
-        };
-        response.extend_from_slice(&buf[..n]);
-        // TCP 可能把状态行和 header 拆成多次读取；只要拿到首行即可解析。
-        if response.windows(2).any(|w| w == b"\r\n") || response.len() >= 1024 {
+        }
+        // 防御异常大响应把内存吃满；探测端点的正常响应体很小。
+        if response.len() >= 64 * 1024 {
             break;
         }
     }
@@ -642,7 +860,12 @@ fn probe_endpoint(addr: &str, endpoint: &'static str, timeout: Duration) -> Endp
         return EndpointProbe::Invalid;
     }
     let response = String::from_utf8_lossy(&response);
-    let Some(status) = response
+    let Some(header_end) = response.find("\r\n\r\n") else {
+        return EndpointProbe::Invalid;
+    };
+    let (head, body) = response.split_at(header_end);
+    let body = body[4..].to_string();
+    let Some(status) = head
         .lines()
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
@@ -650,7 +873,7 @@ fn probe_endpoint(addr: &str, endpoint: &'static str, timeout: Duration) -> Endp
     else {
         return EndpointProbe::Invalid;
     };
-    EndpointProbe::Status(status)
+    EndpointProbe::Response { status, body }
 }
 
 #[cfg(test)]
@@ -675,11 +898,13 @@ mod tests {
         dir
     }
 
-    fn serve_statuses(statuses: Vec<(&'static str, u16)>) -> String {
+    // fixture 支持携带任意 JSON body（用于 version/local_token_path 解析测试），
+    // Content-Length 按 body 实际长度计算，不再写死 2。
+    fn serve_statuses(statuses: Vec<(&'static str, u16, &'static str)>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake agent");
         let addr = listener.local_addr().expect("fake agent addr").to_string();
         thread::spawn(move || {
-            for (path, status) in statuses {
+            for (path, status, body) in statuses {
                 let (mut stream, _) = listener.accept().expect("accept probe");
                 let mut buf = [0_u8; 512];
                 let n = stream.read(&mut buf).expect("read probe");
@@ -691,7 +916,8 @@ mod tests {
                 let reason = if status == 200 { "OK" } else { "Not Found" };
                 write!(
                     stream,
-                    "HTTP/1.1 {status} {reason}\r\nContent-Length: 2\r\n\r\n[]"
+                    "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
                 )
                 .expect("write response");
                 stream.flush().expect("flush response");
@@ -702,11 +928,38 @@ mod tests {
 
     #[test]
     fn probe_reports_compatible_when_agent_health_exists() {
-        let addr = serve_statuses(vec![("/api/exec/health", 200)]);
+        let addr = serve_statuses(vec![(AGENT_HEALTH_ENDPOINT, 200, "[]")]);
 
         let outcome = probe_agent_health(&addr, Duration::from_secs(1));
 
-        assert_eq!(outcome, ProbeOutcome::Compatible);
+        assert_eq!(outcome, ProbeOutcome::Compatible { version: None });
+    }
+
+    #[test]
+    fn probe_parses_version_from_health_body() {
+        let addr = serve_statuses(vec![(
+            AGENT_HEALTH_ENDPOINT,
+            200,
+            r#"{"version":"9.9.9","provision_state":"open"}"#,
+        )]);
+
+        let outcome = probe_agent_health(&addr, Duration::from_secs(1));
+
+        assert_eq!(
+            outcome,
+            ProbeOutcome::Compatible {
+                version: Some("9.9.9".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn parse_health_version_tolerates_bad_body() {
+        assert_eq!(parse_health_version("not json"), None);
+        assert_eq!(
+            parse_health_version(r#"{"version":"1.2.3"}"#),
+            Some("1.2.3".to_string())
+        );
     }
 
     #[test]
@@ -737,14 +990,14 @@ mod tests {
 
     #[test]
     fn probe_reports_incompatible_when_agent_health_is_missing() {
-        let addr = serve_statuses(vec![("/api/exec/health", 404)]);
+        let addr = serve_statuses(vec![(AGENT_HEALTH_ENDPOINT, 404, "[]")]);
 
         let outcome = probe_agent_health(&addr, Duration::from_secs(1));
 
         assert_eq!(
             outcome,
             ProbeOutcome::Incompatible {
-                endpoint: "/api/exec/health",
+                endpoint: AGENT_HEALTH_ENDPOINT,
                 status: 404,
             }
         );
@@ -752,7 +1005,7 @@ mod tests {
 
     #[test]
     fn prepare_agent_port_recovers_incompatible_agent_before_starting_sidecar() {
-        let addr = serve_statuses(vec![("/api/exec/health", 404)]);
+        let addr = serve_statuses(vec![(AGENT_HEALTH_ENDPOINT, 404, "[]")]);
         let mut recovery_calls = 0;
 
         let state = prepare_agent_port(
@@ -764,7 +1017,7 @@ mod tests {
                 assert_eq!(
                     outcome,
                     &ProbeOutcome::Incompatible {
-                        endpoint: "/api/exec/health",
+                        endpoint: AGENT_HEALTH_ENDPOINT,
                         status: 404,
                     }
                 );
@@ -778,29 +1031,40 @@ mod tests {
     }
 
     #[test]
-    fn prepare_agent_port_stops_existing_compatible_agent_before_starting_sidecar() {
-        let addr = serve_statuses(vec![("/api/exec/health", 200)]);
+    fn prepare_agent_port_attaches_to_existing_compatible_agent() {
+        let addr = serve_statuses(vec![(
+            AGENT_HEALTH_ENDPOINT,
+            200,
+            r#"{"version":"2.0.0","provision_state":"open"}"#,
+        )]);
         let mut recovery_calls = 0;
 
         let state = prepare_agent_port(
             &addr,
             Duration::from_secs(1),
             Duration::from_secs(1),
-            |_, outcome| {
+            |_, _| {
                 recovery_calls += 1;
-                assert_eq!(outcome, &ProbeOutcome::Compatible);
                 Ok(true)
             },
         )
-        .expect("recover stale compatible agent");
+        .expect("attach to compatible agent");
 
-        assert_eq!(state, AgentPortState::StartSidecar);
-        assert_eq!(recovery_calls, 1);
+        assert_eq!(
+            state,
+            AgentPortState::AttachExisting {
+                version: Some("2.0.0".to_string())
+            }
+        );
+        assert_eq!(
+            recovery_calls, 0,
+            "compatible agent must be attached, never stopped"
+        );
     }
 
     #[test]
     fn prepare_agent_port_reports_incompatible_agent_when_recovery_is_not_safe() {
-        let addr = serve_statuses(vec![("/api/exec/health", 404)]);
+        let addr = serve_statuses(vec![(AGENT_HEALTH_ENDPOINT, 404, "[]")]);
 
         let err = prepare_agent_port(
             &addr,
@@ -810,7 +1074,21 @@ mod tests {
         )
         .expect_err("unsafe recovery should keep compatibility error");
 
-        assert!(err.contains("/api/exec/health 返回 404"));
+        assert!(err.contains(&format!("{AGENT_HEALTH_ENDPOINT} 返回 404")));
+    }
+
+    #[test]
+    fn stop_leaves_attached_agent_running() {
+        let mut terminate_calls = 0;
+
+        stop_with_mode_gate(
+            Some(&AgentMode::Attached {
+                version: Some("1.0.0".to_string()),
+            }),
+            || terminate_calls += 1,
+        );
+
+        assert_eq!(terminate_calls, 0, "attach 模式不应触发终止子进程流程");
     }
 
     #[test]
