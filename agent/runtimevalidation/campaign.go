@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/xsxdot/gokit/logger"
+	"github.com/xsxdot/super-dev/agent/security"
 )
 
 // StrictCampaignOptions 提交当前 target bundle、非敏感 input 和仅存于进程内的 credential。
@@ -237,10 +238,11 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	pipelineStarted, pipelineCleaned := false, false
 	var mcpProcess *MCPProcess
 	var agentURL string
+	var agentToken string
 	defer func() {
 		if facts.borrowed.LiveTopologyDigestBefore != "" && mcpProcess != nil && agentURL != "" {
 			attestationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			projection, digest, topologyErr := VerifyBorrowedLiveTopology(attestationCtx, mcpProcess, agentURL, input, nil)
+			projection, digest, topologyErr := VerifyBorrowedLiveTopology(attestationCtx, mcpProcess, agentURL, input, nil, agentToken)
 			cancel()
 			if topologyErr != nil {
 				facts.runErr = errors.Join(facts.runErr, topologyErr)
@@ -366,6 +368,21 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	}
 	facts.checks = append(facts.checks, CheckResult{ID: "agent-ready", Status: StatusPass})
 
+	// 除 waitForHTTPReady 刚探过的纯活性外，本 campaign 后续还会绕过 packaged MCP、
+	// 直连 Agent 读写受保护数据（borrowed agent check、operation-approvals/audit、
+	// debug-credential-leases）——鉴权常开后这些端点都需要凭据。cloneRoot 就是这个
+	// disposable Agent 的 --data 目录，RotateLocalToken 在它的 NewApp 里于 HTTP 监听
+	// 前完成（main.go -> api.NewApp -> ListenAndServe 严格顺序），上面的 agent-ready
+	// 已经证明进程在跑，所以这里读到 token 应该是必然事件。
+	var tokenErr error
+	agentToken, tokenErr = security.ReadLocalToken(cloneRoot)
+	if tokenErr != nil {
+		// 不在这里发明新的 fail-closed 分支：读取失败就退化为不带凭据请求，让下游
+		// checkBorrowedAgent / operation-approvals / debug-credential-leases 各自的
+		// 401 自然暴露真实问题，同时把这次异常读取失败本身记进日志方便排查。
+		logger.GetLogger().WithEntryName("RuntimeValidationCampaign").WithErr(tokenErr).Error("读取 disposable Agent 本机访问 token 失败，后续直连调用将不带凭据")
+	}
+
 	mcpBinary := filepath.Join(options.BundleRoot, "bin", "superdev-mcp"+options.Target.ExecutableSuffix())
 	_, err = stack.Acquire("process", "mcp", map[string]any{"state": "stopped"}, func() (CleanupAction, error) {
 		process, startErr := StartMCPProcess(ctx, MCPProcessSpec{Executable: mcpBinary, Directory: workRoot, AgentURL: agentURL, Stderr: redactor})
@@ -383,7 +400,7 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 		return facts
 	}
 	facts.checks = append(facts.checks, CheckResult{ID: "mcp-initialize", Status: StatusPass})
-	facts.borrowedBefore, facts.borrowed.LiveTopologyDigestBefore, err = VerifyBorrowedLiveTopology(ctx, mcpProcess, agentURL, input, nil)
+	facts.borrowedBefore, facts.borrowed.LiveTopologyDigestBefore, err = VerifyBorrowedLiveTopology(ctx, mcpProcess, agentURL, input, nil, agentToken)
 	if err != nil {
 		facts.runErr = err
 		facts.checks = append(facts.checks, failedCampaignCheck("borrowed-live-before", "borrowed_live_topology_before_failed", err))
@@ -399,6 +416,7 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	}
 	approvalCaller, err := NewApprovalToolCaller(mcpProcess, ApprovalActorOptions{
 		AgentURL: agentURL, CampaignID: campaignID, AllowedKinds: DefaultRuntimeValidationApprovalKinds(),
+		AgentToken: agentToken,
 	})
 	if err != nil {
 		facts.runErr = err
@@ -430,6 +448,7 @@ func runActiveCampaign(ctx context.Context, options StrictCampaignOptions, input
 	credentialCaller, err := NewCredentialToolCaller(mutationCaller, CredentialActorOptions{
 		AgentURL: agentURL, AuthSidecarURL: sidecarURL, CampaignID: campaignID,
 		CredentialValue: options.CredentialValue, Redactor: redactor, Cleanup: stack,
+		AgentToken: agentToken,
 	})
 	if err != nil {
 		facts.runErr = err

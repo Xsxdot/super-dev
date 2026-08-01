@@ -26,7 +26,7 @@ func TestVerifyBorrowedLiveTopologyBindsMCPAndAgentFacts(t *testing.T) {
 	t.Cleanup(server.Close)
 	input := RuntimeInput{RemoteHostID: "remote-linux", ExpectedRemoteIdentity: "node-linux-1"}
 
-	projection, digest, err := VerifyBorrowedLiveTopology(context.Background(), borrowedHostTool{}, server.URL, input, server.Client())
+	projection, digest, err := VerifyBorrowedLiveTopology(context.Background(), borrowedHostTool{}, server.URL, input, server.Client(), "")
 
 	require.NoError(t, err)
 	require.Equal(t, "node-linux-1", projection.NodeID)
@@ -46,7 +46,7 @@ func TestVerifyBorrowedLiveTopologyRejectsMachineIdentityDrift(t *testing.T) {
 	t.Cleanup(server.Close)
 	_, _, err := VerifyBorrowedLiveTopology(context.Background(), borrowedHostTool{}, server.URL, RuntimeInput{
 		RemoteHostID: "remote-linux", ExpectedRemoteIdentity: "node-linux-1",
-	}, server.Client())
+	}, server.Client(), "")
 	require.ErrorContains(t, err, "identity mismatch")
 }
 
@@ -61,7 +61,7 @@ func TestVerifyBorrowedLiveTopologyWaitsForInitialNodeStatus(t *testing.T) {
 
 	projection, _, err := VerifyBorrowedLiveTopology(context.Background(), tools, server.URL, RuntimeInput{
 		RemoteHostID: "remote-linux", ExpectedRemoteIdentity: "node-linux-1",
-	}, server.Client())
+	}, server.Client(), "")
 
 	require.NoError(t, err)
 	require.Equal(t, "node-linux-1", projection.NodeID)
@@ -79,11 +79,50 @@ func TestVerifyBorrowedLiveTopologyTreatsNullNodeIdentityAsNotReady(t *testing.T
 
 	projection, _, err := VerifyBorrowedLiveTopology(context.Background(), tools, server.URL, RuntimeInput{
 		RemoteHostID: "remote-linux", ExpectedRemoteIdentity: "node-linux-1",
-	}, server.Client())
+	}, server.Client(), "")
 
 	require.NoError(t, err)
 	require.Equal(t, "node-linux-1", projection.NodeID)
 	require.Equal(t, 2, tools.CallCount())
+}
+
+// 鉴权常开后 /api/agents/{id}/check 是受保护端点：这里证明传入非空 agentToken 时，
+// 实际发出的请求真的带上了 Authorization: Bearer <token>，而不仅仅是编译通过。
+func TestVerifyBorrowedLiveTopologyAttachesAgentTokenWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	const token = "borrowed-local-access-token"
+	var gotAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		gotAuthorization = request.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(validBorrowedAgentProjection())
+	}))
+	t.Cleanup(server.Close)
+	input := RuntimeInput{RemoteHostID: "remote-linux", ExpectedRemoteIdentity: "node-linux-1"}
+
+	_, _, err := VerifyBorrowedLiveTopology(context.Background(), borrowedHostTool{}, server.URL, input, server.Client(), token)
+
+	require.NoError(t, err)
+	require.Equal(t, "Bearer "+token, gotAuthorization)
+}
+
+// 未配置 token（空串）时请求必须保持裸发——这是既有假 server 单测能继续通过的前提，
+// 也证明「没有 token 就不发 Authorization」而不是发一个空/占位值。
+func TestVerifyBorrowedLiveTopologyOmitsAuthorizationWithoutToken(t *testing.T) {
+	t.Parallel()
+
+	sawAuthorizationHeader := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		sawAuthorizationHeader = request.Header.Get("Authorization") != ""
+		_ = json.NewEncoder(w).Encode(validBorrowedAgentProjection())
+	}))
+	t.Cleanup(server.Close)
+	input := RuntimeInput{RemoteHostID: "remote-linux", ExpectedRemoteIdentity: "node-linux-1"}
+
+	_, _, err := VerifyBorrowedLiveTopology(context.Background(), borrowedHostTool{}, server.URL, input, server.Client(), "")
+
+	require.NoError(t, err)
+	require.False(t, sawAuthorizationHeader)
 }
 
 type borrowedHostTool struct{}

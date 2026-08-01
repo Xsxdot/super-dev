@@ -43,6 +43,7 @@ type credentialLeaseClient interface {
 type credentialLeaseHTTPClient struct {
 	baseURL *url.URL
 	http    *http.Client
+	token   string
 }
 
 type credentialLeaseToolCaller struct {
@@ -79,7 +80,15 @@ func (c *credentialLeaseToolCaller) CallTool(ctx context.Context, name string, a
 	return result, errors.Join(createErr, callErr, deleteErr)
 }
 
-func newCredentialLeaseHTTPClient(agentURL string, httpClient *http.Client) (*credentialLeaseHTTPClient, error) {
+// newCredentialLeaseHTTPClient 创建直连 Agent 的 credential lease HTTP client。
+//
+// 参数：
+//   - agentURL: disposable/已安装 Agent 的 HTTP 基地址
+//   - httpClient: 可选 HTTP client；为空时使用 15s 超时默认 client
+//   - token: Agent 的本机访问 token（security.ReadLocalToken）；鉴权常开后
+//     /api/debug-credential-leases* 是受保护端点，空串表示调用方未解析到凭据
+//     （多为单测），请求会保持裸发
+func newCredentialLeaseHTTPClient(agentURL string, httpClient *http.Client, token string) (*credentialLeaseHTTPClient, error) {
 	parsed, err := url.Parse(strings.TrimSpace(agentURL))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil ||
 		parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" || parsed.RawPath != "" {
@@ -96,7 +105,7 @@ func newCredentialLeaseHTTPClient(agentURL string, httpClient *http.Client) (*cr
 	}
 	// lease 创建请求含人类输入的 secret；禁止 HTTP redirect 把请求体重放到另一个 origin。
 	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
-	return &credentialLeaseHTTPClient{baseURL: parsed, http: httpClient}, nil
+	return &credentialLeaseHTTPClient{baseURL: parsed, http: httpClient, token: strings.TrimSpace(token)}, nil
 }
 
 func (c *credentialLeaseHTTPClient) Create(ctx context.Context, projectID, serviceID, owner, value string) (debugcredential.Metadata, error) {
@@ -123,6 +132,11 @@ func (c *credentialLeaseHTTPClient) Create(ctx context.Context, projectID, servi
 		return debugcredential.Metadata{}, fmt.Errorf("create credential lease request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// /api/debug-credential-leases 是受保护端点（鉴权常开），创建的是进程内凭据 lease
+	// 这类受保护资源，按 Step 5 规则带上 Agent 的本机访问 token。
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		log.WithErr(err).WithFields(fields).Error("Windows validation 调试凭据 lease HTTP 创建失败")
@@ -164,6 +178,10 @@ func (c *credentialLeaseHTTPClient) Delete(ctx context.Context, leaseID, owner s
 	if err != nil {
 		log.WithErr(err).WithFields(fields).Error("创建 Windows validation 调试凭据 lease 删除请求失败")
 		return fmt.Errorf("create credential lease delete request: %w", err)
+	}
+	// 同上：精确删除同一个 lease 资源，同样需要 Agent 的本机访问 token。
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

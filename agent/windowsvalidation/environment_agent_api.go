@@ -32,6 +32,7 @@ const (
 type HTTPEnvironmentAgentAPIReader struct {
 	baseURL *url.URL
 	client  *http.Client
+	token   string
 }
 
 // NewHTTPEnvironmentAgentAPIReader 创建只允许 GET 固定路径的环境运行态 reader。
@@ -39,11 +40,14 @@ type HTTPEnvironmentAgentAPIReader struct {
 // 参数：
 //   - baseURL: 已安装 Desktop Agent 的 HTTP 基地址
 //   - client: 可选 HTTP client；为空时使用有界超时 client
+//   - token: Agent 的本机访问 token（security.ReadLocalToken(input.AgentDataDirectory)）；
+//     鉴权常开后 /api/agents、/api/tunnels、/api/nodes 等都是受保护端点，空串表示
+//     调用方未解析到凭据（多为单测用假 server），此时请求保持裸发
 //
 // 返回：
 //   - 可复用于一次 preflight 的只读 reader
 //   - URL 非 http/https、包含凭据或缺少 host 时的合同错误
-func NewHTTPEnvironmentAgentAPIReader(baseURL string, client *http.Client) (*HTTPEnvironmentAgentAPIReader, error) {
+func NewHTTPEnvironmentAgentAPIReader(baseURL string, client *http.Client, token string) (*HTTPEnvironmentAgentAPIReader, error) {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" || parsed.RawPath != "" {
 		return nil, fmt.Errorf("environment Agent API base URL must be an http(s) URL without credentials")
@@ -57,7 +61,7 @@ func NewHTTPEnvironmentAgentAPIReader(baseURL string, client *http.Client) (*HTT
 	}
 	baseCopy := *parsed
 	baseCopy.Path = strings.TrimRight(baseCopy.Path, "/")
-	return &HTTPEnvironmentAgentAPIReader{baseURL: &baseCopy, client: &clientCopy}, nil
+	return &HTTPEnvironmentAgentAPIReader{baseURL: &baseCopy, client: &clientCopy, token: strings.TrimSpace(token)}, nil
 }
 
 // ListEnvironmentAgents 读取 GET /api/agents 并只保留 preflight 所需的安全字段。
@@ -275,6 +279,13 @@ func (r *HTTPEnvironmentAgentAPIReader) getJSON(ctx context.Context, endpoint st
 	if err != nil {
 		log.WithField("cause_code", "request_invalid").Error("Windows 环境 Agent API 请求构造失败")
 		return fmt.Errorf("build environment Agent API request: %w", err)
+	}
+	// /api/agents、/api/tunnels、/api/nodes、/api/hosts/{id}/managed-deployments/status、
+	// /api/agents/{id}/direct-exposure 全部是受保护端点（鉴权常开），读的是安全运行态
+	// 这类受保护数据，不是纯探活，因此按 Step 5 规则带上本机访问 token；getJSON 是这
+	// 五个读方法唯一的底层请求构造点，这里改一处即可全覆盖。
+	if r.token != "" {
+		request.Header.Set("Authorization", "Bearer "+r.token)
 	}
 	response, err := r.client.Do(request)
 	if err != nil {

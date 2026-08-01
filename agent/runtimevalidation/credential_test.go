@@ -130,6 +130,50 @@ func credentialMetadata(id, projectID, serviceID, owner string) map[string]any {
 	}
 }
 
+// 鉴权常开后 /api/debug-credential-leases* 是受保护端点。这里证明配置 AgentToken 后
+// createLease（POST）和 deleteLease（DELETE）真的把 Authorization: Bearer <token> 发给
+// Agent，而 verifyAuthSidecar 打的 sidecar 请求仍然只带 secret 自己的 Bearer（两套凭据
+// 不能互相污染）。
+func TestCredentialCallerAttachesAgentTokenToLeaseRequestsOnly(t *testing.T) {
+	t.Parallel()
+
+	const agentToken = "credential-lease-local-access-token"
+	const secret = "runtime-secret-value"
+	var createAuthorization, deleteAuthorization string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.Method {
+		case http.MethodPost:
+			createAuthorization = request.Header.Get("Authorization")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(credentialMetadata("lease-1", "project-1", "service-1", "campaign-1"))
+		case http.MethodDelete:
+			deleteAuthorization = request.Header.Get("Authorization")
+			_ = json.NewEncoder(w).Encode(credentialMetadata("lease-1", "project-1", "service-1", "campaign-1"))
+		}
+	}))
+	t.Cleanup(agent.Close)
+	var sidecarAuthorization string
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		sidecarAuthorization = request.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "campaign_id": "campaign-1"})
+	}))
+	t.Cleanup(sidecar.Close)
+
+	caller, err := NewCredentialToolCaller(&credentialDelegate{secret: secret}, CredentialActorOptions{
+		AgentURL: agent.URL, AuthSidecarURL: sidecar.URL, CampaignID: "campaign-1",
+		CredentialValue: secret, HTTPClient: agent.Client(), Redactor: NewRedactingWriter(nil),
+		AgentToken: agentToken,
+	})
+	require.NoError(t, err)
+
+	_, err = caller.CallTool(context.Background(), "get_debug_credentials", map[string]any{"project_id": "project-1", "service_id": "service-1"})
+	require.NoError(t, err)
+	require.Equal(t, "Bearer "+agentToken, createAuthorization)
+	require.Equal(t, "Bearer "+agentToken, deleteAuthorization)
+	// sidecar 是另一个 origin，鉴别方式是人工输入的一次性调试凭据本身，不受 AgentToken 影响。
+	require.Equal(t, "Bearer "+secret, sidecarAuthorization)
+}
+
 func TestCredentialErrorsNeverContainSecret(t *testing.T) {
 	t.Parallel()
 

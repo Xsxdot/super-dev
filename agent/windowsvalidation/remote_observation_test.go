@@ -51,7 +51,7 @@ func TestHTTPEnvironmentAgentAPIReaderProjectsFinalSafeRemoteObservationShapes(t
 	}))
 	t.Cleanup(server.Close)
 
-	reader, err := NewHTTPEnvironmentAgentAPIReader(server.URL, server.Client())
+	reader, err := NewHTTPEnvironmentAgentAPIReader(server.URL, server.Client(), "")
 	require.NoError(t, err)
 	machine, err := reader.ReadEnvironmentRemoteMachine(context.Background(), "linux-validation-01")
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestHTTPEnvironmentAgentAPIReaderProjectsFinalSafeRemoteObservationShapes(t
 }
 
 func TestHTTPEnvironmentAgentAPIReaderRejectsHostIDPathInjection(t *testing.T) {
-	reader, err := NewHTTPEnvironmentAgentAPIReader("http://127.0.0.1:57017", nil)
+	reader, err := NewHTTPEnvironmentAgentAPIReader("http://127.0.0.1:57017", nil, "")
 	require.NoError(t, err)
 	for _, hostID := range []string{"../hosts", "host/id", "host?address=10.0.0.1", "http://attacker", "host%2fchild", "host%5cchild"} {
 		_, err := reader.ReadEnvironmentDirectExposure(context.Background(), hostID)

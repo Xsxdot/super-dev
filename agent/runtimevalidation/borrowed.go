@@ -53,12 +53,15 @@ type BorrowedLiveProjection struct {
 //   - agentURL: 当前 disposable Agent 的 loopback URL
 //   - input: 已校验的 Host ID 与 out-of-band node identity
 //   - client: 可选 HTTP client；nil 时使用十秒超时 client
+//   - agentToken: disposable Agent 的本机访问 token（security.ReadLocalToken(cloneRoot)）；
+//     鉴权常开后 /api/agents/{id}/check 是受保护端点，空串表示调用方未解析到凭据
+//     （多为单测用假 server），此时请求保持裸发，不在这里静默兜底
 //
 // 返回：
 //   - 不含地址和凭据的 live topology 投影
 //   - 投影的稳定 SHA-256 digest
 //   - 任一 Host、健康、system facts 或 transport 绑定不一致错误
-func VerifyBorrowedLiveTopology(ctx context.Context, tools ToolCaller, agentURL string, input RuntimeInput, client *http.Client) (BorrowedLiveProjection, string, error) {
+func VerifyBorrowedLiveTopology(ctx context.Context, tools ToolCaller, agentURL string, input RuntimeInput, client *http.Client, agentToken string) (BorrowedLiveProjection, string, error) {
 	if tools == nil {
 		return BorrowedLiveProjection{}, "", fmt.Errorf("borrowed topology ToolCaller is required")
 	}
@@ -77,7 +80,7 @@ func VerifyBorrowedLiveTopology(ctx context.Context, tools ToolCaller, agentURL 
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	agent, err := checkBorrowedAgent(ctx, canonical, input.RemoteHostID, client)
+	agent, err := checkBorrowedAgent(ctx, canonical, input.RemoteHostID, client, agentToken)
 	if err != nil {
 		return BorrowedLiveProjection{}, "", err
 	}
@@ -178,7 +181,7 @@ func selectGovernedRemoteHost(data map[string]any, hostID string) (string, []str
 	return "", nil, fmt.Errorf("live host %s is absent", hostID)
 }
 
-func checkBorrowedAgent(ctx context.Context, baseURL, hostID string, client *http.Client) (map[string]any, error) {
+func checkBorrowedAgent(ctx context.Context, baseURL, hostID string, client *http.Client, agentToken string) (map[string]any, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err
@@ -188,6 +191,10 @@ func checkBorrowedAgent(ctx context.Context, baseURL, hostID string, client *htt
 	if err != nil {
 		return nil, err
 	}
+	// /api/agents/{id}/check 是受保护端点（鉴权常开），这里读的是受保护数据（借用远端
+	// 节点的健康/system facts），不是纯探活，因此按 Step 5 的规则显式带上 Authorization，
+	// 而不是像 campaign.go 里的就绪探活那样换成 bypass 端点。
+	attachAgentToken(request, agentToken)
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("check borrowed agent: %w", err)

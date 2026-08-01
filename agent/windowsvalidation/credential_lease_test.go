@@ -50,7 +50,7 @@ func TestCredentialLeaseHTTPClientCreatesAndDeletesWithoutExposingSecret(t *test
 	}))
 	defer server.Close()
 
-	client, err := newCredentialLeaseHTTPClient(server.URL, server.Client())
+	client, err := newCredentialLeaseHTTPClient(server.URL, server.Client(), "")
 	require.NoError(t, err)
 	metadata, err := client.Create(context.Background(), "p1", "s1", "campaign-1", secret)
 	require.NoError(t, err)
@@ -61,6 +61,37 @@ func TestCredentialLeaseHTTPClientCreatesAndDeletesWithoutExposingSecret(t *test
 	require.NoError(t, client.Delete(context.Background(), metadata.ID, "campaign-1"))
 }
 
+// 鉴权常开后 /api/debug-credential-leases* 是受保护端点。这里证明配置 token 后
+// Create（POST）和 Delete（DELETE）真的把 Authorization: Bearer <token> 发给 Agent。
+func TestCredentialLeaseHTTPClientAttachesTokenWhenConfigured(t *testing.T) {
+	const secret = "human-entered-one-time-secret"
+	const token = "windows-validation-local-access-token"
+	var createAuthorization, deleteAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/debug-credential-leases":
+			createAuthorization = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":"lease-1","project_id":"p1","service_id":"s1","owner":"campaign-1","expires_at_utc":"2026-07-15T02:00:00Z","count":1,"credential_hints":[{"name":"windows_validation_credential","desc":"一次性 Windows validation 调试凭据","source":"ephemeral_service"}]}`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/debug-credential-leases/lease-1":
+			deleteAuthorization = r.Header.Get("Authorization")
+			_, _ = fmt.Fprint(w, `{"id":"lease-1","project_id":"p1","service_id":"s1","owner":"campaign-1","expires_at_utc":"2026-07-15T02:00:00Z","count":1,"credential_hints":[{"name":"windows_validation_credential","desc":"一次性 Windows validation 调试凭据","source":"ephemeral_service"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newCredentialLeaseHTTPClient(server.URL, server.Client(), token)
+	require.NoError(t, err)
+	metadata, err := client.Create(context.Background(), "p1", "s1", "campaign-1", secret)
+	require.NoError(t, err)
+	require.NoError(t, client.Delete(context.Background(), metadata.ID, "campaign-1"))
+
+	assert.Equal(t, "Bearer "+token, createAuthorization)
+	assert.Equal(t, "Bearer "+token, deleteAuthorization)
+}
+
 func TestCredentialLeaseHTTPClientSuppressesErrorBody(t *testing.T) {
 	const secret = "server-must-not-reflect-this-secret"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -69,7 +100,7 @@ func TestCredentialLeaseHTTPClientSuppressesErrorBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := newCredentialLeaseHTTPClient(server.URL, server.Client())
+	client, err := newCredentialLeaseHTTPClient(server.URL, server.Client(), "")
 	require.NoError(t, err)
 	_, err = client.Create(context.Background(), "p1", "s1", "campaign-1", secret)
 	require.Error(t, err)

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/xsxdot/gokit/logger"
+	"github.com/xsxdot/super-dev/agent/security"
 )
 
 const (
@@ -508,8 +509,19 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": "msi_smoke", "phase_status": report.Result.PhaseStatus, "attempted": report.Result.Attempted}).Info("Windows MSI packaged sidecar smoke 完成")
 		return report, nil
 	}
+	// disposable/已安装 Agent 的本机访问 token：鉴权常开后，下面的 environment preflight
+	// （/api/agents、/api/tunnels、/api/nodes 等）和 debug credential lease
+	// （/api/debug-credential-leases*）都要直连这个真实 Agent 的受保护端点。
+	// input.AgentDataDirectory 在更早的 validateAgentDataDirectoryBinding 里已经核对过
+	// 等于本进程继承的 SUPERDEV_AGENT_DATA_DIR，就是这个 Agent 的数据目录。
+	agentToken, tokenErr := security.ReadLocalToken(input.AgentDataDirectory)
+	if tokenErr != nil {
+		// 不在这里发明新的 fail-closed 分支：读取失败就退化为不带凭据请求，让下游各自的
+		// 401 自然暴露真实问题，同时把这次异常读取失败记进日志方便排查。
+		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane}).WithErr(tokenErr).Error("读取 Agent 本机访问 token 失败，后续直连调用将不带凭据")
+	}
 	stage = "environment_preflight"
-	environment, err := runProductionEnvironmentPreflight(ctx, source, input, campaignID, client, attestation, agentEndpoint.URL, resultsDir, redactor, strings.TrimSpace(options.DebugCredentialValue) != "", preinstallEvidence)
+	environment, err := runProductionEnvironmentPreflight(ctx, source, input, campaignID, client, attestation, agentEndpoint.URL, resultsDir, redactor, strings.TrimSpace(options.DebugCredentialValue) != "", preinstallEvidence, agentToken)
 	if err != nil {
 		causeCode, _ := stableCampaignGateFailure(stage, err)
 		log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "stage": stage, "cause_code": causeCode}).Error("Windows 环境准入失败，拒绝进入功能事实")
@@ -530,7 +542,7 @@ func RunCampaign(ctx context.Context, options RunOptions) (report CampaignReport
 	}
 	log.WithFields(map[string]any{"campaign_id": campaignID, "lane": lane, "binding_count": len(providerAdapters)}).Info("Windows provider adapter 已绑定到环境清单真实路径")
 	stage = "prepare_debug_credential_lease"
-	leaseClient, err := newCredentialLeaseHTTPClient(agentEndpoint.URL, nil)
+	leaseClient, err := newCredentialLeaseHTTPClient(agentEndpoint.URL, nil, agentToken)
 	if err != nil {
 		persistGateFailure(resultsDir, redactor, source, input, campaignID, started, installerChecks, installer, attestation, stage, err, environment)
 		return CampaignReport{}, err
@@ -750,9 +762,10 @@ func runProductionEnvironmentPreflight(
 	redactor *Redactor,
 	credentialReady bool,
 	preinstall PreparedEnvironmentPreinstallEvidence,
+	agentToken string,
 ) (EnvironmentPreflightExecution, error) {
 	execution := EnvironmentPreflightExecution{Preinstall: preinstall}
-	agentAPI, err := NewHTTPEnvironmentAgentAPIReader(agentURL, nil)
+	agentAPI, err := NewHTTPEnvironmentAgentAPIReader(agentURL, nil, agentToken)
 	if err != nil {
 		return execution, err
 	}

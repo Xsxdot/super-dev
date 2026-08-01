@@ -43,17 +43,23 @@ type CredentialActorOptions struct {
 	HTTPClient      *http.Client
 	Redactor        *RedactingWriter
 	Cleanup         *CleanupStack
+	// AgentToken 是 disposable Agent 的本机访问 token（security.ReadLocalToken）；只用于
+	// createLease/deleteLease 打向 Agent 的 /api/debug-credential-leases* 请求。
+	// verifyAuthSidecar 打的是另一个 origin（auth sidecar），用人工输入的 CredentialValue
+	// 自成一套鉴权，不受这个字段影响。
+	AgentToken string
 }
 
 // CredentialToolCaller 只包装 get_debug_credentials 的 lease/readback/login/delete 生命周期。
 type CredentialToolCaller struct {
-	delegate ToolCaller
-	agent    *url.URL
-	sidecar  *url.URL
-	campaign string
-	secret   string
-	http     *http.Client
-	cleanup  *CleanupStack
+	delegate   ToolCaller
+	agent      *url.URL
+	sidecar    *url.URL
+	campaign   string
+	secret     string
+	http       *http.Client
+	agentToken string
+	cleanup    *CleanupStack
 }
 
 // NewCredentialToolCaller 创建 credential actor，并在任何输出写入前登记 secret 脱敏。
@@ -86,7 +92,7 @@ func NewCredentialToolCaller(delegate ToolCaller, options CredentialActorOptions
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &CredentialToolCaller{
 		delegate: delegate, agent: agentURL, sidecar: sidecarURL, campaign: options.CampaignID,
-		secret: options.CredentialValue, http: client, cleanup: options.Cleanup,
+		secret: options.CredentialValue, http: client, agentToken: options.AgentToken, cleanup: options.Cleanup,
 	}, nil
 }
 
@@ -170,6 +176,9 @@ func (c *CredentialToolCaller) createLease(ctx context.Context, projectID, servi
 		return debugcredential.Metadata{}, fmt.Errorf("create credential lease request")
 	}
 	request.Header.Set("Content-Type", "application/json")
+	// /api/debug-credential-leases 是受保护端点（鉴权常开），创建/持有的是进程内凭据 lease
+	// 这类受保护资源，不是纯探活，按 Step 5 规则带上 disposable Agent 的本机访问 token。
+	attachAgentToken(request, c.agentToken)
 	response, err := c.http.Do(request)
 	if err != nil {
 		return debugcredential.Metadata{}, fmt.Errorf("create credential lease: %w", err)
@@ -199,6 +208,8 @@ func (c *CredentialToolCaller) deleteLease(ctx context.Context, expected debugcr
 	if err != nil {
 		return fmt.Errorf("create credential lease delete request")
 	}
+	// 同上：精确删除同一个 lease 资源，同样需要 Agent 的本机访问 token。
+	attachAgentToken(request, c.agentToken)
 	response, err := c.http.Do(request)
 	if err != nil {
 		return fmt.Errorf("delete credential lease: %w", err)

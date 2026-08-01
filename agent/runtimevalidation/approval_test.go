@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -239,6 +240,123 @@ func TestApprovalActorFinalizesPendingReadProbeAsRejectedTerminalDelta(t *testin
 	require.Equal(t, "rejected", evidence.Probes[0].Status)
 	require.Equal(t, []string{"approval_required", "rejected"}, evidence.Probes[0].AuditActions)
 	require.Equal(t, int32(1), rejectRequests.Load())
+}
+
+// 鉴权常开后 /api/operation-approvals* 与 /api/operation-audit 都是受保护端点。这里复用
+// approve 流程的 fixture/handler，但用 recordAuthorization 包一层记录每次请求真正带的
+// Authorization 头，证明 rejectDuplicatePending、getApproval、approveOperation、
+// listMatchingOperationAudit 这四个直连调用点都真的把 AgentToken 发出去了，而不只是
+// 编译期通过。
+func TestApprovalActorAttachesAgentTokenAcrossApproveFlow(t *testing.T) {
+	t.Parallel()
+
+	const token = "approval-local-access-token"
+	fixture := newApprovalFixture(time.Now().UTC().Add(5 * time.Minute))
+	var approved atomic.Bool
+	var auditReads atomic.Int32
+	requests, handler := recordAuthorization(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals":
+			_ = json.NewEncoder(w).Encode([]any{fixture.approval("pending")})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals/approval-1":
+			status, approvalToken := "pending", ""
+			if approved.Load() {
+				status, approvalToken = "approved", "one-time-token"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"approval": fixture.approval(status), "approval_token": approvalToken,
+			})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-1/approve":
+			approved.Store(true)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"approval": fixture.approval("approved"), "grace_granted": false,
+			})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-audit":
+			events := []any{fixture.auditEvent("approved", "approval-1")}
+			if auditReads.Add(1) >= 2 {
+				events = append(events, fixture.auditEvent("executed", "approval-1"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"events": events})
+		default:
+			http.NotFound(w, request)
+		}
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	delegate := &approvalDelegate{fixture: fixture}
+	actor, err := NewApprovalToolCaller(delegate, ApprovalActorOptions{
+		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(),
+		AllowedKinds: map[string][]string{"debug_evaluate": {"code_debug.evaluate"}},
+		AgentToken:   token,
+	})
+	require.NoError(t, err)
+
+	result, err := actor.CallTool(context.Background(), "debug_evaluate", map[string]any{"deployment_id": "dep-1"})
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	require.NotEmpty(t, requests.snapshot())
+	for _, authorization := range requests.snapshot() {
+		require.Equal(t, "Bearer "+token, authorization)
+	}
+}
+
+// 同上，但走 pending 读探针 -> reject 终态化流程，额外覆盖 approve 流程没打到的
+// rejectPendingReadProbe（POST .../reject）和 findApprovalByStatus（按 status 过滤的
+// list）两个调用点。加上上面那个测试，approval.go 里全部 6 处直连 Agent 请求都被
+// 实际验证过带了 Authorization。
+func TestApprovalActorAttachesAgentTokenAcrossRejectFlow(t *testing.T) {
+	t.Parallel()
+
+	const token = "approval-read-probe-local-access-token"
+	fixture := newApprovalFixture(time.Now().UTC().Add(5 * time.Minute))
+	var rejected atomic.Bool
+	requests, handler := recordAuthorization(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals/approval-1":
+			if rejected.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": "approval_rejected"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"approval": fixture.approval("pending")})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-approvals":
+			if rejected.Load() {
+				_ = json.NewEncoder(w).Encode([]any{fixture.approval("rejected")})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]any{fixture.approval("pending")})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/operation-approvals/approval-1/reject":
+			rejected.Store(true)
+			_ = json.NewEncoder(w).Encode(fixture.approval("rejected"))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/operation-audit":
+			_ = json.NewEncoder(w).Encode(map[string]any{"events": []any{
+				fixture.auditEvent("approval_required", "approval-1"),
+				fixture.auditEvent("rejected", "approval-1"),
+			}})
+		default:
+			http.NotFound(w, request)
+		}
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	actor, err := NewApprovalToolCaller(&pendingApprovalDelegate{fixture: fixture}, ApprovalActorOptions{
+		AgentURL: server.URL, CampaignID: "campaign-1", HTTPClient: server.Client(),
+		AllowedKinds: map[string][]string{"debug_evaluate": {"code_debug.evaluate"}},
+		AgentToken:   token,
+	})
+	require.NoError(t, err)
+	_, err = actor.PreparePendingReadProbe(context.Background(), "debug_evaluate", map[string]any{"deployment_id": "dep-1"})
+	require.NoError(t, err)
+	evidence, err := actor.FinalizePendingReadProbes(context.Background())
+	require.NoError(t, err)
+	require.True(t, evidence.Complete)
+
+	require.NotEmpty(t, requests.snapshot())
+	for _, authorization := range requests.snapshot() {
+		require.Equal(t, "Bearer "+token, authorization)
+	}
 }
 
 func TestApprovalActorRejectsMutationThatBypassesApproval(t *testing.T) {
@@ -500,4 +618,33 @@ func (d *approvalDelegate) CallTool(_ context.Context, _ string, arguments map[s
 		}}, nil
 	}
 	return successToolResult(map[string]any{"result": "visible"}), nil
+}
+
+// authorizationRecorder 线程安全地收集每次请求实际携带的 Authorization 头，
+// 供测试断言「这个直连调用点真的带上了 token」而不只是编译期通过。
+type authorizationRecorder struct {
+	mu     sync.Mutex
+	values []string
+}
+
+func (r *authorizationRecorder) record(value string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values = append(r.values, value)
+}
+
+func (r *authorizationRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string{}, r.values...)
+}
+
+// recordAuthorization 包一层 handler：记录每次请求的 Authorization 头后再交给 next 处理，
+// 用于验证 approval.go/credential.go 直连 disposable Agent 的调用点确实附加了本机 token。
+func recordAuthorization(next http.HandlerFunc) (*authorizationRecorder, http.HandlerFunc) {
+	recorder := &authorizationRecorder{}
+	return recorder, func(w http.ResponseWriter, request *http.Request) {
+		recorder.record(request.Header.Get("Authorization"))
+		next(w, request)
+	}
 }

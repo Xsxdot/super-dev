@@ -41,6 +41,10 @@ type ApprovalActorOptions struct {
 	CampaignID   string
 	AllowedKinds map[string][]string
 	HTTPClient   *http.Client
+	// AgentToken 是 disposable Agent 的本机访问 token（security.ReadLocalToken）；
+	// 鉴权常开后 /api/operation-approvals* 与 /api/operation-audit 都是受保护端点，
+	// 空串表示调用方未解析到凭据（多为单测），请求会保持裸发。
+	AgentToken string
 }
 
 // ApprovalTerminalEvidence 证明 campaign 创建的只读审批探针已在 Agent 关闭前进入终态。
@@ -68,6 +72,7 @@ type ApprovalToolCaller struct {
 	campaign   string
 	allowed    map[string]map[string]struct{}
 	http       *http.Client
+	agentToken string
 	mu         sync.Mutex
 	registered map[string]approvalIdentity
 	readProbes map[string]approvalIdentity
@@ -128,7 +133,8 @@ func NewApprovalToolCaller(delegate ToolCaller, options ApprovalActorOptions) (*
 	}
 	return &ApprovalToolCaller{
 		delegate: delegate, baseURL: parsed, campaign: options.CampaignID, allowed: allowed,
-		http: client, registered: map[string]approvalIdentity{}, readProbes: map[string]approvalIdentity{},
+		http: client, agentToken: options.AgentToken,
+		registered: map[string]approvalIdentity{}, readProbes: map[string]approvalIdentity{},
 	}, nil
 }
 
@@ -394,6 +400,9 @@ func (c *ApprovalToolCaller) approveOperation(ctx context.Context, expected appr
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
+	// /api/operation-approvals/{id}/approve 是受保护端点，需要读/写受保护的审批状态，
+	// 不是纯探活，按 Step 5 规则带上 disposable Agent 的本机访问 token。
+	attachAgentToken(request, c.agentToken)
 	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
 		"campaign_id": c.campaign, "approval_id": expected.ID, "plan_id": expected.PlanID,
 		"operation_kind": expected.Kind, "fingerprint": expected.Fingerprint,
@@ -462,6 +471,8 @@ func (c *ApprovalToolCaller) rejectPendingReadProbe(ctx context.Context, expecte
 		return approvalIdentity{}, err
 	}
 	request.Header.Set("Content-Type", "application/json")
+	// 同上：/api/operation-approvals/{id}/reject 是受保护端点，带上本机访问 token。
+	attachAgentToken(request, c.agentToken)
 	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
 		"campaign_id": c.campaign, "approval_id": expected.ID, "plan_id": expected.PlanID,
 		"operation_kind": expected.Kind, "fingerprint": expected.Fingerprint,
@@ -512,6 +523,8 @@ func (c *ApprovalToolCaller) findApprovalByStatus(ctx context.Context, expected 
 	if err != nil {
 		return approvalIdentity{}, err
 	}
+	// /api/operation-approvals 列表同样是受保护端点，读的是审批终态这类受保护数据。
+	attachAgentToken(request, c.agentToken)
 	log := logger.GetLogger().WithEntryName("RuntimeValidationApproval").WithFields(map[string]any{
 		"campaign_id": c.campaign, "approval_id": expected.ID, "status": status,
 	})
@@ -600,6 +613,8 @@ func (c *ApprovalToolCaller) listMatchingOperationAudit(ctx context.Context, exp
 	if err != nil {
 		return nil, err
 	}
+	// /api/operation-audit 是受保护端点，读的是审计事件这类受保护数据。
+	attachAgentToken(request, c.agentToken)
 	log.Info("开始读取 operation approval 审计")
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -734,6 +749,8 @@ func (c *ApprovalToolCaller) getApproval(ctx context.Context, id string) (approv
 	if err != nil {
 		return approvalIdentity{}, err
 	}
+	// /api/operation-approvals/{id} 是受保护端点，读的是审批 detail 这类受保护数据。
+	attachAgentToken(request, c.agentToken)
 	log.Info("开始读取 operation approval detail")
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -770,6 +787,8 @@ func (c *ApprovalToolCaller) rejectDuplicatePending(ctx context.Context, expecte
 	if err != nil {
 		return err
 	}
+	// /api/operation-approvals 列表是受保护端点，读的是 pending 审批这类受保护数据。
+	attachAgentToken(request, c.agentToken)
 	log.Info("开始读取 pending operation approvals 以排除重复目标")
 	response, err := c.http.Do(request)
 	if err != nil {

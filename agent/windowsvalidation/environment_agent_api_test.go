@@ -32,7 +32,7 @@ func TestHTTPEnvironmentAgentAPIReaderProjectsOfficialReadOnlySchemas(t *testing
 	}))
 	defer server.Close()
 
-	reader, err := NewHTTPEnvironmentAgentAPIReader(server.URL, server.Client())
+	reader, err := NewHTTPEnvironmentAgentAPIReader(server.URL, server.Client(), "")
 	require.NoError(t, err)
 	agents, err := reader.ListEnvironmentAgents(context.Background())
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestHTTPEnvironmentAgentAPIReaderRejectsCredentialBearingURLAndCrossOriginR
 		"http://127.0.0.1:57017?token=secret",
 		"http://127.0.0.1:57017#secret",
 	} {
-		_, err := NewHTTPEnvironmentAgentAPIReader(value, nil)
+		_, err := NewHTTPEnvironmentAgentAPIReader(value, nil, "")
 		assert.Error(t, err)
 	}
 
@@ -71,9 +71,56 @@ func TestHTTPEnvironmentAgentAPIReaderRejectsCredentialBearingURLAndCrossOriginR
 	}))
 	defer origin.Close()
 
-	reader, err := NewHTTPEnvironmentAgentAPIReader(origin.URL, origin.Client())
+	reader, err := NewHTTPEnvironmentAgentAPIReader(origin.URL, origin.Client(), "")
 	require.NoError(t, err)
 	_, err = reader.ListEnvironmentAgents(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "redirects are forbidden")
+}
+
+// 鉴权常开后 /api/agents 与 /api/tunnels 都是受保护端点。getJSON 是 ListEnvironmentAgents/
+// ListEnvironmentTunnels/ReadEnvironmentRemoteMachine/ReadEnvironmentManagedBaseline/
+// ReadEnvironmentDirectExposure 五个读方法共用的唯一底层请求构造点，这里证明配置 token
+// 后请求真的带上了 Authorization，且没有 token 时保持裸发（现有假 server 单测的前提）。
+func TestHTTPEnvironmentAgentAPIReaderAttachesTokenWhenConfigured(t *testing.T) {
+	const token = "windows-validation-local-access-token"
+	var gotAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		gotAuthorization = request.Header.Get("Authorization")
+		switch request.URL.Path {
+		case "/api/agents":
+			_, _ = response.Write([]byte(`[]`))
+		case "/api/tunnels":
+			_, _ = response.Write([]byte(`[]`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	reader, err := NewHTTPEnvironmentAgentAPIReader(server.URL, server.Client(), token)
+	require.NoError(t, err)
+	_, err = reader.ListEnvironmentAgents(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer "+token, gotAuthorization)
+
+	gotAuthorization = ""
+	_, err = reader.ListEnvironmentTunnels(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer "+token, gotAuthorization)
+}
+
+func TestHTTPEnvironmentAgentAPIReaderOmitsAuthorizationWithoutToken(t *testing.T) {
+	sawAuthorizationHeader := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		sawAuthorizationHeader = request.Header.Get("Authorization") != ""
+		_, _ = response.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	reader, err := NewHTTPEnvironmentAgentAPIReader(server.URL, server.Client(), "")
+	require.NoError(t, err)
+	_, err = reader.ListEnvironmentAgents(context.Background())
+	require.NoError(t, err)
+	assert.False(t, sawAuthorizationHeader)
 }
