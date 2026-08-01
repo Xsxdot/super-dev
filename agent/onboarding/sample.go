@@ -15,6 +15,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,8 +27,11 @@ import (
 const samplePort = 18191
 
 // 历史模板只用于识别旧版 Windows 首启生成的精确坏配置；新配置统一由 Loader 序列化。
+// 文件名沿用 project.yaml.tmpl 只是为了不再暗示"新示例落地成 legacy 格式"，
+// 内容仍是旧版 config.yaml 生成物的逐字节快照——不能因改名而清洗内容，
+// 否则会让 isLegacyGeneratedSampleConfig 的比对永远匹配不上真实的旧坏配置。
 //
-//go:embed assets/superdev-sample/README.md assets/superdev-sample/main.go assets/superdev-sample/.superdev/config.yaml.tmpl
+//go:embed assets/superdev-sample/README.md assets/superdev-sample/main.go assets/superdev-sample/.superdev/project.yaml.tmpl
 var sampleAssets embed.FS
 
 // ProjectRegistry 抽象项目路径注册表，用于隔离示例落地和 registry 的具体实现。
@@ -113,6 +117,9 @@ func SeedSampleProject(cfg SampleSeedConfig) (SampleSeedResult, error) {
 	if err := writeSampleConfig(target, cfg.SampleBinaryPath); err != nil {
 		return SampleSeedResult{Path: target}, err
 	}
+	// target 落地前目录内不存在任何配置文件，Loader.DetectFormat 对此默认新格式，
+	// 因此这里落的必然是 .superdev/project.yaml，而非旧版 config.yaml。
+	log.Printf("[SuperDev] onboarding: sample project seeded at %s (split format)", target)
 	if err := cfg.Registry.Add(target); err != nil {
 		return SampleSeedResult{Path: target}, fmt.Errorf("register sample project: %w", err)
 	}
@@ -128,6 +135,9 @@ func repairLegacySampleConfig(target string, binaryPath string) (bool, error) {
 	if loadErr == nil {
 		return false, nil
 	}
+	// 这里必须固定读 config.yaml：它是旧版 Windows 首启真实写盘的文件名，
+	// 与内嵌资产改名为 project.yaml.tmpl 无关——改成读 project.yaml 会让本函数
+	// 永远找不到需要修复的旧坏配置（新版从不会在这里留下 project.yaml）。
 	configPath := filepath.Join(target, ".superdev", "config.yaml")
 	raw, err := os.ReadFile(configPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -137,7 +147,7 @@ func repairLegacySampleConfig(target string, binaryPath string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read seeded sample config %s: %w", configPath, err)
 	}
-	legacyTemplate, err := sampleAssets.ReadFile("assets/superdev-sample/.superdev/config.yaml.tmpl")
+	legacyTemplate, err := sampleAssets.ReadFile("assets/superdev-sample/.superdev/project.yaml.tmpl")
 	if err != nil {
 		return false, fmt.Errorf("read legacy sample config template: %w", err)
 	}
@@ -200,9 +210,10 @@ func writeSampleConfig(target string, binaryPath string) error {
 			IsDev: false,
 			Order: 1,
 		}},
-		EnvSelectedServiceIDs: map[string][]string{
-			"demo": {"sample-api"},
-		},
+		// 不再声明 EnvSelectedServiceIDs：split 格式下该字段已迁移为 agent 本地
+		// uistate 存储，声明了也会被 Loader.Save 静默丢弃并打一条
+		// "dropped env_selected_service_ids" 告警日志——sample-api 是唯一且
+		// Required 的服务，本就不需要 UI 勾选状态。
 		Services: []model.Service{{
 			ID:       "sample-api",
 			Name:     "sample-api",
