@@ -585,6 +585,8 @@ export interface Project {
   id: string
   name: string
   root_path: string
+  /** 运行时探测的配置格式，不持久化；desktop 用它决定是否显示迁移横幅。 */
+  config_format?: 'legacy' | 'split'
   variables?: Record<string, string>
   services: Service[]
   debug_credentials?: DebugCredential[]
@@ -595,6 +597,59 @@ export interface Project {
   pipelines?: ProjectPipeline[]
   env_selected_service_ids?: Record<string, string[]>
   environments?: Environment[]
+}
+
+// ===== 配置分层迁移（legacy config.yaml → project.yaml + local.yaml） =====
+
+/** MigrationSuspect 是迁移预览中的疑似密钥条目。 */
+export interface MigrationSuspect {
+  scope: 'variables' | 'env_vars'
+  service?: string
+  env?: string
+  key: string
+  masked_value: string
+  reason: string
+}
+
+/** MigrationPlan 是配置分层迁移的预览结果。 */
+export interface MigrationPlan {
+  root_path: string
+  suspects: MigrationSuspect[]
+  ui_state_envs: string[]
+  gitignore: { remove_lines: string[]; add_lines: string[] }
+  service_count: number
+  relativized_paths: string[]
+}
+
+/**
+ * getConfigMigrationPreview 拉取项目的配置迁移预览。
+ *
+ * 返回：
+ *   - MigrationPlan：项目仍是 legacy 格式，包含可迁移的内容
+ *   - { status: 'not_needed' }：项目已是 split 格式，无需迁移
+ *
+ * 注意：
+ *   - 预览中的疑似密钥值已由后端脱敏（masked_value），不是明文
+ */
+export async function getConfigMigrationPreview(projectId: string): Promise<MigrationPlan | { status: 'not_needed' }> {
+  return request(`/api/projects/${encodeURIComponent(projectId)}/config-migration`)
+}
+
+/**
+ * applyConfigMigration 按处置决定执行配置迁移，返回更新后的项目。
+ *
+ * 参数：
+ *   - decisions: 对疑似密钥的处置列表；未被显式处置的疑似项由后端默认落本机层
+ *     （「不挡、只亮」——省略即安全，但显式传 'local' 同样合法且更明确）
+ */
+export async function applyConfigMigration(
+  projectId: string,
+  decisions: Array<{ scope: string; service?: string; env?: string; key: string; disposition: 'shared' | 'local' }>,
+): Promise<Project> {
+  return request(`/api/projects/${encodeURIComponent(projectId)}/config-migration`, {
+    method: 'POST',
+    body: JSON.stringify({ decisions }),
+  })
 }
 
 export interface LogEntry {

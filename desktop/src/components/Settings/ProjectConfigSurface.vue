@@ -6,11 +6,14 @@ ProjectConfigSurface：项目运行配置的可复用编辑主体。
   - 提供内嵌页和 modal 共同使用的配置编辑 UI
   - 保存：校验 → 拍平为 SetupPayload → PUT /setup → reloadProject → emit saved
   - 取消：丢弃本地草稿并 emit cancel
+  - project 仍是 legacy 配置格式时展示迁移横幅，打开 ConfigMigrationDialog；
+    迁移成功后走 reloadProject → resetDraft 同一条刷新路径
 
 边界：
   - 不编辑项目级流水线（由 ProjectPipelineEditor 负责）
   - 不负责创建/关闭 modal 外壳
   - 删除运行中 service 的最终守卫在后端
+  - 不实现迁移预览/处置 UI（由 ConfigMigrationDialog 负责）
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
@@ -24,6 +27,7 @@ import EnvTabBar from './EnvTabBar.vue'
 import ServiceRail from './ServiceRail.vue'
 import ServiceCard from './ServiceCard.vue'
 import DebugCredentialEditor from './DebugCredentialEditor.vue'
+import ConfigMigrationDialog from './ConfigMigrationDialog.vue'
 
 const props = withDefaults(defineProps<{
   project: Project
@@ -49,6 +53,7 @@ const hosts = ref<Array<{ id: string; name: string }>>([])
 const errors = ref<string[]>(props.state?.errors ? [...props.state.errors] : [])
 const saving = ref(false)
 const saveError = ref<string | null>(props.state?.saveError ?? null)
+const showMigrationDialog = ref(false)
 
 function cloneDraft(value: ConfigDraft): ConfigDraft {
   return JSON.parse(JSON.stringify(value))
@@ -256,11 +261,32 @@ async function save() {
     saving.value = false
   }
 }
+
+// handleMigrated 在迁移弹窗执行成功后刷新项目数据。
+//
+// 迁移把配置从单文件翻成两层，磁盘上的真实生效值（包括路径相对化后再解析
+// 回来的 work_dir/env_file）只有重新从后端拉取才准确——与 save() 同一条
+// 刷新路径（reloadProject → projectById → resetDraft），不能另起一套，
+// 否则两处对「保存后如何让本地状态追上后端」的理解会分叉。
+async function handleMigrated() {
+  showMigrationDialog.value = false
+  await agentStore.reloadProject(props.project.id)
+  const reloaded = agentStore.projectById(props.project.id)
+  if (reloaded) {
+    resetDraft(reloaded)
+  }
+}
 </script>
 
 <template>
   <div class="project-config-surface" :class="{ embedded }" data-test="project-config-surface">
     <div class="config-scroll">
+      <div v-if="project.config_format === 'legacy'" class="settings-alert settings-alert-warning migration-banner" data-test="config-migration-banner">
+        <span>{{ t('configMigration.banner') }}</span>
+        <button type="button" class="settings-btn settings-btn-primary" data-test="config-migration-open" @click="showMigrationDialog = true">
+          {{ t('configMigration.bannerAction') }}
+        </button>
+      </div>
       <ul v-if="errors.length" class="settings-alert settings-alert-danger err-list">
         <li v-for="(e, i) in errors" :key="i">{{ e }}</li>
       </ul>
@@ -367,6 +393,13 @@ async function save() {
         {{ saving ? t('common.loading') : t('common.save') }}
       </button>
     </div>
+
+    <ConfigMigrationDialog
+      v-if="showMigrationDialog"
+      :project-id="project.id"
+      @cancel="showMigrationDialog = false"
+      @migrated="handleMigrated"
+    />
   </div>
 </template>
 
@@ -394,6 +427,13 @@ async function save() {
 .err-list {
   margin: 0;
   list-style: none;
+}
+.migration-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .config-env-shell,
 .editor-right {
