@@ -86,6 +86,37 @@ func TestAddProject_EmptyDirCreatesSkeleton(t *testing.T) {
 	assert.Len(t, projects, 1, "addProject 应落地项目")
 }
 
+// TestAddProject_EmptyDirConfigFormatIsSplit 钉住一个曾经的落地缺口：
+// 空目录首次 Save 后磁盘格式是 split（DetectFormat 对无 config.yaml/project.yaml
+// 的目录默认返回 split），内存里 a.projects 中的 Project.ConfigFormat 必须同步
+// 反映这一点。否则 putEnvSelected 会读到 ConfigFormat=="" 误走 legacy 分支，
+// Loader.Save 按磁盘真实格式（split）落盘时静默丢弃 env_selected_service_ids，
+// PUT env-selected 端点会在“刚新建项目、agent 还没重启过”这段窗口期说谎。
+func TestAddProject_EmptyDirConfigFormatIsSplit(t *testing.T) {
+	srv, _ := newTestApp(t)
+	dir := t.TempDir()
+
+	addBody := fmt.Sprintf(`{"root_path": %q}`, dir)
+	resp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var created model.Project
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	assert.Equal(t, "split", created.ConfigFormat, "addProject 响应应带上刚落盘探测到的格式")
+
+	// putEnvSelected 读的是 a.projects（内存态），不是这次 POST 的响应体，
+	// 所以真正要钉住的是 GET /api/projects 里的值。
+	listResp, err := http.Get(srv.URL + "/api/projects")
+	require.NoError(t, err)
+	defer listResp.Body.Close()
+	var projects []model.Project
+	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&projects))
+	require.Len(t, projects, 1)
+	assert.Equal(t, "split", projects[0].ConfigFormat, "内存中的项目必须带上刚落盘的格式，否则 putEnvSelected 会误走 legacy 分支")
+}
+
 // TestAddProject_BuildsDeploymentLogBackends 验证新增项目后日志接口立刻可用。
 //
 // 这个场景覆盖运行期添加项目：loadRegisteredProjects 会在 agent 启动时构造

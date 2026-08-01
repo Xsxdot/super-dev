@@ -108,6 +108,9 @@ func (a *App) addProject(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "failed to save project config: "+err.Error())
 		return
 	}
+	// Save 刚落盘，此时磁盘格式才确定（空目录→split）。内存项目必须带上格式，
+	// 否则后续 putEnvSelected 会误走 legacy 分支，UI 状态被静默丢弃。
+	p.ConfigFormat = string(loader.DetectFormat())
 
 	// 写入注册表
 	if err := a.registry.Add(req.RootPath); err != nil {
