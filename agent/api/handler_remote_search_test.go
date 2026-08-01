@@ -144,7 +144,7 @@ func TestRemoteLogSearchMergesAcrossHosts(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	for _, hostID := range []string{"h1", "h2"} {
@@ -203,7 +203,7 @@ func TestRemoteLogSearchAcceptsSpecQueryParam(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	hbody, _ := json.Marshal(model.Host{ID: "h1", Name: "h1", Tags: []string{"prod"}})
@@ -245,7 +245,7 @@ func TestRemoteLogSearchHandlesUnreachable(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	hbody, _ := json.Marshal(model.Host{ID: "h-x", Name: "h-x", Tags: []string{"prod"}})
@@ -363,7 +363,7 @@ func TestRemoteLogSearch_ProjectModeResolvesAllVisibleTargets(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	project := createRemoteSearchProject(t, httpSrv)
@@ -427,7 +427,7 @@ func TestRemoteLogSearch_ProjectModeRejectsBlankQuery(t *testing.T) {
 	app, err := api.NewApp(api.AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	project := createRemoteSearchProject(t, httpSrv)
@@ -463,7 +463,7 @@ func TestRemoteLogSearch_ProjectModeAppliesServiceAndHostFilters(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	project := createRemoteSearchProject(t, httpSrv)
@@ -518,7 +518,7 @@ func TestRemoteLogSearch_ProjectModePartialFailureAndAllFailureStatuses(t *testi
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	project := createRemoteSearchProject(t, httpSrv)
@@ -620,7 +620,7 @@ func TestRemoteLogSearch_ProjectModeUsesCursorForNextPage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	project := createRemoteSearchProject(t, httpSrv)
@@ -718,7 +718,7 @@ func TestRemoteLogSearch_ProjectModeCursorDoesNotRepeatReturnedMultiTargetEntrie
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	project := createRemoteSearchProject(t, httpSrv)
@@ -793,7 +793,7 @@ func TestRemoteLogSearch_ProjectModeClassifiesTimeout(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	httpSrv := httptest.NewServer(app.Handler())
+	httpSrv := httptest.NewServer(testServerHandler(app))
 	defer httpSrv.Close()
 
 	project := createRemoteSearchProject(t, httpSrv)

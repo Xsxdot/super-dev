@@ -34,6 +34,7 @@ func TestDeployProjectPipelineReturnsRunningThenPersistsTerminalRun(t *testing.T
 		"/api/projects/"+projectID+"/pipelines/deploy-prod/deploy",
 		strings.NewReader(`{"env_name":"prod","variables":{"version":"v1"}}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -47,6 +48,7 @@ func TestDeployProjectPipelineReturnsRunningThenPersistsTerminalRun(t *testing.T
 		runReq := httptest.NewRequest(http.MethodGet,
 			"/api/projects/"+projectID+"/pipelines/deploy-prod/runs/"+started.ID, nil)
 		runRR := httptest.NewRecorder()
+		runReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 		app.Handler().ServeHTTP(runRR, runReq)
 		if runRR.Code != http.StatusOK {
 			return false
@@ -67,6 +69,7 @@ func TestDeployProjectPipelineRequiresApprovalWhenSwitchOn(t *testing.T) {
 		"/api/projects/"+projectID+"/pipelines/deploy-prod/deploy",
 		strings.NewReader(`{"env_name":"prod","variables":{"version":"v1"}}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusForbidden, rr.Code)
@@ -83,6 +86,7 @@ func TestDeployProjectPipelineSkipsApprovalWhenSwitchOff(t *testing.T) {
 		"/api/projects/"+projectID+"/pipelines/deploy-prod/deploy",
 		strings.NewReader(`{"env_name":"prod","variables":{"version":"v2"}}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.NotEqual(t, http.StatusForbidden, rr.Code, rr.Body.String())
@@ -96,6 +100,7 @@ func TestListProjectPipelineRunsArtifactsAndLogs(t *testing.T) {
 	runsReq := httptest.NewRequest(http.MethodGet,
 		"/api/projects/"+projectID+"/pipelines/deploy-prod/runs", nil)
 	runsRR := httptest.NewRecorder()
+	runsReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(runsRR, runsReq)
 
 	require.Equal(t, http.StatusOK, runsRR.Code)
@@ -110,6 +115,7 @@ func TestListProjectPipelineRunsArtifactsAndLogs(t *testing.T) {
 	runReq := httptest.NewRequest(http.MethodGet,
 		"/api/projects/"+projectID+"/pipelines/deploy-prod/runs/"+runID, nil)
 	runRR := httptest.NewRecorder()
+	runReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(runRR, runReq)
 	require.Equal(t, http.StatusOK, runRR.Code)
 	assert.Contains(t, runRR.Body.String(), `"id":"`+runID+`"`)
@@ -117,6 +123,7 @@ func TestListProjectPipelineRunsArtifactsAndLogs(t *testing.T) {
 	artifactsReq := httptest.NewRequest(http.MethodGet,
 		"/api/projects/"+projectID+"/pipelines/deploy-prod/artifacts", nil)
 	artifactsRR := httptest.NewRecorder()
+	artifactsReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(artifactsRR, artifactsReq)
 	require.Equal(t, http.StatusOK, artifactsRR.Code)
 	assert.Contains(t, artifactsRR.Body.String(), `"version":"v1"`)
@@ -124,6 +131,7 @@ func TestListProjectPipelineRunsArtifactsAndLogs(t *testing.T) {
 	logsReq := httptest.NewRequest(http.MethodGet,
 		"/api/projects/"+projectID+"/pipelines/deploy-prod/runs/"+runID+"/logs?limit=10", nil)
 	logsRR := httptest.NewRecorder()
+	logsReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(logsRR, logsReq)
 	require.Equal(t, http.StatusOK, logsRR.Code)
 	assert.Contains(t, logsRR.Body.String(), `"line":"built"`)
@@ -180,6 +188,7 @@ pipelines:
 
 	req := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	return "deploy-api-project"
@@ -192,6 +201,7 @@ func addProjectWithCompletedRun(t *testing.T, app *api.App) string {
 		"/api/projects/"+projectID+"/pipelines/deploy-prod/deploy",
 		strings.NewReader(`{"env_name":"prod","variables":{"version":"v1"}}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	var started model.Run
@@ -200,6 +210,7 @@ func addProjectWithCompletedRun(t *testing.T, app *api.App) string {
 		runReq := httptest.NewRequest(http.MethodGet,
 			"/api/projects/"+projectID+"/pipelines/deploy-prod/runs/"+started.ID, nil)
 		runRR := httptest.NewRecorder()
+		runReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 		app.Handler().ServeHTTP(runRR, runReq)
 		if runRR.Code != http.StatusOK {
 			return false

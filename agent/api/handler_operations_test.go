@@ -32,7 +32,7 @@ func TestOperationAPI_PreflightApproveRejectAndAudit(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(operationAPIProject(false, false))
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	preflight := postJSONForTest[operation.Plan](t, srv.URL+"/api/operations/preflight", map[string]any{
@@ -72,7 +72,7 @@ func TestOperationAPI_ReissuesTokenForApprovedUnconsumedApproval(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(operationAPIProject(false, false))
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	required := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, http.StatusForbidden)
@@ -104,7 +104,7 @@ func TestOperationAPI_ReadOnlyDeploymentDeniedEvenWithApproval(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(operationAPIProject(true, true))
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/start", map[string]any{}, http.StatusForbidden)
@@ -144,7 +144,7 @@ func TestOperationAPIPreflightCodeDebugEvaluate(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	plan := postJSONForTest[operation.Plan](t, srv.URL+"/api/operations/preflight", map[string]any{

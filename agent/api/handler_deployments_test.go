@@ -37,7 +37,7 @@ func TestDeploymentRuntimeEndpoint_AllowsDevLocalWithoutApproval(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(operationAPIProject(true, false))
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/start", map[string]any{}, http.StatusOK)
@@ -54,7 +54,7 @@ func TestStartDeploymentIntentDebugLaunchOnUnsupportedTargetErrors(t *testing.T)
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/start", map[string]any{"intent": "debug_launch"}, http.StatusBadRequest)
@@ -72,7 +72,7 @@ func TestStartDeploymentRejectsLegacyModeField(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(operationAPIProject(true, false))
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	legacyField := "mo" + "de"
@@ -159,7 +159,7 @@ func TestDeploymentRuntimeEndpoint_RequiresApprovalForNonDevLocal(t *testing.T) 
 	app.mu.Lock()
 	app.appendProjectLocked(operationAPIProject(false, false))
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, http.StatusForbidden)
@@ -177,7 +177,7 @@ func TestDeploymentRuntimeEndpoint_RequiresApprovalForRemoteManaged(t *testing.T
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/stop", map[string]any{}, http.StatusForbidden)
@@ -201,7 +201,7 @@ func TestDeploymentRuntimeEndpoint_RunsRemoteStopAfterApproval(t *testing.T) {
 		result: agenthealth.ProbeResult{AllEndpointsOK: true},
 	})
 	app.agentHealth.ProbeOnce(context.Background(), "h1")
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	required := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/stop", map[string]any{}, http.StatusForbidden)
@@ -297,7 +297,7 @@ func TestDeploymentRuntimeEndpoint_RunsRemoteStopOnSingleHostAfterApproval(t *te
 	})
 	app.agentHealth.ProbeOnce(context.Background(), "h1")
 	app.agentHealth.ProbeOnce(context.Background(), "h2")
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	required := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/hosts/h2/stop", map[string]any{}, http.StatusForbidden)
@@ -332,7 +332,7 @@ func TestStartEnvSelectedRequiresApprovalForNonDevLocal(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	required := postJSONForRawTest(t, srv.URL+"/api/projects/proj-op/envs/prod/start-selected", map[string]any{}, http.StatusForbidden)
@@ -371,7 +371,7 @@ func TestStartEnvSelectedRunsRemoteStartAfterApproval(t *testing.T) {
 		result: agenthealth.ProbeResult{AllEndpointsOK: true},
 	})
 	app.agentHealth.ProbeOnce(context.Background(), "h1")
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	required := postJSONForRawTest(t, srv.URL+"/api/projects/proj-op/envs/prod/start-selected", map[string]any{}, http.StatusForbidden)

@@ -41,6 +41,7 @@ func TestDetachAgentRemovesOnlyControllerConfigAndPreservesHost(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/agents/"+hostID+"/detach", bytes.NewBufferString(`{"reason":"manual_uninstall_failed"}`))
 	req.Header.Set("Origin", "tauri://localhost")
 	resp := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(resp, req)
 
 	require.Equal(t, http.StatusOK, resp.Code)
@@ -124,6 +125,7 @@ func TestCORSRejectsUnknownOriginBeforeAgentUninstallOrDetachMutation(t *testing
 			req := httptest.NewRequest(http.MethodPost, "/api/agents/"+hostID+tc.path, bytes.NewBufferString(tc.body))
 			req.Header.Set("Origin", "https://attacker.example")
 			rr := httptest.NewRecorder()
+			req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 			app.Handler().ServeHTTP(rr, req)
 
 			require.Equal(t, http.StatusForbidden, rr.Code)

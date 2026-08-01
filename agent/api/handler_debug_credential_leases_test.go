@@ -126,14 +126,16 @@ func TestDebugCredentialLeaseUsesExistingAgentAuthentication(t *testing.T) {
 	t.Cleanup(app.Close)
 	provision := httptestDoWithHeader(t, app, http.MethodPost, "/api/security/provision",
 		bytes.NewBufferString(`{"token":"agent-test-token","tls_mode":"off"}`),
-		http.Header{"Authorization": []string{"Bearer bootstrap-test-token"}},
+		map[string]string{"Authorization": "Bearer bootstrap-test-token"},
 	)
 	require.Equal(t, http.StatusOK, provision.Code)
 
 	const secret = "unauthorized-body-secret"
+	// 显式空 Authorization 关掉 helper 默认注入的本机 token，
+	// 真实复现"未带凭据"以验证该端点仍复用统一安全中间件。
 	unauthorized := httptestDoWithHeader(t, app, http.MethodPost, "/api/debug-credential-leases",
 		bytes.NewBufferString(`{"project_id":"p1","owner":"campaign-1","credentials":[{"name":"login","value":"`+secret+`"}]}`),
-		http.Header{"Content-Type": []string{"application/json"}},
+		map[string]string{"Content-Type": "application/json", "Authorization": ""},
 	)
 	assert.Equal(t, http.StatusUnauthorized, unauthorized.Code)
 	assert.NotContains(t, unauthorized.Body.String(), secret)
@@ -145,7 +147,7 @@ func TestDebugCredentialLeaseDoesNotSurviveNewAppOnSameDataDirectory(t *testing.
 	first, err := NewApp(AppConfig{DataDir: dataDir})
 	require.NoError(t, err)
 	first.projects = []model.Project{project}
-	firstServer := httptest.NewServer(first.Handler())
+	firstServer := httptest.NewServer(testServerHandler(first))
 	createDebugCredentialLeaseForTest(t, firstServer.URL, `{
 		"project_id":"p1","service_id":"s1","owner":"campaign-1","ttl_seconds":3600,
 		"credentials":[{"name":"login","value":"test-only-secret","desc":"one-time login"}]

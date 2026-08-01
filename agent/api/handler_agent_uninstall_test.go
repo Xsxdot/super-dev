@@ -204,6 +204,9 @@ func TestAgentLifecycleOperationsRejectSameHostConflictWithoutBlockingOtherHosts
 	uninstallResult := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		req := httptest.NewRequest(http.MethodPost, "/api/agents/"+hostID+"/uninstall", bytes.NewBufferString(`{}`))
+		// 鉴权常开后必须带凭据，否则请求在 withSecurity 就被 401 拒绝，
+		// fake.uninstallStarted 永远不会被 close，下面的 <-fake.uninstallStarted 会死等。
+		req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 		rr := httptest.NewRecorder()
 		app.Handler().ServeHTTP(rr, req)
 		uninstallResult <- rr

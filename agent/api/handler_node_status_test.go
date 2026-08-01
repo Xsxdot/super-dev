@@ -86,7 +86,7 @@ func TestWsNodeStatusReportsManagedRuntimeAndCollectors(t *testing.T) {
 	app.putManagedDeployments(putRR, putReq)
 	require.Equal(t, http.StatusOK, putRR.Code)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/node-status?host_id=h1&host_name=ali-01"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -118,7 +118,7 @@ func TestWsNodeStatusPushesManagedDeploymentChanges(t *testing.T) {
 	require.NoError(t, err)
 	defer app.Close()
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/node-status?host_id=h1&host_name=ali-01"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -174,11 +174,12 @@ func TestNodeEndpointsExposeRegistrySnapshot(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/nodes", nil)
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	assert.Contains(t, rr.Body.String(), `"host_id":"h1"`)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/nodes"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

@@ -61,17 +61,30 @@ func (a *App) provisionSecurity(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, resp)
 }
 
+// withSecurity 是全 API 的鉴权中间件：除 bypass 白名单外一律要求凭据（鉴权恒定开启）。
+//
+// 接受两种凭据（任一通过即放行）：
+//   - 长期 token（bootstrap→provision 下发，远程控制面使用）
+//   - local-access-token（同机同用户客户端从数据目录读取，启动轮换）
+//
+// WebSocket 例外：浏览器 WebSocket API 无法设置 Authorization 头，
+// 故仅 /ws/ 前缀路径额外接受 ?access_token= 查询参数（HTTP API 不收，
+// 避免 token 进入常规请求 URL 被日志/代理记录）。
 func (a *App) withSecurity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.securityStore == nil || !a.securityStore.AuthRequired() || securityBypassPath(r.URL.Path) {
+		if a.securityStore == nil || securityBypassPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !a.securityStore.VerifyToken(bearerToken(r)) {
-			jsonError(w, http.StatusUnauthorized, "agent token required")
+		token := bearerToken(r)
+		if token == "" && strings.HasPrefix(r.URL.Path, "/ws/") {
+			token = strings.TrimSpace(r.URL.Query().Get("access_token"))
+		}
+		if a.securityStore.VerifyToken(token) || a.securityStore.VerifyLocalToken(token) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		jsonError(w, http.StatusUnauthorized, "agent token required")
 	})
 }
 

@@ -62,7 +62,9 @@ func newTestApp(t *testing.T) (*httptest.Server, string) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { app.Close() })
-	srv := httptest.NewServer(app.Handler())
+	// testServerHandler（test_helpers_test.go）在请求未带 Authorization 时默认注入
+	// 本机 token：鉴权常开后，本文件里成百个不关心鉴权的既有用例无需逐个改写凭据。
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	return srv, dataDir
 }
@@ -318,7 +320,7 @@ func TestSettingsPutPreservesSampleSeeded(t *testing.T) {
 	app, err := api.NewApp(api.AppConfig{DataDir: dataDir})
 	require.NoError(t, err)
 	t.Cleanup(func() { app.Close() })
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", strings.NewReader(`{"log_retention_days":21}`))
@@ -445,6 +447,9 @@ func TestPackagedWindowsSampleIsRegisteredAndRunnable(t *testing.T) {
 	}()
 	client := &http.Client{Timeout: time.Second}
 	baseURL := "http://" + addr
+	// 鉴权常开后本机客户端也要带凭据；测试起的是真实进程内 App，
+	// 轮换后的本机 token 可直接从 app.LocalAccessToken() 读出。
+	authHeader := "Bearer " + app.LocalAccessToken()
 	var resp *http.Response
 	deadline := time.Now().Add(10 * time.Second)
 	for resp == nil {
@@ -453,7 +458,10 @@ func TestPackagedWindowsSampleIsRegisteredAndRunnable(t *testing.T) {
 			require.NoError(t, err, "agent HTTP server exited before onboarding smoke")
 		default:
 		}
-		resp, err = client.Get(baseURL + "/api/projects")
+		req, reqErr := http.NewRequest(http.MethodGet, baseURL+"/api/projects", nil)
+		require.NoError(t, reqErr)
+		req.Header.Set("Authorization", authHeader)
+		resp, err = client.Do(req)
 		if err == nil {
 			break
 		}
@@ -472,7 +480,11 @@ func TestPackagedWindowsSampleIsRegisteredAndRunnable(t *testing.T) {
 	require.Len(t, projects[0].Services[0].Deployments, 1)
 	deploymentID := projects[0].Services[0].Deployments[0].ID
 
-	resp, err = client.Post(baseURL+"/api/deployments/"+deploymentID+"/start", "application/json", nil)
+	startReq, err := http.NewRequest(http.MethodPost, baseURL+"/api/deployments/"+deploymentID+"/start", nil)
+	require.NoError(t, err)
+	startReq.Header.Set("Authorization", authHeader)
+	startReq.Header.Set("Content-Type", "application/json")
+	resp, err = client.Do(startReq)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 	var approvalRequired struct {
@@ -487,7 +499,11 @@ func TestPackagedWindowsSampleIsRegisteredAndRunnable(t *testing.T) {
 	require.NotEmpty(t, approvalRequired.Approval.ID)
 
 	approvalBody := bytes.NewBufferString(`{"decided_by":"windows-package-smoke","note":"verify packaged onboarding sample"}`)
-	resp, err = client.Post(baseURL+"/api/operation-approvals/"+approvalRequired.Approval.ID+"/approve", "application/json", approvalBody)
+	approveReq, err := http.NewRequest(http.MethodPost, baseURL+"/api/operation-approvals/"+approvalRequired.Approval.ID+"/approve", approvalBody)
+	require.NoError(t, err)
+	approveReq.Header.Set("Authorization", authHeader)
+	approveReq.Header.Set("Content-Type", "application/json")
+	resp, err = client.Do(approveReq)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NoError(t, resp.Body.Close())

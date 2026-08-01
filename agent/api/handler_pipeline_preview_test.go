@@ -67,11 +67,13 @@ pipelines:
 `), 0o644))
 	addReq := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
 	addRR := httptest.NewRecorder()
+	addReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(addRR, addReq)
 	require.Equal(t, http.StatusOK, addRR.Code)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/projects/preview-project-pipeline/pipelines/deploy-dev/preview", strings.NewReader(`{"env_name":"dev"}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	assert.Contains(t, rr.Body.String(), `"deployment_id":"project:preview-project-pipeline:pipeline:deploy-dev:env:dev"`)
@@ -104,11 +106,13 @@ pipelines:
 `), 0o644))
 	addReq := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
 	addRR := httptest.NewRecorder()
+	addReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(addRR, addReq)
 	require.Equal(t, http.StatusOK, addRR.Code)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/projects/preview-missing-param/pipelines/deploy-dev/preview", strings.NewReader(`{"env_name":"dev"}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
@@ -137,11 +141,13 @@ pipelines:
 `), 0o644))
 	addReq := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
 	addRR := httptest.NewRecorder()
+	addReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(addRR, addReq)
 	require.Equal(t, http.StatusOK, addRR.Code)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/projects/preview-unknown-plugin/pipelines/deploy-dev/preview", strings.NewReader(`{"env_name":"dev"}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
@@ -171,11 +177,13 @@ pipelines:
 `), 0o644))
 	addReq := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
 	addRR := httptest.NewRecorder()
+	addReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(addRR, addReq)
 	require.Equal(t, http.StatusOK, addRR.Code)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/projects/preview-remote-no-targets/pipelines/deploy-dev/preview", strings.NewReader(`{"env_name":"dev"}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)

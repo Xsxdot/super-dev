@@ -93,6 +93,7 @@ services:
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -134,11 +135,13 @@ services:
 
 	start := httptest.NewRecorder()
 	startReq := httptest.NewRequest(http.MethodPost, "/api/deployments/dep-api-dev/start", nil)
+	startReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(start, startReq)
 	require.Equal(t, http.StatusOK, start.Code)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -176,6 +179,7 @@ services:
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -240,6 +244,7 @@ services:
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -298,6 +303,7 @@ services:
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/"+projectID+"/runtime-status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -345,6 +351,7 @@ func addRuntimeStatusProject(t *testing.T, app *api.App, yaml string) string {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	var project model.Project
@@ -357,6 +364,7 @@ func createHost(t *testing.T, app *api.App, id, name string) {
 	body := strings.NewReader(`{"id":"` + id + `","name":"` + name + `","private_ip":"127.0.0.1"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/hosts", body)
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 }

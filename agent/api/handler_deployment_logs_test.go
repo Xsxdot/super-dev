@@ -18,7 +18,7 @@ import (
 
 func TestDeploymentLogsEndpoint_NotFound(t *testing.T) {
 	app := newTestAppInstance(t)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/deployments/nonexistent/logs")
@@ -28,7 +28,7 @@ func TestDeploymentLogsEndpoint_NotFound(t *testing.T) {
 
 func TestDeploymentSearchEndpoint_NotFound(t *testing.T) {
 	app := newTestAppInstance(t)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/deployments/nonexistent/search?q=error")
@@ -40,7 +40,7 @@ func TestDeploymentSearchEndpoint_RequiresQ(t *testing.T) {
 	app := newTestAppInstance(t)
 	depID := addTestDeploymentBackend(t, app)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/deployments/" + depID + "/search")
@@ -52,7 +52,7 @@ func TestDeploymentLogsEndpoint_ReturnsEmptyArray(t *testing.T) {
 	app := newTestAppInstance(t)
 	depID := addTestDeploymentBackend(t, app)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/deployments/" + depID + "/logs")
@@ -81,7 +81,7 @@ func TestDeploymentLogsEndpoint_ScopesQueryToPathDeploymentID(t *testing.T) {
 	}
 	app.SetBackendForTest(depID, backend)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/deployments/" + depID + "/logs?limit=10&before=88")
@@ -104,7 +104,7 @@ func TestDeploymentLogsEndpoint_BeforeTime(t *testing.T) {
 	backend := &recordingLogBackend{}
 	app.SetBackendForTest(depID, backend)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	cut := time.Date(2026, 7, 3, 4, 0, 1, 123, time.UTC)
@@ -124,7 +124,7 @@ func TestDeploymentLogsWebSocket_ScopesSubscriptionToPathDeploymentID(t *testing
 	backend := &recordingLogBackend{subscribeOptions: make(chan logbackend.SubscribeOptions, 1)}
 	app.SetBackendForTest(depID, backend)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/deployments/" + depID + "/logs"
@@ -153,7 +153,7 @@ func TestDeploymentSearchEndpoint_ReturnsResults(t *testing.T) {
 	})
 	time.Sleep(200 * time.Millisecond)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/deployments/" + depID + "/search?q=error&limit=10")

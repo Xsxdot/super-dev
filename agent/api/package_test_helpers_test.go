@@ -32,18 +32,48 @@ func newTestAppForPackage(t *testing.T) *App {
 
 func newHTTPServerForPackage(t *testing.T, app *App) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	return srv
 }
 
-func httptestDoWithHeader(t *testing.T, app *App, method, path string, body io.Reader, headers http.Header) *httptest.ResponseRecorder {
+// testServerHandler 包一层"未带 Authorization 时默认注入本机 token"，供真实
+// httptest.Server 网络往返（http.Get/http.Post/自定义 *http.Client）的测试使用。
+// 语义与 httptestDoWithHeader 的默认注入一致：真实 http.Client 请求没有"显式传
+// 空值"这个概念（要么带头要么不带），所以这里退化为"没带就注入"，测试想验证
+// 拒绝路径需自行在请求上设置一个非空但无效的 Authorization 覆盖默认值。
+func testServerHandler(app *App) http.Handler {
+	next := app.Handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			r.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// httptestDoWithHeader 发起一次经 App.Handler 处理的测试请求。
+//
+// 鉴权语义（自 withSecurity 常开后生效）：
+//   - headers 未显式包含 "Authorization" 键时，自动注入本机 token，
+//     让绝大多数与鉴权无关的用例无需逐个手写凭据。
+//   - 想模拟裸请求（无凭据）时，显式传 headers["Authorization"] = ""——
+//     该值会被删除而不是当成一个空 Bearer 发送，从而真正复现"未带凭据"。
+//   - 想用坏凭据/自定义凭据时，直接传非空 "Authorization" 值覆盖默认注入。
+func httptestDoWithHeader(t *testing.T, app *App, method, path string, body io.Reader, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, body)
-	for key, values := range headers {
-		for _, value := range values {
-			req.Header.Add(key, value)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	// 鉴权常开后所有受保护端点都需要凭据：默认注入本机 token，
+	// 测试想模拟裸请求/坏凭据时显式传 "Authorization": ""（删除头）或伪值覆盖。
+	if v, explicit := headers["Authorization"]; explicit {
+		if v == "" {
+			req.Header.Del("Authorization")
 		}
+	} else if req.Header.Get("Authorization") == "" {
+		req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	}
 	rr := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rr, req)

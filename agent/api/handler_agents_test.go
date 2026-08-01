@@ -190,12 +190,11 @@ func TestLegacyHostAgentRoutesAreNotRegistered(t *testing.T) {
 	}
 }
 
+// httptestDo 是 httptestDoWithHeader 的无自定义 header 版本：默认注入本机 token，
+// 委托给同一份鉴权语义，避免两处 helper 各自维护一套请求构造逻辑。
 func httptestDo(t *testing.T, app *App, method, path string, body io.Reader) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, path, body)
-	rr := httptest.NewRecorder()
-	app.Handler().ServeHTTP(rr, req)
-	return rr
+	return httptestDoWithHeader(t, app, method, path, body, nil)
 }
 
 func decodeHostID(t *testing.T, data []byte) string {

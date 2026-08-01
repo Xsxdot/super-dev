@@ -29,7 +29,7 @@ func TestConfigChangePreviewDoesNotWriteConfig(t *testing.T) {
 	t.Cleanup(app.Close)
 	root := writeConfigChangeProject(t)
 	project := addProjectFromRootForConfigChange(t, app, root)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	before, err := os.ReadFile(filepath.Join(root, ".superdev", "config.yaml"))
@@ -61,7 +61,7 @@ func TestConfigChangePreviewRejectsUnknownRemoteHost(t *testing.T) {
 	t.Cleanup(app.Close)
 	root := writeConfigChangeProject(t)
 	project := addProjectFromRootForConfigChange(t, app, root)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	preview := postJSONForTest[configchange.PreviewResult](t, srv.URL+"/api/config-changes/preview", map[string]any{
@@ -91,7 +91,7 @@ func TestConfigChangeApplyRequiresApprovalThenSaves(t *testing.T) {
 	t.Cleanup(app.Close)
 	root := writeConfigChangeProject(t)
 	project := addProjectFromRootForConfigChange(t, app, root)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	body := map[string]any{
 		"kind":       configchange.KindPipelineUpsert,
@@ -127,7 +127,7 @@ func TestConfigChangeApplyRejectsUnsupportedOperations(t *testing.T) {
 	t.Cleanup(app.Close)
 	root := writeConfigChangeProject(t)
 	project := addProjectFromRootForConfigChange(t, app, root)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/config-changes/apply", map[string]any{
@@ -146,7 +146,7 @@ func TestConfigChangeProjectUpsertCanCreateProjectThroughAgent(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	root := t.TempDir()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	body := map[string]any{
 		"kind":      configchange.KindProjectUpsert,
@@ -189,7 +189,7 @@ func TestConfigChangeProjectUpsertBackfillsConfigFormat(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	root := t.TempDir()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	body := map[string]any{
 		"kind":      configchange.KindProjectUpsert,
@@ -226,7 +226,7 @@ func TestConfigChangeOperationPreflightReturnsPlan(t *testing.T) {
 	t.Cleanup(app.Close)
 	root := writeConfigChangeProject(t)
 	project := addProjectFromRootForConfigChange(t, app, root)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	plan := postJSONForTest[map[string]any](t, srv.URL+"/api/operations/preflight", map[string]any{
@@ -268,7 +268,7 @@ services:
 
 func addProjectFromRootForConfigChange(t *testing.T, app *App, root string) model.Project {
 	t.Helper()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	return postJSONForTest[model.Project](t, srv.URL+"/api/projects", map[string]string{"root_path": root}, http.StatusOK)
 }

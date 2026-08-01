@@ -53,7 +53,7 @@ func newSearchTestServer(t *testing.T) (*App, *httptest.Server) {
 			},
 		},
 	}
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(func() {
 		srv.Close()
 		app.Close()

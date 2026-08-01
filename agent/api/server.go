@@ -301,6 +301,15 @@ func NewApp(cfg AppConfig) (*App, error) {
 		_ = s.Close()
 		return nil, err
 	}
+	// 鉴权恒定开启：每次启动轮换本机访问 token，旧值随进程重启失效（RotateLocalToken
+	// 已把新 token 写入 dataDir/local-access-token，供同机客户端读取）。
+	// 写入失败就 fail fast——起一个本机客户端都无法鉴权的 agent 比启动失败更糟。
+	localToken, err := security.RotateLocalToken(cfg.DataDir)
+	if err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("rotate local access token: %w", err)
+	}
+	securityStore.SetLocalToken(localToken)
 
 	seqWatermarks, err := s.SeqWatermarks()
 	if err != nil {
@@ -565,6 +574,16 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 	app.managedReconciler = NewHostDeploymentReconciler(app, nodeTransport, cfg.ManagedDeploymentReconcileInterval)
 	return app, nil
+}
+
+// LocalAccessToken 返回本进程的本机访问 token。
+//
+// 用途：测试注入 Authorization 头。调用方不得将返回值写入日志。
+func (a *App) LocalAccessToken() string {
+	if a.securityStore == nil {
+		return ""
+	}
+	return a.securityStore.LocalToken()
 }
 
 func agentTargetSource(hostStore *remote.Store, agentStore *remote.AgentStore) nodetransport.TargetSource {

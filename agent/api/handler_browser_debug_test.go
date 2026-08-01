@@ -42,7 +42,7 @@ func TestDetectDebugBrowsersReturnsConfiguredCandidates(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	browsers := getJSONForTest[[]browserdebug.BrowserRecord](t, srv.URL+"/api/debug-browsers/detected", http.StatusOK)
@@ -85,7 +85,7 @@ func TestFreshProfileRequiresDetectedBrowsersPersistedBeforeDefaultOpen(t *testi
 			return browserLaunchResultForTest(), nil
 		},
 	})
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	configured := getJSONForTest[[]browserdebug.BrowserRecord](t, srv.URL+"/api/debug-browsers", http.StatusOK)
@@ -136,7 +136,7 @@ func TestListBrowserTargetsReturnsLocalWebDeployment(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(browserDebugAPIProject())
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	targets := getJSONForTest[[]browserdebug.Target](t, srv.URL+"/api/browser-targets", http.StatusOK)
@@ -181,7 +181,7 @@ func TestOpenBrowserSessionRequiresApprovalThenLaunches(t *testing.T) {
 			}, nil
 		},
 	})
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	required := postJSONForRawTest(t, srv.URL+"/api/browser-sessions", map[string]any{
@@ -231,7 +231,7 @@ func TestOpenBrowserSessionReusesExistingBrowserAndNavigatesWithoutNewApproval(t
 			return browserLaunchResultForTest(), nil
 		},
 	})
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", map[string]any{"path": "/users"})
 
@@ -272,7 +272,7 @@ func TestOpenBrowserSessionAppliesRequestedViewport(t *testing.T) {
 			return browserLaunchResultForTest(), nil
 		},
 	})
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", map[string]any{
 		"viewport_width":  1478,
@@ -321,7 +321,7 @@ func TestOpenBrowserSessionWaitsForReadinessBeforeLaunch(t *testing.T) {
 			return browserLaunchResultForTest(), nil
 		},
 	})
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", nil)
 
@@ -355,7 +355,7 @@ func TestOpenBrowserSessionReturnsUnavailableWhenReadinessTimesOut(t *testing.T)
 			return browserdebug.LaunchResult{}, nil
 		},
 	})
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", nil)
 
@@ -380,7 +380,7 @@ func TestOpenBrowserSessionClassifiesCDPLaunchFailure(t *testing.T) {
 			return browserdebug.LaunchResult{}, errors.New("devtools active port not produced")
 		},
 	})
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	token := approveBrowserOpenForTest(t, srv.URL, "dep-admin-dev", nil)
 
@@ -399,7 +399,7 @@ func TestBrowserDebugPreflightBuildsOperationPlan(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(browserDebugAPIProject())
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	plan := postJSONForTest[operation.Plan](t, srv.URL+"/api/operations/preflight", map[string]any{
@@ -446,7 +446,7 @@ func TestOpenBrowserSessionHonorsExplicitOpenDevtoolsFalse(t *testing.T) {
 			}, nil
 		},
 	})
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	required := postJSONForRawTest(t, srv.URL+"/api/browser-sessions", map[string]any{
@@ -473,7 +473,7 @@ func TestOpenBrowserSessionRejectsMissingBrowserBeforeApproval(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(browserDebugAPIProject())
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/browser-sessions", map[string]any{

@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -47,9 +48,23 @@ func newTestAppWithConfig(t *testing.T, cfg api.AppConfig) (*httptest.Server, *a
 	app, err := api.NewApp(cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { app.Close() })
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 	return srv, app
+}
+
+// testServerHandler 包一层"未带 Authorization 时默认注入本机 token"，供本包内
+// 真实 httptest.Server 网络往返测试使用。语义同 package api 内部同名 helper：
+// 真实 http.Client 请求没有"显式传空值"的概念，没带就视为需要默认凭据；
+// 想验证拒绝路径的用例需自行设置一个非空但无效的 Authorization 覆盖默认值。
+func testServerHandler(app *api.App) http.Handler {
+	next := app.Handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			r.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // addTestDeploymentBackend 直接向 app 注入一个 SQLiteBackend，返回 deployment ID。

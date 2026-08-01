@@ -118,7 +118,7 @@ func TestTunnelHTTPResponsesProjectFailuresWithoutAddressesOrKeyMaterial(t *test
 	}}}})
 	require.NoError(t, err)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 	connectResp, err := http.Post(srv.URL+"/api/tunnels/"+host.ID, "application/json", nil)
 	require.NoError(t, err)
@@ -162,7 +162,7 @@ func TestWsTunnelsProjectsStableFailureWithoutAddressesOrKeyMaterial(t *testing.
 	}}}})
 	require.NoError(t, err)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/tunnels"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -219,7 +219,7 @@ func TestCheckAgentReturnsAgentDTOWithRuntime(t *testing.T) {
 	}}}})
 	require.NoError(t, err)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/api/agents/"+host.ID+"/check", "application/json", nil)
 	require.NoError(t, err)
@@ -244,7 +244,7 @@ func TestWsTunnelsForwardsAgentHealthPartialUpdate(t *testing.T) {
 	})
 	app.agentHealth.SetPollInterval(time.Hour)
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/tunnels"

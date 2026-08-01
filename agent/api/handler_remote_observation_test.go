@@ -61,14 +61,15 @@ func TestAuthenticatedNodeRegistryReturnsOnlyHashedSystemFacts(t *testing.T) {
 
 	provision := httptestDoWithHeader(t, app, http.MethodPost, "/api/security/provision",
 		bytes.NewBufferString(`{"token":"long-token","tls_mode":"off"}`),
-		http.Header{"Authorization": []string{"Bearer bootstrap"}},
+		map[string]string{"Authorization": "Bearer bootstrap"},
 	)
 	require.Equal(t, http.StatusOK, provision.Code)
-	unauthorized := httptestDoWithHeader(t, app, http.MethodGet, "/api/nodes", nil, nil)
+	// 显式空 Authorization 关掉 helper 默认注入的本机 token，验证真正裸请求被拒。
+	unauthorized := httptestDoWithHeader(t, app, http.MethodGet, "/api/nodes", nil, map[string]string{"Authorization": ""})
 	assert.Equal(t, http.StatusUnauthorized, unauthorized.Code)
 
 	authorized := httptestDoWithHeader(t, app, http.MethodGet, "/api/nodes", nil,
-		http.Header{"Authorization": []string{"Bearer long-token"}},
+		map[string]string{"Authorization": "Bearer long-token"},
 	)
 	require.Equal(t, http.StatusOK, authorized.Code)
 	assert.Contains(t, authorized.Body.String(), `"system":{"os":"linux","kernel_arch":"x86_64","agent_arch":"amd64","agent_node_id":"agent-node-01","machine_id_sha256":"9c68dde752b9d1abaa475e2cd895eb0fbc8e29b05e3cab1430c01cc964c38c3d"}`)
@@ -89,6 +90,7 @@ func TestDirectExposureEndpointProjectsFixedSafeShapeAndRejectsCallerTargets(t *
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/agents/host-1/direct-exposure", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -108,6 +110,7 @@ func TestDirectExposureEndpointProjectsFixedSafeShapeAndRejectsCallerTargets(t *
 
 	ssrf := httptest.NewRecorder()
 	ssrfReq := httptest.NewRequest(http.MethodGet, "/api/agents/host-1/direct-exposure?address=169.254.169.254&port=80", nil)
+	ssrfReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(ssrf, ssrfReq)
 	assert.Equal(t, http.StatusBadRequest, ssrf.Code)
 	assert.Equal(t, []string{"host-1"}, observer.hostIDs, "query target must be rejected before the observer is called")
@@ -115,6 +118,7 @@ func TestDirectExposureEndpointProjectsFixedSafeShapeAndRejectsCallerTargets(t *
 
 	bodyOverride := httptest.NewRecorder()
 	bodyReq := httptest.NewRequest(http.MethodGet, "/api/agents/host-1/direct-exposure", bytes.NewBufferString(`{"address":"127.0.0.1","port":1}`))
+	bodyReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(bodyOverride, bodyReq)
 	assert.Equal(t, http.StatusBadRequest, bodyOverride.Code)
 	assert.Equal(t, []string{"host-1"}, observer.hostIDs, "body target must be rejected before the observer is called")
@@ -129,6 +133,7 @@ func TestDirectExposureEndpointDoesNotReturnInternalObservationError(t *testing.
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/agents/host-1/direct-exposure", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
@@ -148,15 +153,16 @@ func TestDirectExposureEndpointRequiresAuthenticationAfterProvision(t *testing.T
 	t.Cleanup(app.Close)
 	provision := httptestDoWithHeader(t, app, http.MethodPost, "/api/security/provision",
 		bytes.NewBufferString(`{"token":"long-token","tls_mode":"off"}`),
-		http.Header{"Authorization": []string{"Bearer bootstrap"}},
+		map[string]string{"Authorization": "Bearer bootstrap"},
 	)
 	require.Equal(t, http.StatusOK, provision.Code)
 
-	unauthorized := httptestDoWithHeader(t, app, http.MethodGet, "/api/agents/host-1/direct-exposure", nil, nil)
+	// 显式空 Authorization 关掉 helper 默认注入的本机 token，验证真正裸请求被拒。
+	unauthorized := httptestDoWithHeader(t, app, http.MethodGet, "/api/agents/host-1/direct-exposure", nil, map[string]string{"Authorization": ""})
 	assert.Equal(t, http.StatusUnauthorized, unauthorized.Code)
 	assert.Empty(t, observer.hostIDs)
 	authorized := httptestDoWithHeader(t, app, http.MethodGet, "/api/agents/host-1/direct-exposure", nil,
-		http.Header{"Authorization": []string{"Bearer long-token"}},
+		map[string]string{"Authorization": "Bearer long-token"},
 	)
 	assert.Equal(t, http.StatusOK, authorized.Code)
 	assert.Equal(t, []string{"host-1"}, observer.hostIDs)
@@ -169,6 +175,7 @@ func TestManagedStatusSeparatesDesiredZeroFromActualActiveCollector(t *testing.T
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/managed-deployments/status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -192,6 +199,7 @@ func TestHostManagedStatusProjectsRemoteActiveCountSeparatelyFromDesired(t *test
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/hosts/host-1/managed-deployments/status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)

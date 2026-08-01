@@ -33,7 +33,7 @@ func TestBrowserControlSnapshotUsesSessionEndpoints(t *testing.T) {
 		},
 	}
 	app.browserControl = control
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	got := postJSONForTest[browsercontrol.Snapshot](t, srv.URL+"/api/browser-sessions/"+sessionID+"/snapshot", map[string]any{
@@ -53,7 +53,7 @@ func TestBrowserControlSnapshotAllowsEmptyBody(t *testing.T) {
 		snapshot: browsercontrol.Snapshot{Title: "Admin"},
 	}
 	app.browserControl = control
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Post(srv.URL+"/api/browser-sessions/"+sessionID+"/snapshot", "application/json", nil)
@@ -71,7 +71,7 @@ func TestBrowserControlSnapshotAllowsEmptyBody(t *testing.T) {
 func TestBrowserControlClickRejectsMissingSession(t *testing.T) {
 	app, _ := newBrowserControlTestApp(t)
 	app.browserControl = &fakeBrowserControl{}
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/browser-sessions/missing/click", map[string]any{
@@ -101,7 +101,7 @@ func TestBrowserControlActionsForwardRequests(t *testing.T) {
 		evaluate: browsercontrol.EvaluateResult{Result: map[string]any{"ok": true}},
 	}
 	app.browserControl = control
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	click := postJSONForTest[browsercontrol.ActionResult](t, srv.URL+"/api/browser-sessions/"+sessionID+"/click", map[string]any{
@@ -188,7 +188,7 @@ func TestBrowserControlActionsForwardRequests(t *testing.T) {
 func TestBrowserEvaluateDisabledByDefault(t *testing.T) {
 	app, sessionID := newBrowserControlTestApp(t)
 	app.browserControl = &fakeBrowserControl{}
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/browser-sessions/"+sessionID+"/evaluate", map[string]any{
@@ -207,7 +207,7 @@ func TestBrowserEvaluateAllowedWhenSettingEnabled(t *testing.T) {
 	require.NoError(t, app.settings.Save(settings))
 	control := &fakeBrowserControl{evaluate: browsercontrol.EvaluateResult{Result: "Admin"}}
 	app.browserControl = control
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	got := postJSONForTest[browsercontrol.EvaluateResult](t, srv.URL+"/api/browser-sessions/"+sessionID+"/evaluate", map[string]any{
@@ -227,7 +227,7 @@ func TestBrowserControlTypedErrorResponseIncludesCodeAndData(t *testing.T) {
 			"full_page":    true,
 		}),
 	}
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/browser-sessions/"+sessionID+"/screenshot", map[string]any{
@@ -249,7 +249,7 @@ func TestBrowserEvaluateAuditDoesNotLeakExpressionOrResult(t *testing.T) {
 	settings.DebugBrowser.AllowEvaluate = true
 	require.NoError(t, app.settings.Save(settings))
 	app.browserControl = &fakeBrowserControl{evaluate: browsercontrol.EvaluateResult{Result: "super-secret-token-value"}}
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	const expression = "() => localStorage.getItem('auth_token')"
@@ -278,7 +278,7 @@ func TestBrowserEvaluateAuditDoesNotLeakExpressionOrResult(t *testing.T) {
 func TestBrowserEvaluateDisabledAttemptIsAudited(t *testing.T) {
 	app, sessionID := newBrowserControlTestApp(t)
 	app.browserControl = &fakeBrowserControl{}
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	postJSONForRawTest(t, srv.URL+"/api/browser-sessions/"+sessionID+"/evaluate", map[string]any{
@@ -295,7 +295,7 @@ func TestBrowserEvaluateDisabledAttemptIsAudited(t *testing.T) {
 func TestBrowserTypeAuditOmitsTypedText(t *testing.T) {
 	app, sessionID := newBrowserControlTestApp(t)
 	app.browserControl = &fakeBrowserControl{}
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	postJSONForTest[browsercontrol.ActionResult](t, srv.URL+"/api/browser-sessions/"+sessionID+"/type", map[string]any{
@@ -316,7 +316,7 @@ func TestBrowserTypeAuditOmitsTypedText(t *testing.T) {
 func TestBrowserSetViewportAuditRecordsDimensions(t *testing.T) {
 	app, sessionID := newBrowserControlTestApp(t)
 	app.browserControl = &fakeBrowserControl{viewport: browsercontrol.ViewportResult{Width: 1478, Height: 1000}}
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	postJSONForTest[browsercontrol.ViewportResult](t, srv.URL+"/api/browser-sessions/"+sessionID+"/set-viewport", map[string]any{

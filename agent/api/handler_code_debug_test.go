@@ -36,7 +36,7 @@ func TestListCodeDebugTargets(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(codeDebugAPIProject(t.TempDir()))
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	targets := getJSONForTest[[]codedebug.Target](t, srv.URL+"/api/code-debug-targets", http.StatusOK)
@@ -53,7 +53,7 @@ func TestOpenCodeDebugSessionRequiresApproval(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(codeDebugAPIProject(t.TempDir()))
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/code-debug-sessions", map[string]any{"deployment_id": "dep-api-dev"}, http.StatusForbidden)
@@ -72,7 +72,7 @@ func TestCodeDebugEvaluateAuditsExpressionHashOnDenial(t *testing.T) {
 	app.mu.Unlock()
 	session, err := mgr.Open(context.Background(), project, project.Services[0], project.Services[0].Deployments[0], codedebug.OpenRequest{DeploymentID: "dep-api-dev"})
 	require.NoError(t, err)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	_ = postJSONForRawTest(t, srv.URL+"/api/code-debug-sessions/"+session.ID+"/evaluate", map[string]any{
@@ -106,7 +106,7 @@ func TestCodeDebugEvaluateAuditsExpressionHashOnSuccess(t *testing.T) {
 	app.mu.Unlock()
 	session, err := mgr.Open(context.Background(), project, project.Services[0], project.Services[0].Deployments[0], codedebug.OpenRequest{DeploymentID: "dep-api-dev"})
 	require.NoError(t, err)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	_ = postJSONForTest[map[string]any](t, srv.URL+"/api/code-debug-sessions/"+session.ID+"/evaluate", map[string]any{
@@ -140,7 +140,7 @@ func TestCodeDebugEvaluateAuditsCompositeSource(t *testing.T) {
 	app.mu.Unlock()
 	session, err := mgr.Open(context.Background(), project, project.Services[0], project.Services[0].Deployments[0], codedebug.OpenRequest{DeploymentID: "dep-api-dev"})
 	require.NoError(t, err)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	_ = postJSONForTest[map[string]any](t, srv.URL+"/api/code-debug-sessions/"+session.ID+"/evaluate", map[string]any{
@@ -171,7 +171,7 @@ func TestCodeDebugEvaluateRejectsEmptyExpression(t *testing.T) {
 	app.mu.Unlock()
 	session, err := mgr.Open(context.Background(), project, project.Services[0], project.Services[0].Deployments[0], codedebug.OpenRequest{DeploymentID: "dep-api-dev"})
 	require.NoError(t, err)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/code-debug-sessions/"+session.ID+"/evaluate", map[string]any{
@@ -329,7 +329,7 @@ func TestContinueDeploymentDebugContinuesPausedRuntime(t *testing.T) {
 		snap, ok := app.codeDebug.DebuggerSnapshot("dep-api-dev")
 		return ok && snap.State == "paused"
 	})
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/dep-api-dev/debug/continue", map[string]any{}, http.StatusOK)
@@ -344,7 +344,7 @@ func TestContinueDeploymentDebugReturns404WhenRuntimeMissing(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir(), CodeDebugManagerOverride: codeDebugManagerForAPITest()})
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/missing/debug/continue", map[string]any{}, http.StatusNotFound)
@@ -369,7 +369,7 @@ func TestDeploymentDebugCaptureAutoLease(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := app.codeDebug.LeaseFor("dep-api-dev")
 	require.False(t, ok)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/dep-api-dev/debug/capture", map[string]any{
@@ -398,7 +398,7 @@ func TestDeploymentDebugRuntimeNotRunning(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/dep-api-dev/debug/capture", map[string]any{
@@ -427,7 +427,7 @@ func TestResolveLeaseAttachUnsupportedRemediation(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp := postJSONForRawTest(t, srv.URL+"/api/deployments/dep-api-dev/debug/capture", map[string]any{

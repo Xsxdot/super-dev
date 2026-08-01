@@ -30,6 +30,7 @@ func TestTransferHandlerWritesUploadedFile(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/transfer", body)
 	req.Header.Set("Content-Type", contentType)
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusNoContent, rr.Code)
@@ -45,6 +46,7 @@ func TestTransferHandlerRejectsMissingTarget(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/transfer", body)
 	req.Header.Set("Content-Type", contentType)
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)

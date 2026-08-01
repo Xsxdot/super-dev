@@ -72,7 +72,7 @@ services:
 
 	app1, err := NewApp(AppConfig{DataDir: dataDir})
 	require.NoError(t, err)
-	srv1 := httptest.NewServer(app1.Handler())
+	srv1 := httptest.NewServer(testServerHandler(app1))
 
 	body, _ := json.Marshal(map[string]string{"root_path": projDir})
 	resp, err := http.Post(srv1.URL+"/api/projects", "application/json", bytes.NewReader(body))

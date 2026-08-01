@@ -56,7 +56,7 @@ func TestGetConfigMigration_LegacyProjectReturnsPlan(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	root := writeLegacyMigrationProject(t)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	project := postJSONForTest[model.Project](t, srv.URL+"/api/projects", map[string]string{"root_path": root}, http.StatusOK)
@@ -85,7 +85,7 @@ func TestConfigMigration_GetNotFoundForUnknownProject(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	resp, err := http.Get(srv.URL + "/api/projects/does-not-exist/config-migration")
@@ -103,7 +103,7 @@ func TestConfigMigration_ApplyThenGetReturnsNotNeeded(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	root := writeLegacyMigrationProject(t)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	project := postJSONForTest[model.Project](t, srv.URL+"/api/projects", map[string]string{"root_path": root}, http.StatusOK)
@@ -170,7 +170,7 @@ env_selected_service_ids:
   dev: [worker]
 `), 0o644))
 
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	project := postJSONForTest[model.Project](t, srv.URL+"/api/projects", map[string]string{"root_path": root}, http.StatusOK)

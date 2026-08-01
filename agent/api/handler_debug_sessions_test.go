@@ -29,7 +29,7 @@ func TestDebugSessionAPI_CreateAppendGetClose(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(debugSessionAPIProject())
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	createBody := map[string]any{
@@ -79,7 +79,7 @@ func TestDebugSessionAPI_RejectsDeploymentOutsideProject(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(debugSessionAPIProject())
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	postJSONForTest[map[string]string](t, srv.URL+"/api/debug-sessions", map[string]any{
@@ -97,7 +97,7 @@ func TestDebugSessionAPI_RejectsAppendToClosedSession(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(debugSessionAPIProject())
 	app.mu.Unlock()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	t.Cleanup(srv.Close)
 
 	created := postJSONForTest[debugSessionCreateResponse](t, srv.URL+"/api/debug-sessions", map[string]any{

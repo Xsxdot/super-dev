@@ -24,6 +24,7 @@ func TestListPipelineTemplatesIncludesBuiltins(t *testing.T) {
 	app := newTestAppInstance(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/pipeline/templates", nil)
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 	var body struct {
@@ -52,6 +53,7 @@ func TestGetPipelineTemplateReturnsBuiltinYAML(t *testing.T) {
 	app := newTestAppInstance(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/pipeline/templates/builtin/go-binary-build?version=1.0.0", nil)
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 
@@ -82,6 +84,7 @@ func TestPreviewPipelineTemplateFromYAML(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/templates/preview", body)
 	rr := httptest.NewRecorder()
 
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -103,6 +106,7 @@ func TestPreviewPipelineTemplateRejectsMissingSource(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/pipeline/templates/preview", strings.NewReader(`{}`))
 	rr := httptest.NewRecorder()
 
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)

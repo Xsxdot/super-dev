@@ -27,10 +27,16 @@ func main() {
 	installBinariesDir := flag.String("install-binaries", "", "Directory containing remote install agent binaries")
 	sampleBinary := flag.String("sample-binary", "", "Path to bundled onboarding sample service binary")
 	bootstrapToken := flag.String("bootstrap-token", "", "One-time bootstrap token for first security provision")
-	requireAuth := flag.Bool("require-auth", false, "Require bearer token authentication for agent API")
+	requireAuth := flag.Bool("require-auth", false, "Deprecated: authentication is always on; kept for old install scripts")
 	tlsCertFile := flag.String("tls-cert-file", "", "HTTPS certificate file for manually managed TLS")
 	tlsKeyFile := flag.String("tls-key-file", "", "HTTPS private key file for manually managed TLS")
 	flag.Parse()
+
+	// --require-auth 已无实际作用（withSecurity 恒定校验），但远端安装脚本/systemd unit
+	// 仍会传它——静默吞掉会让人以为它还管事，打一条废弃日志明示。
+	if *requireAuth {
+		log.Printf("[SuperDev] --require-auth 已废弃：鉴权现恒定开启，该参数被忽略（仅保留兼容旧安装脚本）")
+	}
 
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 		log.Fatal("create data dir:", err)

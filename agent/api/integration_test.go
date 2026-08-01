@@ -47,7 +47,7 @@ func TestEndToEndRemoteSearch(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer app.Close()
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(testServerHandler(app))
 	defer srv.Close()
 
 	for _, hostID := range []string{"hA", "hB"} {

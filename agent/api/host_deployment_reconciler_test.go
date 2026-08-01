@@ -244,6 +244,7 @@ func TestGetHostManagedDeploymentsStatusProxiesRemoteState(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/hosts/h1/managed-deployments/status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)

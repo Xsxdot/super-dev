@@ -51,7 +51,7 @@ func TestManagedDeploymentReconcileRestoresRemoteLogsAndRuntimeStatus(t *testing
 	})
 	require.NoError(t, err)
 	t.Cleanup(remoteApp.Close)
-	remoteSrv := httptest.NewServer(remoteApp.Handler())
+	remoteSrv := httptest.NewServer(testServerHandler(remoteApp))
 	t.Cleanup(remoteSrv.Close)
 
 	desktopApp, err := NewApp(AppConfig{
@@ -60,7 +60,7 @@ func TestManagedDeploymentReconcileRestoresRemoteLogsAndRuntimeStatus(t *testing
 	})
 	require.NoError(t, err)
 	t.Cleanup(desktopApp.Close)
-	desktopSrv := httptest.NewServer(desktopApp.Handler())
+	desktopSrv := httptest.NewServer(testServerHandler(desktopApp))
 	t.Cleanup(desktopSrv.Close)
 
 	_, err = desktopApp.remoteStore.AddHost(model.Host{ID: "h1", Name: "local-01"})
@@ -90,6 +90,7 @@ services:
 
 	addReq := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
 	addResp := httptest.NewRecorder()
+	addReq.Header.Set("Authorization", "Bearer "+desktopApp.LocalAccessToken())
 	desktopApp.Handler().ServeHTTP(addResp, addReq)
 	require.Equal(t, http.StatusOK, addResp.Code)
 
@@ -159,7 +160,7 @@ func TestManagedRemoteDeploymentLogsStayScopedWhenProjectsShareServiceName(t *te
 	})
 	require.NoError(t, err)
 	t.Cleanup(remoteApp.Close)
-	remoteSrv := httptest.NewServer(remoteApp.Handler())
+	remoteSrv := httptest.NewServer(testServerHandler(remoteApp))
 	t.Cleanup(remoteSrv.Close)
 
 	desktopApp, err := NewApp(AppConfig{
@@ -261,6 +262,7 @@ services:
 
 	req := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"root_path":"`+projectDir+`"}`))
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 }

@@ -75,6 +75,7 @@ func TestPutManagedDeploymentsPersistsRegistersProjectAndRuntimeStatus(t *testin
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/api/managed-deployments", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -90,6 +91,7 @@ func TestPutManagedDeploymentsPersistsRegistersProjectAndRuntimeStatus(t *testin
 
 	status := httptest.NewRecorder()
 	statusReq := httptest.NewRequest(http.MethodGet, "/api/projects/proj-prod/runtime-status", nil)
+	statusReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(status, statusReq)
 	require.Equal(t, http.StatusOK, status.Code)
 	var got model.RuntimeStatusResponse
@@ -112,6 +114,7 @@ func TestLoadManagedDeploymentsRestoresRemoteAgentState(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/projects/proj-prod/runtime-status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 }
@@ -131,11 +134,13 @@ func TestManagedDeploymentsStatusReportsCollectorFailure(t *testing.T) {
 
 	put := httptest.NewRecorder()
 	putReq := httptest.NewRequest(http.MethodPut, "/api/managed-deployments", bytes.NewReader(body))
+	putReq.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(put, putReq)
 	require.Equal(t, http.StatusOK, put.Code)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/managed-deployments/status", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)

@@ -92,6 +92,7 @@ func TestExecHealthReturnsVersion(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/exec/health", nil)
 	rr := httptest.NewRecorder()
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
 	app.Handler().ServeHTTP(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
@@ -105,7 +106,12 @@ func dialAppWebSocket(t *testing.T, app *App, path string) *websocket.Conn {
 	go servePipeHTTP(app, serverConn, done)
 
 	u := &url.URL{Scheme: "ws", Host: "pipe.local", Path: path}
-	conn, resp, err := websocket.NewClient(clientConn, u, nil, 1024, 1024)
+	// 鉴权常开后 /ws/exec 也要过 withSecurity：必须带凭据握手才能成功 Upgrade+Hijack。
+	// 若鉴权失败，withSecurity 会写一个无 Content-Length 的 JSON 401 响应，
+	// 而 pipeResponseWriter 不关闭连接，客户端读响应体会永久阻塞等 EOF——
+	// 带上本机 token 让请求走回原本成功的 Upgrade 分支，避免触发这个测试桩的局限。
+	header := http.Header{"Authorization": []string{"Bearer " + app.LocalAccessToken()}}
+	conn, resp, err := websocket.NewClient(clientConn, u, header, 1024, 1024)
 	require.NoError(t, err)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
@@ -144,6 +150,8 @@ func servePipeHTTP(app *App, serverConn net.Conn, done chan<- error) {
 		reader: reader,
 		header: make(http.Header),
 	}
+	// Authorization 已由 dialAppWebSocket 写进握手请求，这里按原样透传即可，
+	// 不再重复注入（重复注入会让人误以为服务端会用自己的 token 覆盖来路凭据）。
 	app.Handler().ServeHTTP(rw, req)
 	done <- nil
 }
