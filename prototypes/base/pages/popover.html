@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<!--
+  菜单栏弹层原型 —— 镜像 PopoverPage / OperationApprovalPopover：
+  小窗形态的操作审批卡片，批准/拒绝为页面内 mock 反馈。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>SuperDev · 审批弹层（原型）</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+</head>
+<body>
+<div class="popover-root">
+  <div class="approval-title">操作审批请求</div>
+  <div class="approval-meta">stop_service · tk / server (dev)<br>来自 MCP · claude-code · 刚刚</div>
+  <div class="approval-actions">
+    <button class="ghost-btn" id="denyBtn">拒绝</button>
+    <button class="primary-btn" id="approveBtn">批准</button>
+  </div>
+  <p class="feedback" id="feedback" hidden></p>
+</div>
+
+<script>
+  // mock 裁决反馈：不发真实请求
+  const feedback = document.getElementById('feedback');
+  document.getElementById('approveBtn').addEventListener('click', () => {
+    feedback.textContent = '已批准（mock）。';
+    feedback.hidden = false;
+  });
+  document.getElementById('denyBtn').addEventListener('click', () => {
+    feedback.textContent = '已拒绝（mock）。';
+    feedback.style.color = 'var(--status-failed)';
+    feedback.hidden = false;
+  });
+</script>
+</body>
+</html>

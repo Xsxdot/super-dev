@@ -1,0 +1,45 @@
+<!--
+  外壳样板（供复制，不被引用执行）—— 镜像 desktop MainPage 的三段式布局：
+  顶栏（品牌 + 工作区标签）/ 内容行（侧边栏 + 工作台）/ 底栏。
+
+  写新页面时：
+  1. 整段复制 .main-layout 进页面 <body>；
+  2. 改工作区标签与主内容区；
+  3. 侧边栏工具按钮的链接按页面所在层级调整相对路径
+     （base/ 根用 pages/xxx.html，pages/ 内用 xxx.html 与 ../index.html）。
+  注意：设置 / 概览 / 引导 / 弹层是全窗口独立路由，不用本外壳，见对应页面。
+-->
+<div class="main-layout">
+  <div class="app-topbar">
+    <div class="app-brand"><span class="app-brand-title">SuperDev</span></div>
+    <div class="app-tabs-region">
+      <div class="workspace-tabs">
+        <a class="workspace-tab active" href="#">
+          <span class="tab-kind">日志</span><span class="tab-title">tk · server</span><span class="tab-close">×</span>
+        </a>
+      </div>
+    </div>
+  </div>
+  <div class="main-content-row">
+    <aside class="sidebar">
+      <div class="sidebar-scroll">
+        <div class="sidebar-search"><span>⌕</span><span>搜索服务 / 日志</span><span class="search-shortcut">⌘K</span></div>
+        <!-- 项目与环境组放这里 -->
+      </div>
+      <div class="sidebar-tools">
+        <a class="sidebar-tool-button" href="pages/node-center.html">
+          <span>▦</span><span class="sidebar-tool-main">节点中心</span><span class="sidebar-tool-hint">主机与远端</span>
+        </a>
+        <a class="sidebar-tool-button" href="pages/settings.html">
+          <span>⚙</span><span class="sidebar-tool-main">设置</span><span class="sidebar-tool-hint">⌘,</span>
+        </a>
+      </div>
+    </aside>
+    <div class="workspace-column">
+      <!-- 工作台主内容放这里 -->
+    </div>
+  </div>
+  <div class="bottom-bar">
+    <!-- 底栏分组放这里 -->
+  </div>
+</div>

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<!--
+  节点中心原型 —— 镜像 NodeCenterView/NodeCard：
+  工作台内打开的节点视图，卡片网格展示本机与远端节点（连接路由徽标、健康徽标、服务行 + CPU/MEM/UP 指标）。
+  远程开发机功能的 UX 走查将主要基于本页 fork。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>SuperDev · 节点中心（原型）</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+</head>
+<body>
+<div class="main-layout">
+  <div class="app-topbar">
+    <div class="app-brand"><span class="app-brand-title">SuperDev</span></div>
+    <div class="app-tabs-region">
+      <div class="workspace-tabs">
+        <a class="workspace-tab" href="../index.html">
+          <span class="tab-kind">日志</span><span class="tab-title">tk · server</span><span class="tab-close">×</span>
+        </a>
+        <span class="workspace-tab active">
+          <span class="tab-kind">节点</span><span class="tab-title">节点中心</span><span class="tab-close">×</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div class="main-content-row">
+    <aside class="sidebar">
+      <div class="sidebar-scroll">
+        <div class="sidebar-search"><span>⌕</span><span>搜索服务 / 日志</span><span class="search-shortcut">⌘K</span></div>
+        <a class="project-overview-strip" href="project-overview.html">
+          <span>▤</span><span class="overview-strip-main">项目概览</span><span class="overview-strip-hint">流水线 · 矩阵</span>
+        </a>
+        <div class="project-header">tk <span class="project-path">~/workspace/tk</span></div>
+        <div class="env-group">
+          <div class="env-group-header">
+            <div class="env-title"><span class="expand-arrow">▾</span><span class="env-name">dev</span><span class="env-count">2</span></div>
+          </div>
+          <div class="env-group-rows">
+            <a class="env-service-row" href="../index.html">
+              <span class="status-dot running"></span>
+              <div class="service-main">
+                <div class="service-name">server</div>
+                <div class="service-meta">go · :9100 · 运行 2h13m</div>
+              </div>
+            </a>
+            <div class="env-service-row">
+              <span class="status-dot stopped"></span>
+              <div class="service-main">
+                <div class="service-name">admin</div>
+                <div class="service-meta">vite · 未运行</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-tools">
+        <span class="sidebar-tool-button" style="background: var(--bg-overlay); color: var(--text-primary)">
+          <span>▦</span><span class="sidebar-tool-main">节点中心</span><span class="sidebar-tool-hint">当前</span>
+        </span>
+        <a class="sidebar-tool-button" href="settings.html">
+          <span>⚙</span><span class="sidebar-tool-main">设置</span><span class="sidebar-tool-hint">⌘,</span>
+        </a>
+      </div>
+    </aside>
+
+    <div class="workspace-column">
+      <section class="node-center-view">
+        <header class="node-center-head">
+          <div class="node-center-title-group">
+            <div class="node-center-kicker">NODES</div>
+            <h1>节点中心</h1>
+          </div>
+          <div class="node-center-summary">
+            <span>2 个节点 · 0 异常</span>
+            <span class="stream-state">状态流已连接</span>
+          </div>
+        </header>
+
+        <div class="node-card-grid">
+          <div class="node-card is-reachable">
+            <header class="node-card-head">
+              <div class="node-title-group">
+                <span class="node-status-dot"></span>
+                <div class="node-title-text">
+                  <div class="node-title-row">
+                    <h2>本机</h2>
+                    <span class="node-route-badge">local</span>
+                  </div>
+                  <p>agent v0.2.3 · macOS · 内置</p>
+                </div>
+              </div>
+              <span class="node-health-badge">healthy</span>
+            </header>
+            <div class="node-service-list">
+              <div class="node-service-row">
+                <span class="service-status-dot"></span>
+                <span class="service-main"><span class="service-name">server</span><span class="service-context">tk · dev</span></span>
+                <span class="service-metrics">
+                  <span class="metric"><span class="metric-label">CPU</span><span class="metric-value">2.4%</span></span>
+                  <span class="metric"><span class="metric-label">MEM</span><span class="metric-value">86 MB</span></span>
+                  <span class="metric"><span class="metric-label">UP</span><span class="metric-value">2h13m</span></span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="node-card is-reachable">
+            <header class="node-card-head">
+              <div class="node-title-group">
+                <span class="node-status-dot"></span>
+                <div class="node-title-text">
+                  <div class="node-title-row">
+                    <h2>aliyun-1</h2>
+                    <span class="node-route-badge">SSH 隧道</span>
+                  </div>
+                  <p>agent v0.2.3 · Ubuntu 22.04 · root@47.98.x.x</p>
+                </div>
+              </div>
+              <span class="node-health-badge">healthy</span>
+            </header>
+            <div class="node-service-list">
+              <div class="node-service-row">
+                <span class="service-status-dot"></span>
+                <span class="service-main"><span class="service-name">server</span><span class="service-context">tk · prod</span></span>
+                <span class="service-metrics">
+                  <span class="metric"><span class="metric-label">CPU</span><span class="metric-value">1.1%</span></span>
+                  <span class="metric"><span class="metric-label">MEM</span><span class="metric-value">124 MB</span></span>
+                  <span class="metric"><span class="metric-label">UP</span><span class="metric-value">6d02h</span></span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="bottom-bar">
+    <section class="bottom-group">
+      <span class="group-label">已打开</span>
+      <label class="service-chip"><span class="dot" style="background: var(--status-running)"></span><span class="svc-name">server</span></label>
+    </section>
+  </div>
+</div>
+</body>
+</html>

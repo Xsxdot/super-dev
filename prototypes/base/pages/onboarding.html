@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!--
+  引导页原型 —— 镜像 OnboardingPage：顶栏品牌 + 进度导航 + 步骤卡片。
+  表单提交仅做页面内 mock 反馈。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>SuperDev · 欢迎（原型）</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+</head>
+<body>
+<main class="onboarding-page">
+  <div class="onboarding-topbar">SuperDev</div>
+  <section class="onboarding-shell">
+    <nav class="onboarding-progress">
+      <div class="step active">1 · 欢迎</div>
+      <div class="step">2 · 添加第一个项目</div>
+      <div class="step">3 · 接入 coding agent</div>
+    </nav>
+    <div class="onboarding-card">
+      <h1>欢迎使用 SuperDev</h1>
+      <p>本地与远端服务的运行态、日志与部署管理。先把你的第一个项目接进来。</p>
+      <form id="mockForm">
+        <div class="form-row"><label>项目目录</label><input type="text" placeholder="~/workspace/my-project" required style="flex:1"></div>
+        <div class="approval-actions">
+          <a class="ghost-btn" href="../index.html">跳过</a>
+          <button class="primary-btn" type="submit">添加项目</button>
+        </div>
+      </form>
+      <p class="feedback" id="feedback" hidden>已添加（mock），数据未真正发送。<a href="../index.html" style="color: var(--accent)">进入主界面 →</a></p>
+    </div>
+  </section>
+</main>
+
+<script>
+  document.getElementById('mockForm').addEventListener('submit', (e) => {
+    e.preventDefault(); // 原型不连后端
+    document.getElementById('feedback').hidden = false;
+  });
+</script>
+</body>
+</html>

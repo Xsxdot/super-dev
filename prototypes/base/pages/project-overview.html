@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<!--
+  项目概览原型 —— 镜像 ProjectOverviewPage（路由 /project/:id/overview）：
+  全窗口页，tab（运行状态/流水线/入口）+ 服务矩阵表。支持 ?id= 参数模拟不同项目。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>SuperDev · 项目概览（原型）</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+</head>
+<body>
+<main class="overview-page">
+  <div class="overview-head">
+    <a class="ghost-btn" href="../index.html">← 返回</a>
+    <h1 class="page-title">项目概览 · tk</h1>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="runtime">运行状态</button>
+    <button class="tab" data-tab="pipelines">流水线</button>
+    <button class="tab" data-tab="ingress">入口</button>
+  </div>
+
+  <div class="panel" data-panel="runtime">
+    <table class="matrix">
+      <thead><tr><th>服务</th><th>环境</th><th>节点</th><th>状态</th><th>端口</th><th>运行时长</th></tr></thead>
+      <tbody id="matrixBody"></tbody>
+    </table>
+  </div>
+
+  <div class="panel" data-panel="pipelines" hidden>
+    <table class="matrix">
+      <thead><tr><th>流水线</th><th>目标环境</th><th>最近一次运行</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>deploy-server</td><td>prod</td><td>07-30 18:22</td><td style="color: var(--status-running)">成功</td></tr>
+        <tr><td>deploy-admin</td><td>prod</td><td>07-28 11:40</td><td style="color: var(--status-running)">成功</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel" data-panel="ingress" hidden>
+    <table class="matrix">
+      <thead><tr><th>域名</th><th>上游</th><th>证书</th></tr></thead>
+      <tbody>
+        <tr><td>tk.example.com</td><td>aliyun-1 · server:9100</td><td>有效至 2026-11-02</td></tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+  // 读 query 模拟参数页
+  const params = new URLSearchParams(window.location.search);
+  const projectId = params.get('id') || 'tk';
+  document.querySelector('.page-title').textContent = `项目概览 · ${projectId}`;
+
+  // mock 服务矩阵
+  const rows = [
+    { svc: 'server', env: 'dev', node: '本机', status: '运行中', ok: true, port: ':9100', up: '2h13m' },
+    { svc: 'admin', env: 'dev', node: '本机', status: '未运行', ok: false, port: '—', up: '—' },
+    { svc: 'server', env: 'prod', node: 'aliyun-1', status: '运行中', ok: true, port: ':9100', up: '6d02h' },
+  ];
+  const tbody = document.getElementById('matrixBody');
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td style="color: var(--text-primary)">${r.svc}</td><td>${r.env}</td><td>${r.node}</td>` +
+      `<td style="color: var(${r.ok ? '--status-running' : '--text-tertiary'})">${r.status}</td><td>${r.port}</td><td>${r.up}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  // tab 切换
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.hidden = true);
+      tab.classList.add('active');
+      document.querySelector(`.panel[data-panel="${tab.dataset.tab}"]`).hidden = false;
+    });
+  });
+</script>
+</body>
+</html>

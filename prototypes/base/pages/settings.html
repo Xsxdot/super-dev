@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!--
+  设置页原型 —— 镜像 SettingsPage 的左导航 + 内容区形态。
+  导航项对应真实 tab 集合的代表性子集（通用/项目/主机/Agent/审批），tab 切换用 data-tab/data-panel 约定。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>SuperDev · 设置（原型）</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+</head>
+<body>
+<div class="settings-shell">
+  <aside class="settings-sidebar">
+    <div class="settings-titlebar-spacer"></div>
+    <a class="settings-nav-back" href="../index.html">← 返回</a>
+    <button class="settings-nav-item active" data-tab="general">通用</button>
+    <button class="settings-nav-item" data-tab="projects">项目</button>
+    <button class="settings-nav-item" data-tab="hosts">主机</button>
+    <button class="settings-nav-item" data-tab="agents">Agent 管理</button>
+    <button class="settings-nav-item" data-tab="approvals">操作审批</button>
+  </aside>
+
+  <div class="settings-content">
+    <div class="panel" data-panel="general">
+      <h1>通用</h1>
+      <div class="settings-section">
+        <h2>外观与语言</h2>
+        <div class="form-row"><label>语言</label><select><option>简体中文</option><option>English</option></select></div>
+        <div class="form-row"><label>开机自启</label><input type="checkbox" checked></div>
+      </div>
+    </div>
+
+    <div class="panel" data-panel="projects" hidden>
+      <h1>项目</h1>
+      <div class="settings-section">
+        <h2>已纳管项目</h2>
+        <div class="host-row"><span class="status-dot running"></span><span>tk</span><span class="host-addr">~/workspace/tk</span><span class="spacer"></span><button class="ghost-btn">配置</button></div>
+        <div class="host-row"><span class="status-dot stopped"></span><span>super-debug</span><span class="host-addr">~/workspace/super-debug</span><span class="spacer"></span><button class="ghost-btn">配置</button></div>
+      </div>
+    </div>
+
+    <div class="panel" data-panel="hosts" hidden>
+      <h1>主机</h1>
+      <div class="settings-section">
+        <h2>远端主机</h2>
+        <div class="host-row">
+          <span class="status-dot running"></span><span>aliyun-1</span>
+          <span class="host-addr">root@47.98.x.x:22 · 密钥 id_ed25519</span>
+          <span class="spacer"></span><button class="ghost-btn">编辑</button>
+        </div>
+        <button class="primary-btn" id="addHostBtn">+ 添加主机</button>
+      </div>
+    </div>
+
+    <div class="panel" data-panel="agents" hidden>
+      <h1>Agent 管理</h1>
+      <div class="settings-section">
+        <h2>各节点 agent 版本</h2>
+        <div class="host-row"><span class="status-dot running"></span><span>本机</span><span class="host-addr">v0.2.3 · 内置</span><span class="spacer"></span></div>
+        <div class="host-row"><span class="status-dot running"></span><span>aliyun-1</span><span class="host-addr">v0.2.3</span><span class="spacer"></span><button class="ghost-btn">升级</button><button class="ghost-btn">卸载</button></div>
+      </div>
+    </div>
+
+    <div class="panel" data-panel="approvals" hidden>
+      <h1>操作审批</h1>
+      <div class="settings-section">
+        <h2>待处理</h2>
+        <div class="host-row">
+          <span class="status-dot starting"></span><span>stop_service · tk/server</span>
+          <span class="host-addr">来自 MCP · claude-code · 2 分钟前</span>
+          <span class="spacer"></span><button class="primary-btn">批准</button><button class="ghost-btn">拒绝</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<dialog id="hostDialog">
+  <h3>添加主机（mock）</h3>
+  <div class="form-row"><label>地址</label><input type="text" placeholder="user@host:22"></div>
+  <div class="form-row"><label>SSH 密钥</label><select><option>~/.ssh/id_ed25519</option><option>粘贴私钥…</option></select></div>
+  <div class="approval-actions">
+    <button class="ghost-btn" id="hostCancel">取消</button>
+    <button class="primary-btn" id="hostSave">保存</button>
+  </div>
+  <p class="feedback" id="hostFeedback" hidden>已保存（mock），数据未真正发送。</p>
+</dialog>
+
+<script>
+  // 左导航 tab 切换（data-tab/data-panel 约定）
+  document.querySelectorAll('.settings-nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.settings-nav-item').forEach(i => i.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.hidden = true);
+      item.classList.add('active');
+      document.querySelector(`.panel[data-panel="${item.dataset.tab}"]`).hidden = false;
+    });
+  });
+  // 添加主机弹窗
+  const hostDialog = document.getElementById('hostDialog');
+  document.getElementById('addHostBtn').addEventListener('click', () => hostDialog.showModal());
+  document.getElementById('hostCancel').addEventListener('click', () => hostDialog.close());
+  document.getElementById('hostSave').addEventListener('click', () => {
+    document.getElementById('hostFeedback').hidden = false;
+  });
+</script>
+</body>
+</html>
