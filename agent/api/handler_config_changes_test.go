@@ -229,9 +229,16 @@ func addProjectFromRootForConfigChange(t *testing.T, app *App, root string) mode
 	return postJSONForTest[model.Project](t, srv.URL+"/api/projects", map[string]string{"root_path": root}, http.StatusOK)
 }
 
+// readConfigFileForTest 读取当前格式的主配置文件。多数用例经 writeConfigChangeProject
+// 预置 config.yaml（legacy），但通过 agent 全新创建的项目默认落 split 格式
+// （project.yaml），因此这里按文件是否存在探测，而非固定读 config.yaml。
 func readConfigFileForTest(t *testing.T, root string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, ".superdev", "config.yaml"))
+	path := filepath.Join(root, ".superdev", "config.yaml")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		path = filepath.Join(root, ".superdev", "project.yaml")
+	}
+	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	return data
 }

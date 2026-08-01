@@ -94,7 +94,9 @@ func TestSeedSampleProjectCopiesRegistersAndMarks(t *testing.T) {
 	assert.Len(t, reg.paths, 1)
 	projectDir := filepath.Join(dataDir, "examples", "superdev-sample")
 	assert.Equal(t, projectDir, reg.paths[0])
-	raw, err := os.ReadFile(filepath.Join(projectDir, ".superdev", "config.yaml"))
+	// 全新落地的示例项目目录此前不存在任何配置文件，Loader 默认新格式，
+	// 落在 project.yaml 而非 config.yaml。
+	raw, err := os.ReadFile(filepath.Join(projectDir, ".superdev", "project.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), bin)
 	assert.Contains(t, string(raw), "is_dev: false")

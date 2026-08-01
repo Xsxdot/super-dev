@@ -193,7 +193,9 @@ func TestSaveAndReload(t *testing.T) {
 	loaded, err := loader.Load()
 	require.NoError(t, err)
 	assert.Equal(t, "test", loaded.Name)
-	assert.Equal(t, []string{"api"}, loaded.EnvSelectedServiceIDs["dev"])
+	// 全新目录默认落 split 格式，env_selected_service_ids 属 UI 状态，
+	// split 格式下不再持久化进 yaml（已迁移为 agent 本地 store）。
+	assert.Empty(t, loaded.EnvSelectedServiceIDs["dev"])
 }
 
 func TestSaveAndReloadWithCodeDebugConfig(t *testing.T) {
@@ -893,7 +895,9 @@ func TestSaveAndReloadPreservesDebugCredentials(t *testing.T) {
 	}
 
 	require.NoError(t, config.NewLoader(dir).Save(project))
-	data, err := os.ReadFile(filepath.Join(dir, ".superdev", "config.yaml"))
+	// 全新目录默认落 split 格式，主配置写入 project.yaml 而非 config.yaml；
+	// debug_credentials 属共享层（用户裁决：刻意公开的测试凭据）。
+	data, err := os.ReadFile(filepath.Join(dir, ".superdev", "project.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "debug_credentials:")
 
@@ -960,7 +964,9 @@ func TestSaveRelativizesRuntimePaths(t *testing.T) {
 	assert.NoError(t, loader.Save(p))
 	// 内存中的 Runtime 不得被 save 顺手改掉（拷贝而非原地相对化）
 	assert.Equal(t, filepath.Join(dir, "server"), p.Services[0].Deployments[0].Runtime.WorkingDir)
-	raw, _ := os.ReadFile(filepath.Join(dir, ".superdev", "config.yaml"))
+	// 全新目录默认落 split 格式，主配置写入 project.yaml 而非 config.yaml。
+	raw, err := os.ReadFile(filepath.Join(dir, ".superdev", "project.yaml"))
+	require.NoError(t, err)
 	assert.NotContains(t, string(raw), dir)
 }
 
@@ -1013,7 +1019,8 @@ func TestSaveAndReloadPreservesAINotesAndAuthHints(t *testing.T) {
 	}
 
 	require.NoError(t, config.NewLoader(dir).Save(project))
-	data, err := os.ReadFile(filepath.Join(dir, ".superdev", "config.yaml"))
+	// 全新目录默认落 split 格式，主配置写入 project.yaml 而非 config.yaml。
+	data, err := os.ReadFile(filepath.Join(dir, ".superdev", "project.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "ai_note: project note")
 	assert.Contains(t, string(data), "auth_hint: project auth")
@@ -1031,4 +1038,92 @@ func TestSaveAndReloadPreservesAINotesAndAuthHints(t *testing.T) {
 	require.Len(t, loaded.Services, 1)
 	assert.Equal(t, "service note", loaded.Services[0].AINote)
 	assert.Equal(t, "service auth", loaded.Services[0].AuthHint)
+}
+
+// mustWriteSuperdev 写 dir/.superdev/<name>。
+func mustWriteSuperdev(t *testing.T, dir, name, content string) {
+	t.Helper()
+	sub := filepath.Join(dir, ".superdev")
+	assert.NoError(t, os.MkdirAll(sub, 0o755))
+	assert.NoError(t, os.WriteFile(filepath.Join(sub, name), []byte(content), 0o644))
+}
+
+func TestDetectFormat(t *testing.T) {
+	dir := t.TempDir()
+	loader := config.NewLoader(dir)
+	assert.Equal(t, config.FormatSplit, loader.DetectFormat(), "全新目录默认新格式")
+
+	writeConfig(t, dir, "name: demo\nservices: []\n")
+	assert.Equal(t, config.FormatLegacy, loader.DetectFormat())
+
+	// project.yaml 出现后优先于残留的 config.yaml
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, ".superdev", "project.yaml"),
+		[]byte("name: demo\nservices: []\n"), 0o644))
+	assert.Equal(t, config.FormatSplit, loader.DetectFormat())
+}
+
+func TestSplitLoadMergesLocal(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteSuperdev(t, dir, "project.yaml", `
+name: demo
+services:
+  - id: svc-1
+    name: api
+    deployments:
+      - env: dev
+        location: local
+        working_dir: server
+        env_vars: {PORT: "9100"}
+`)
+	mustWriteSuperdev(t, dir, "local.yaml", `
+deployments:
+  svc-1/dev:
+    env_vars: {API_KEY: sk-live}
+`)
+	p, err := config.NewLoader(dir).Load()
+	assert.NoError(t, err)
+	assert.Equal(t, "split", p.ConfigFormat)
+	dep := p.Services[0].Deployments[0]
+	assert.Equal(t, "sk-live", dep.Env["API_KEY"])
+	assert.Equal(t, "9100", dep.Env["PORT"])
+}
+
+func TestSplitSaveKeepsLayers(t *testing.T) {
+	// 接 TestSplitLoadMergesLocal 的布局：load → 改共享键 → save
+	dir := t.TempDir()
+	mustWriteSuperdev(t, dir, "project.yaml", `
+name: demo
+services:
+  - id: svc-1
+    name: api
+    deployments:
+      - env: dev
+        location: local
+        env_vars: {PORT: "9100"}
+`)
+	mustWriteSuperdev(t, dir, "local.yaml", "deployments:\n  svc-1/dev:\n    env_vars: {API_KEY: sk-live}\n")
+	loader := config.NewLoader(dir)
+	p, _ := loader.Load()
+	p.Services[0].Deployments[0].Env["PORT"] = "9200"
+	assert.NoError(t, loader.Save(p))
+
+	proj, _ := os.ReadFile(filepath.Join(dir, ".superdev", "project.yaml"))
+	assert.Contains(t, string(proj), "PORT")
+	assert.NotContains(t, string(proj), "API_KEY", "local 键不得泄漏进共享层")
+	assert.NotContains(t, string(proj), "env_selected_service_ids", "UI 状态不再写 yaml")
+	loc, _ := os.ReadFile(filepath.Join(dir, ".superdev", "local.yaml"))
+	assert.Contains(t, string(loc), "API_KEY")
+}
+
+func TestSplitLogRules(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteSuperdev(t, dir, "project.yaml", "name: demo\nservices: []\n")
+	loader := config.NewLoader(dir)
+	assert.NoError(t, loader.SaveLogRules([]model.LogRule{{ID: "r1"}}))
+	rules, err := loader.LoadLogRules()
+	assert.NoError(t, err)
+	assert.Len(t, rules, 1)
+	// log_rules 必须落在 project.yaml（共享层），不产生 config.yaml
+	_, statErr := os.Stat(filepath.Join(dir, ".superdev", "config.yaml"))
+	assert.True(t, os.IsNotExist(statErr))
 }

@@ -179,9 +179,12 @@ func MergeDebugCredentialLayers(layers ...DebugCredentialLayer) []MergedDebugCre
 // Environments 定义该项目的运行环境列表，每个 Service 的 Deployment
 // 通过 EnvName 引用其中一个环境。
 type Project struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"                 yaml:"name"`
-	RootPath     string            `json:"root_path"            yaml:"-"`
+	ID       string `json:"id"`
+	Name     string `json:"name"                 yaml:"name"`
+	RootPath string `json:"root_path"            yaml:"-"`
+	// ConfigFormat 是运行时探测的配置格式（"legacy" | "split"），不持久化，
+	// 每次 Loader.Load 重新填充。desktop 用它决定是否显示迁移横幅。
+	ConfigFormat string            `json:"config_format,omitempty" yaml:"-"`
 	Variables    map[string]string `json:"variables,omitempty" yaml:"variables,omitempty"`
 	Environments []Environment     `json:"environments,omitempty"`
 	Services     []Service         `json:"services"             yaml:"services"`
