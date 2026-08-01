@@ -87,25 +87,43 @@ describe('useDeploymentLogStore', () => {
     MockWebSocket.instances = []
   })
 
-  it('subscribe 创建 WebSocket 连接', () => {
+  it('subscribe 创建 WebSocket 连接', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-1')
+    // subscribe 内部 connect() 现在是 async（要先经 Tauri IPC 拿本机 token 才能拼 WS URL），
+    // 需要先把 pending 的 microtask 队列跑完，WebSocket 才真正被构造出来。
+    await flushMicrotasks()
     expect(MockWebSocket.instances).toHaveLength(1)
     expect(MockWebSocket.instances[0].url).toContain('dep-1')
   })
 
-  it('subscribe 同一 deploymentId 两次，refCount 增加但只有一个 WS', () => {
+  it('connect() 等待本机 token 期间被 unsubscribe，不遗留孤儿 WebSocket', async () => {
+    const store = useDeploymentLogStore()
+    store.subscribe('dep-race')
+    // 此刻 connect() 正卡在 await deploymentWsUrl(...)（本机 token 读取中的 microtask 链），
+    // WebSocket 尚未构造；同步立即 unsubscribe，refCount 归零、session 被摘除。
+    store.unsubscribe('dep-race')
+    await flushMicrotasks()
+    // connect() 恢复执行后应看到 session.refCount<=0 而放弃建连，不应留下一条没人管的 WS。
+    expect(MockWebSocket.instances).toHaveLength(0)
+  })
+
+  it('subscribe 同一 deploymentId 两次，refCount 增加但只有一个 WS', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-1')
     store.subscribe('dep-1')
+    await flushMicrotasks()
     expect(MockWebSocket.instances).toHaveLength(1)
     expect(store.refCountOf('dep-1')).toBe(2)
   })
 
-  it('unsubscribe 减少 refCount，归零时关闭 WS', () => {
+  it('unsubscribe 减少 refCount，归零时关闭 WS', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-1')
     store.subscribe('dep-1')
+    // 必须等 WebSocket 真正建立后再 unsubscribe，否则 refCount 归零时 session 已被摘除，
+    // connect() 对 await 之后的 session 校验会直接放弃建连，MockWebSocket 永远不会出现。
+    await flushMicrotasks()
     store.unsubscribe('dep-1')
     expect(store.refCountOf('dep-1')).toBe(1)
     store.unsubscribe('dep-1')
@@ -113,9 +131,10 @@ describe('useDeploymentLogStore', () => {
     expect(MockWebSocket.instances[0].readyState).toBe(3)
   })
 
-  it('收到 WS 消息后日志出现在 getLogs', () => {
+  it('收到 WS 消息后日志出现在 getLogs', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-1')
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
     ws.onmessage?.({ data: JSON.stringify({
       id: '1',
@@ -131,9 +150,10 @@ describe('useDeploymentLogStore', () => {
     expect(logs[0].message).toBe('hello')
   })
 
-  it('收到折叠增量时按 fold_key 更新已有行计数', () => {
+  it('收到折叠增量时按 fold_key 更新已有行计数', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-1')
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
 
     ws.onmessage?.({ data: JSON.stringify({
@@ -190,10 +210,11 @@ describe('重连补拉', () => {
     vi.clearAllMocks()
   })
 
-  it('lastSeen 游标优先取 seq，无 seq 时回退 rowid', () => {
+  it('lastSeen 游标优先取 seq，无 seq 时回退 rowid', async () => {
     const store = useDeploymentLogStore()
     const deploymentId = 'dep-last-seen-seq'
     store.subscribe(deploymentId)
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
 
     sendWsLog(ws, makeRawLog(999, deploymentId, { seq: 42 }))
@@ -215,6 +236,7 @@ describe('重连补拉', () => {
       const store = useDeploymentLogStore()
       const deploymentId = 'dep-catchup'
       store.subscribe(deploymentId, 'proj-1')
+      await flushMicrotasks()
       const ws = MockWebSocket.instances[0]
       const first = makeRawLog(10, deploymentId, { seq: 42 })
       sendWsLog(ws, first)
@@ -259,6 +281,7 @@ describe('重连补拉', () => {
       const store = useDeploymentLogStore()
       const deploymentId = 'dep-catchup-pending'
       store.subscribe(deploymentId, 'proj-1')
+      await flushMicrotasks()
       const ws = MockWebSocket.instances[0]
       sendWsLog(ws, makeRawLog(10, deploymentId))
       let resolvePage!: (value: apiModule.LogContextPageResponse) => void
@@ -298,6 +321,7 @@ describe('重连补拉', () => {
       const store = useDeploymentLogStore()
       const deploymentId = 'dep-catchup-capped'
       store.subscribe(deploymentId, 'proj-1')
+      await flushMicrotasks()
       const ws = MockWebSocket.instances[0]
       sendWsLog(ws, makeRawLog(10, deploymentId))
       const mockFetch = vi.mocked(apiModule.api.fetchLogContextPage)
@@ -330,10 +354,11 @@ describe('trim 与历史游标同步', () => {
     vi.clearAllMocks()
   })
 
-  it('裁剪后 oldestCursor 前移到裁剪边界，hasMoreHistory 强制为 true', () => {
+  it('裁剪后 oldestCursor 前移到裁剪边界，hasMoreHistory 强制为 true', async () => {
     const store = useDeploymentLogStore()
     const deploymentId = 'dep-trim-cursor'
     store.subscribe(deploymentId)
+    await flushMicrotasks()
     const session = store.sessions.get(deploymentId)!
     session.hasMoreHistory = false
     const ws = MockWebSocket.instances[0]
@@ -356,6 +381,7 @@ describe('trim 与历史游标同步', () => {
     const store = useDeploymentLogStore()
     const deploymentId = 'dep-trim-before-time'
     store.subscribe(deploymentId)
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
     for (let i = 1; i <= 5501; i++) {
       sendWsLog(ws, makeRawLog(i, deploymentId))
@@ -375,10 +401,11 @@ describe('trim 与历史游标同步', () => {
     }))
   }, 30000)
 
-  it('trimmedFoldKeys 有 512 上限', () => {
+  it('trimmedFoldKeys 有 512 上限', async () => {
     const store = useDeploymentLogStore()
     const deploymentId = 'dep-trim-fold-cap'
     store.subscribe(deploymentId)
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
 
     for (let i = 1; i <= 5501; i++) {
@@ -397,9 +424,10 @@ describe('log ingestion', () => {
     vi.clearAllMocks()
   })
 
-  it('inserts logs in sorted order by timestamp+id', () => {
+  it('inserts logs in sorted order by timestamp+id', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep1')
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
 
     // 乱序发送，期望按 id/timestamp 排序
@@ -411,9 +439,10 @@ describe('log ingestion', () => {
     expect(logs.map(l => l.id)).toEqual(['x:1', 'x:2', 'x:3'])
   })
 
-  it('deduplicates by id', () => {
+  it('deduplicates by id', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep1')
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
 
     ws.onmessage?.({ data: JSON.stringify({ id: '1', timestamp: '2024-01-01T00:00:01Z', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
@@ -422,9 +451,10 @@ describe('log ingestion', () => {
     expect(store.getLogs('dep1')).toHaveLength(1)
   })
 
-  it('timestamp 无效时退回按 id 稳定排序', () => {
+  it('timestamp 无效时退回按 id 稳定排序', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-invalid-time')
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
 
     ws.onmessage?.({ data: JSON.stringify({ id: '1', timestamp: 'invalid-time', message: 'a', level: 'info', source_id: 'x', deployment_id: '', run_id: '', stream: '' }) })
@@ -459,9 +489,10 @@ describe('log ingestion', () => {
     expect(store.getLogs('dep-trim').length).toBeLessThanOrEqual(5000)
   }, 30000)
 
-  it('实时区超出 MAX_LOGS 时也会裁剪，避免 live-only 会话无限增长', () => {
+  it('实时区超出 MAX_LOGS 时也会裁剪，避免 live-only 会话无限增长', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-live-trim')
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
 
     for (let i = 1; i <= 5001; i++) {
@@ -479,9 +510,10 @@ describe('log ingestion', () => {
     expect(store.getLogs('dep-live-trim').length).toBeLessThanOrEqual(5000)
   }, 30000)
 
-  it('重复的无 rowid 实时日志不互相覆盖', () => {
+  it('重复的无 rowid 实时日志不互相覆盖', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-live-duplicate')
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
     const raw = {
       id: '0',
@@ -502,6 +534,7 @@ describe('log ingestion', () => {
   it('实时日志走 appendLive 追加，窗口内乱序不插到历史区上方', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-live-partition')
+    await flushMicrotasks()
     const mockFetch = vi.mocked(apiModule.api.fetchDeploymentLogs)
     mockFetch.mockResolvedValueOnce({
       items: [{ id: '10', deployment_id: 'dep-live-partition', run_id: '', timestamp: '2024-01-01T00:00:00Z', level: 'INFO', message: 'history', stream: 'stdout' }],
@@ -518,6 +551,7 @@ describe('log ingestion', () => {
   it('裁剪只裁历史头部，保留 fold 映射用于增量 miss 判定', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep-fold-trim')
+    await flushMicrotasks()
     const events: string[] = []
     window.addEventListener('superdev:log-panel', (event) => {
       events.push((event as CustomEvent).detail.event)
@@ -603,6 +637,7 @@ describe('loadMoreHistory', () => {
   it('does not let websocket ids advance the history pagination cursor', async () => {
     const store = useDeploymentLogStore()
     store.subscribe('dep1')
+    await flushMicrotasks()
     const ws = MockWebSocket.instances[0]
 
     ws.onmessage?.({ data: JSON.stringify({

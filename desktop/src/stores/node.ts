@@ -77,7 +77,12 @@ export const useNodeStore = defineStore('node', () => {
       error.value = err instanceof Error ? err.message : 'Failed to load node snapshot'
     }
     if (activeConsumers <= 0 || ws) return
-    ws = new WebSocket(nodesWsUrl())
+    const url = await nodesWsUrl()
+    // nodesWsUrl 现在是 async（内部要经 Tauri IPC 读取本机 token 再拼 access_token）。
+    // 这段 await 期间 stop() 完全可能被调用，因此拿到 url 后必须重新校验一次状态，
+    // 否则会建立一条没人持有引用、永远不会被关闭的 WebSocket（连接泄漏）。
+    if (activeConsumers <= 0 || ws) return
+    ws = new WebSocket(url)
     ws.onopen = () => {
       connected.value = true
       error.value = null

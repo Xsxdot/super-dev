@@ -10,6 +10,7 @@
  *   - 不处理签发轮询或表单校验
  */
 import { AGENT_HOST } from '@/api/agent'
+import { agentToken, invalidateAgentToken } from '@/lib/agentAuth'
 
 const BASE = `http://${AGENT_HOST}`
 
@@ -23,11 +24,21 @@ class HTTPError extends Error {
   }
 }
 
+async function buildHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = await agentToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  return headers
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
+  // 首次 401：多半是 agent 重启轮换了本机 token——失效缓存重取一次再试，
+  // 仍 401 则按既有错误路径抛出。重试静默进行，不打日志（高频路径）。
+  let res = await fetch(`${BASE}${path}`, { ...options, headers: await buildHeaders() })
+  if (res.status === 401) {
+    invalidateAgentToken()
+    res = await fetch(`${BASE}${path}`, { ...options, headers: await buildHeaders() })
+  }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`
     try {

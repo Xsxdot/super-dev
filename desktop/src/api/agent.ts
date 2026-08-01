@@ -1,4 +1,5 @@
 // API 封装对 Go agent HTTP 接口的请求，统一处理 baseURL 和错误。
+import { agentToken, invalidateAgentToken, withWsToken } from '@/lib/agentAuth'
 
 // dev 模式对应开发版 agent（57018），build 后对应正式版（57017）。
 // VITE_AGENT_HOST 只用于本地联调/截图 QA，避免临时 agent 占用默认端口。
@@ -86,33 +87,51 @@ export function isApprovalRequiredError(error: unknown): error is AgentAPIError 
   return error instanceof AgentAPIError && error.code === 'approval_required' && !!error.approval
 }
 
-function requestHeaders(headers?: HeadersInit): Record<string, string> {
+// requestHeaders 组装请求公共头并注入本机 agent token。
+//
+// 参数：
+//   - headers: 调用方自带的头（如 postWithApprovalToken 族的 X-SuperDev-Approval-Token）
+//
+// 注意：
+//   - 改为 async 是因为 agentToken() 经 Tauri IPC 读取，非同步操作
+//   - Authorization 放在调用方头之后合并，不会被调用方覆盖
+async function requestHeaders(headers?: HeadersInit): Promise<Record<string, string>> {
   const merged: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-SuperDev-Requester': 'desktop',
     'X-SuperDev-Requester-Label': 'SuperDev Desktop',
   }
-  if (!headers) return merged
-  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
-    headers.forEach((value, key) => {
-      merged[key] = value
-    })
-    return merged
+  if (headers) {
+    if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+      headers.forEach((value, key) => {
+        merged[key] = value
+      })
+    } else if (Array.isArray(headers)) {
+      for (const [key, value] of headers) merged[key] = value
+    } else {
+      Object.assign(merged, headers as Record<string, string>)
+    }
   }
-  if (Array.isArray(headers)) {
-    for (const [key, value] of headers) merged[key] = value
-    return merged
-  }
-  const plainHeaders = headers as Record<string, string>
-  return { ...merged, ...plainHeaders }
+  const token = await agentToken()
+  if (token) merged.Authorization = `Bearer ${token}`
+  return merged
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const { headers, ...rest } = options ?? {}
-  const res = await fetch(`${BASE}${path}`, {
+  // 首次 401：多半是 agent 重启轮换了本机 token——失效缓存重取一次再试。
+  // 仍 401 则按既有错误路径抛出（真无凭据/凭据被拒），重试过程不打日志（高频路径）。
+  let res = await fetch(`${BASE}${path}`, {
     ...rest,
-    headers: requestHeaders(headers),
+    headers: await requestHeaders(headers),
   })
+  if (res.status === 401) {
+    invalidateAgentToken()
+    res = await fetch(`${BASE}${path}`, {
+      ...rest,
+      headers: await requestHeaders(headers),
+    })
+  }
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`
     let body: AgentAPIErrorPayload | undefined
@@ -1778,6 +1797,10 @@ export const api = {
     request<TunnelStatus>(`/api/tunnels/${hostId}`, { method: 'POST' }),
   closeTunnel: (hostId: string) =>
     request<void>(`/api/tunnels/${hostId}`, { method: 'DELETE' }),
+  // 例外：这里刻意不走 request()/本机 token。localPort 是隧道在本地转发出来的端口，
+  // 请求实际落到的是【远端】agent，而不是本机 agent——本机的 local-access-token 对它
+  // 没有意义，塞进去只会被远端按错误凭据拒绝。这条连接的 Authorization 由隧道层
+  // applyAgentHeaders 用远端 token 单独注入，此处保持裸 fetch。
   ensureCollector: (_hostId: string, localPort: number, name: string, type: LogSourceType) => {
     const url = `http://127.0.0.1:${localPort}/api/collectors`
     return fetch(url, {
@@ -1836,26 +1859,30 @@ export const api = {
   },
 }
 
-/** deploymentWsUrl 返回指定 deployment 的 WebSocket 日志流 URL。 */
-export function deploymentWsUrl(
+// deploymentWsUrl 返回指定 deployment 的 WebSocket 日志流 URL。
+//
+// 注意：
+//   - 改为 async 是因为服务端 /ws/ 路径鉴权走 query 参数 access_token（浏览器 WebSocket
+//     无法设 Authorization 头），需经 withWsToken 异步读取本机 token 后拼接
+export async function deploymentWsUrl(
   deploymentId: string,
   opts?: { replay?: number; sinceTime?: string; sinceId?: string },
-): string {
+): Promise<string> {
   const base = `${WS_BASE}/ws/deployments/${encodeURIComponent(deploymentId)}/logs`
   const q = new URLSearchParams()
   if (opts?.replay) q.set('replay', String(opts.replay))
   if (opts?.sinceTime) q.set('since_time', opts.sinceTime)
   if (opts?.sinceId) q.set('since_id', opts.sinceId)
   const encoded = q.toString()
-  return encoded ? `${base}?${encoded}` : base
+  return withWsToken(encoded ? `${base}?${encoded}` : base)
 }
 
-/** nodesWsUrl 返回 NodeRegistry 快照 WebSocket URL。 */
-export function nodesWsUrl(): string {
-  return `${WS_BASE}/ws/nodes`
+/** nodesWsUrl 返回 NodeRegistry 快照 WebSocket URL（同上，附带 access_token）。 */
+export async function nodesWsUrl(): Promise<string> {
+  return withWsToken(`${WS_BASE}/ws/nodes`)
 }
 
-/** runLogsWsUrl 返回指定 pipeline run 的 WebSocket 日志流 URL。 */
-export function runLogsWsUrl(runId: string): string {
-  return `${WS_BASE}/ws/runs/${encodeURIComponent(runId)}/logs`
+/** runLogsWsUrl 返回指定 pipeline run 的 WebSocket 日志流 URL（同上，附带 access_token）。 */
+export async function runLogsWsUrl(runId: string): Promise<string> {
+  return withWsToken(`${WS_BASE}/ws/runs/${encodeURIComponent(runId)}/logs`)
 }

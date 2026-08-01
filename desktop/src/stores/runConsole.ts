@@ -145,7 +145,7 @@ export const useRunConsoleStore = defineStore('runConsole', () => {
     try {
       state.currentRun = await api.getProjectPipelineRun(projectId, pipelineId, runId)
       state.logs = []
-      connectLive(projectId, pipelineId, runId)
+      void connectLive(projectId, pipelineId, runId)
     } catch (e) {
       state.error = e instanceof Error ? e.message : 'Failed to load run'
     } finally {
@@ -153,9 +153,14 @@ export const useRunConsoleStore = defineStore('runConsole', () => {
     }
   }
 
-  function connectLive(projectId: string, pipelineId: string, runId: string) {
+  async function connectLive(projectId: string, pipelineId: string, runId: string) {
     const state = stateFor(runId)
-    const ws = new WebSocket(runLogsWsUrl(runId))
+    const url = await runLogsWsUrl(runId)
+    // runLogsWsUrl 现在是 async（要经 Tauri IPC 读本机 token 才能拼 access_token）。
+    // 等待期间该 run 可能已被 disposeRun 清理掉，此时放弃建连，
+    // 否则会产生一条脱离 runs 状态表、没人会关闭的孤儿 WebSocket。
+    if (runs.value.get(runId) !== state) return
+    const ws = new WebSocket(url)
     state.ws = ws
     ws.onmessage = event => handleRunEvent(runId, JSON.parse(event.data) as RunEvent)
     ws.onerror = () => {

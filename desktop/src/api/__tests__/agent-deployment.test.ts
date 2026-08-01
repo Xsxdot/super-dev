@@ -10,10 +10,11 @@ afterEach(() => {
 })
 
 describe('deploymentWsUrl', () => {
-  it('dev 模式下返回正确的 ws URL', () => {
+  it('dev 模式下返回正确的 ws URL', async () => {
     // WS_BASE 在 dev 模式下为 ws://127.0.0.1:57018，build 后为 ws://127.0.0.1:57017
     // 测试环境不是 dev，所以用 57017
-    const url = deploymentWsUrl('dep-abc')
+    // deploymentWsUrl 现在是 async（经 withWsToken 附带本机 access_token）
+    const url = await deploymentWsUrl('dep-abc')
     expect(url).toContain('/ws/deployments/dep-abc/logs')
   })
 
@@ -24,7 +25,7 @@ describe('deploymentWsUrl', () => {
     const agentModule = await import('@/api/agent')
 
     expect(agentModule.AGENT_HOST).toBe('127.0.0.1:57118')
-    expect(agentModule.deploymentWsUrl('dep-abc')).toContain('ws://127.0.0.1:57118')
+    expect(await agentModule.deploymentWsUrl('dep-abc')).toContain('ws://127.0.0.1:57118')
   })
 })
 

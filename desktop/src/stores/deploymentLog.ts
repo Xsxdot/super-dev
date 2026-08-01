@@ -262,12 +262,21 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     touchSessions()
   }
 
-  function connect(deploymentId: string, session: DeploymentSession) {
-    const ws = markRaw(new WebSocket(deploymentWsUrl(deploymentId, {
+  async function connect(deploymentId: string, session: DeploymentSession) {
+    const url = await deploymentWsUrl(deploymentId, {
       replay: session.lastSeen ? REPLAY_ON_RECONNECT : undefined,
       sinceTime: session.lastSeen?.time,
       sinceId: session.lastSeen?.id,
-    })))
+    })
+    // deploymentWsUrl 现在是 async（要经 Tauri IPC 读本机 token 才能拼 access_token）。
+    // 等待期间该 session 可能已被 unsubscribe 清理掉，此时放弃建连，
+    // 否则会产生一条脱离 sessions 状态表、没人会关闭的孤儿 WebSocket。
+    // 注意：不能用 `sessions.value.get(deploymentId) !== session` 做身份比较——
+    // sessions 是 ref(Map)，Vue 响应式代理对取出的对象值做了包一层 reactive()，
+    // .get() 拿到的是 reactive 代理，永远不会与这里持有的原始 session 引用全等。
+    // unsubscribe 归零时会直接把 refCount 写到这个原始对象上，判 refCount 足够可靠。
+    if (session.refCount <= 0) return
+    const ws = markRaw(new WebSocket(url))
     session.ws = ws
 
     ws.onmessage = event => {
@@ -313,7 +322,7 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
         setTimeout(() => {
           const latest = sessions.value.get(deploymentId)
           if (latest && latest.refCount > 0 && latest.ws === null) {
-            connect(deploymentId, latest)
+            void connect(deploymentId, latest)
           }
         }, 1000 * attempt)
       } else if (s.reconnectAttempts >= MAX_RECONNECT) {
@@ -409,7 +418,7 @@ export const useDeploymentLogStore = defineStore('deploymentLog', () => {
     session.projectId = projectId ?? null
     sessions.value.set(deploymentId, session)
     touchSessions()
-    connect(deploymentId, session)
+    void connect(deploymentId, session)
   }
 
   /**
