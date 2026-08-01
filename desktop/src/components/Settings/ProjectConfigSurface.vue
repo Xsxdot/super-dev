@@ -268,8 +268,14 @@ async function save() {
 // 回来的 work_dir/env_file）只有重新从后端拉取才准确——与 save() 同一条
 // 刷新路径（reloadProject → projectById → resetDraft），不能另起一套，
 // 否则两处对「保存后如何让本地状态追上后端」的理解会分叉。
+//
+// 注意：这里不关闭弹窗。ConfigMigrationDialog 收到 applyConfigMigration 的
+// 响应后会同步把自己的 phase 切到 'done' 再 emit migrated——如果这里把
+// showMigrationDialog 置为 false，会和弹窗自身的 'done' 渲染落在同一个
+// 同步栈里抢先触发 v-if 卸载，用户会在成功态还没画出来之前就被弹窗“消失”
+// 打断，看不到写了哪些产物、备份去了哪。刷新照常立刻做（横幅会在弹窗背后
+// 及时收敛），关闭交给用户自己点弹窗里的「关闭」按钮。
 async function handleMigrated() {
-  showMigrationDialog.value = false
   await agentStore.reloadProject(props.project.id)
   const reloaded = agentStore.projectById(props.project.id)
   if (reloaded) {
