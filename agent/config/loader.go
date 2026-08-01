@@ -210,6 +210,11 @@ func buildRawConfig(p model.Project, rootPath string, includeEnvSelected bool) m
 	}
 	if includeEnvSelected && len(p.EnvSelectedServiceIDs) > 0 {
 		raw["env_selected_service_ids"] = p.EnvSelectedServiceIDs
+	} else if !includeEnvSelected && len(p.EnvSelectedServiceIDs) > 0 {
+		// split 格式下该字段已迁移为 UI 本地状态，不写入 project.yaml；但调用方
+		// 可能仍在内存里带着旧值（如 handler_projects.go 的"先持久化再更新内存"
+		// 路径），静默丢弃会让 Task 4→Task 5 过渡期的行为无迹可查，必须留痕。
+		log.Printf("[SuperDev] config: split save dropped env_selected_service_ids envs=%d (UI state moved to local store)", len(p.EnvSelectedServiceIDs))
 	}
 	if p.ID != "" {
 		raw["id"] = p.ID
