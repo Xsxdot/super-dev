@@ -96,6 +96,11 @@ func (a *App) postConfigMigration(w http.ResponseWriter, r *http.Request) {
 	loader := config.NewLoader(p.RootPath)
 	reloaded, err := loader.Load()
 	if err != nil {
+		// 迁移本身已经落盘成功（磁盘已是 split 格式），只是这次重读失败——
+		// 内存态 a.projects 里仍是迁移前的旧值，与磁盘不一致。这个状态只回给
+		// 发起请求的客户端不够，必须留在服务端日志里，否则下次排查会误以为
+		// 迁移压根没跑。
+		log.Printf("[SuperDev] config: migration succeeded but reload failed project=%s err=%v", p.RootPath, err)
 		jsonError(w, http.StatusInternalServerError, "migrated but reload failed: "+err.Error())
 		return
 	}

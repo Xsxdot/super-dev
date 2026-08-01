@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -36,10 +37,19 @@ func NewUIStateStore(dataDir string) *UIStateStore {
 }
 
 // EnvSelected 返回项目各环境勾选的服务列表；无记录返回 nil。
+//
+// 注意：load 失败（如 uistate.json 损坏）在此处按空结果宽容处理，不向上
+// 返回错误——调用方（loadRegisteredProjects 启动叠加、迁移后 reload）没有
+// 合适的失败出口，硬失败会连带项目本身也加载不了。但必须打日志，否则
+// "为什么我保存的勾选状态突然清空了" 这类问题会无迹可查。
 func (s *UIStateStore) EnvSelected(rootPath string) map[string][]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	all, _ := s.load()
+	all, err := s.load()
+	if err != nil {
+		log.Printf("[SuperDev] uistate: load failed, treating as no selection project=%s err=%v", rootPath, err)
+		return nil
+	}
 	return all[rootPath].EnvSelectedServiceIDs
 }
 

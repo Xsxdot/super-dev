@@ -9,7 +9,7 @@ SuperDev 管理开发项目在不同工作副本和运行位置中的服务，�
 _Avoid_: Repository Copy, Worktree Project
 
 **Workspace Project View**:
-从一个具体 Workspace 的 `.superdev/config.yaml` 加载出的 Project、Service 与 Deployment 运行定义快照；同一 Project 的不同 Workspace 可以拥有不同 view。
+从一个具体 Workspace 的 `.superdev/` 配置加载出的 Project、Service 与 Deployment 运行定义快照——新项目为共享层 `project.yaml`（入库）与机器层 `local.yaml`（gitignore）合并读取，未迁移的旧项目仍是单文件 `config.yaml`；同一 Project 的不同 Workspace 可以拥有不同 view。
 _Avoid_: Logical Project, Merged Worktree Config, Global Service List
 
 **Workspace Config Revision**:
