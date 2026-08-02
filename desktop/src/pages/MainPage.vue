@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAgentStore } from '@/stores/agent'
 import { useNodeStore } from '@/stores/node'
+import { usePortMirrorStore } from '@/stores/portMirror'
 import { useWorkspaceStore } from '@/stores/workspace'
 import SidebarView from '@/components/Sidebar/SidebarView.vue'
 import WorkspaceShell from '@/components/Workspace/WorkspaceShell.vue'
@@ -11,9 +12,14 @@ import BottomBar from '@/components/BottomBar.vue'
 
 const agentStore = useAgentStore()
 const nodeStore = useNodeStore()
+const portMirrorStore = usePortMirrorStore()
 const workspace = useWorkspaceStore()
 agentStore.startPolling()
 void nodeStore.start()
+// EnvGroup/BottomBar 读 portMirrorStore.mirrors 展示端口镜像状态（Task 10），但都只读
+// store、不负责启动订阅——和 nodeStore 一样，订阅生命周期统一在页面级发起，ref-counted、
+// app 生命周期内常驻，与 nodeStore.start() 的既有约定一致。
+void portMirrorStore.start()
 
 const showAppTopbar = computed(() => !workspace.isRuntimeWorkspaceMaximized)
 const showWorkspaceTabs = computed(() =>

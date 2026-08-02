@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MainPage from '../MainPage.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { usePortMirrorStore } from '@/stores/portMirror'
 import { installTestI18n } from '@/test-utils/i18n'
 
 const windowApiMock = vi.hoisted(() => ({
@@ -148,5 +149,19 @@ describe('MainPage', () => {
     expect(contentRow.parentElement).toBe(layout)
     expect(bottomBar.parentElement).toBe(layout)
     expect(contentRow.contains(bottomBar)).toBe(false)
+  })
+
+  it('starts the port mirror store subscription on setup, alongside nodeStore (fire-and-forget, app-lifetime)', () => {
+    vi.spyOn(useAgentStore(), 'startPolling').mockImplementation(() => undefined)
+    // 在 mount 之前先取得 store 实例再 spy——setActivePinia 已在 beforeEach 建好唯一活跃
+    // 实例，MainPage.vue 内部 usePortMirrorStore() 拿到的是同一个单例，spy 才能命中。
+    const startSpy = vi.spyOn(usePortMirrorStore(), 'start').mockResolvedValue(undefined)
+
+    mount(MainPage, { global: { plugins: [installTestI18n()] } })
+
+    // EnvGroup/BottomBar（Task 10）只读 portMirrorStore.mirrors，不启动订阅；没有页面级
+    // 调用 start() 的话，mirrors 永远是空数组，端口镜像 UI 在真实 app 里就是空的。
+    // 这条测试钉住页面级的启动调用，防止未来重构悄悄丢掉这行。
+    expect(startSpy).toHaveBeenCalledTimes(1)
   })
 })
