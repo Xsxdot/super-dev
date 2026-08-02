@@ -1123,6 +1123,11 @@ export default {
         'collector-failed': 'collector 失败',
         'collector-error': 'collector 异常',
       },
+      mirror: {
+        active: ':{port} ⇄ 本机:{port} 已镜像',
+        conflict: ':{port} 镜像冲突',
+        open: '打开',
+      },
     },
   },
   runtimeWorkbench: {
@@ -1202,6 +1207,11 @@ export default {
     noSyncCopy: '日志录制区间内没有可复制的日志',
     noSyncExport: '日志录制区间内没有可导出的日志',
     exportTitle: '导出日志录制日志',
+    mirror: {
+      groupLabel: '端口镜像',
+      active: '已镜像',
+      conflict: '端口冲突',
+    },
   },
   panel: {
     emptyTitle: '未选择',

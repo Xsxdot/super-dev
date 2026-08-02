@@ -5,8 +5,9 @@ import EnvGroup from '@/components/Sidebar/EnvGroup.vue'
 import { api } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { useNodeStore } from '@/stores/node'
+import { usePortMirrorStore } from '@/stores/portMirror'
 import { installTestI18n } from '@/test-utils/i18n'
-import type { Deployment, Health, NodeStatus, Service } from '@/api/agent'
+import type { Deployment, Health, MirrorStatus, NodeStatus, Service } from '@/api/agent'
 
 vi.mock('@/api/agent', async () => {
   const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
@@ -19,6 +20,11 @@ vi.mock('@/api/agent', async () => {
     },
   }
 })
+
+// EnvGroup 的"↗ 打开"按钮走 @tauri-apps/plugin-shell 的 open()，不是 window.open——
+// mock 掉真实 Tauri IPC，只验证组件是否以正确的 URL 调用它。
+const shellMocks = vi.hoisted(() => ({ open: vi.fn() }))
+vi.mock('@tauri-apps/plugin-shell', () => ({ open: shellMocks.open }))
 
 const mockedApi = api as unknown as Record<string, Mock>
 
@@ -75,6 +81,20 @@ function makeNode(hostId: string, name: string, deploymentId: string, health: He
       }],
     },
     updated_at: new Date(0).toISOString(),
+  }
+}
+
+// mirror 构造一条测试用 MirrorStatus，默认对应 makeService('svc-1', ...) 产出的 dep-svc-1。
+function mirror(overrides: Partial<MirrorStatus> = {}): MirrorStatus {
+  return {
+    host_id: 'h1',
+    host_name: 'dev-box',
+    deployment_id: 'dep-svc-1',
+    service_name: 'web',
+    port: 9100,
+    state: 'active',
+    updated_at: '2026-06-06T10:00:00Z',
+    ...overrides,
   }
 }
 
@@ -473,5 +493,101 @@ describe('EnvGroup', () => {
     expect(wrapper.findAll('[data-test="env-node-leaf-row"]')).toHaveLength(2)
     expect(wrapper.find('[data-test="env-node-leaf-list"]').text()).toContain('ali-01')
     expect(wrapper.find('[data-test="env-node-leaf-list"]').text()).toContain('collector 未运行')
+  })
+
+  describe('端口镜像呈现', () => {
+    it('active 镜像追加在已有 meta 之后，不覆盖 version/replicas', () => {
+      const portMirrorStore = usePortMirrorStore()
+      portMirrorStore.applySnapshot([mirror({ port: 9100, state: 'active' })])
+
+      const wrapper = mount(EnvGroup, {
+        props: {
+          envName: 'dev',
+          isDev: true,
+          projectId: 'proj-1',
+          services: [makeService('svc-1', 'web', 'dev', {}, { version: 'v1.2.3', replicas: 2 } as Partial<Service>)],
+          selectedServiceIds: new Set<string>(),
+        },
+        global: { plugins: [installTestI18n()] },
+      })
+
+      const meta = wrapper.find('[data-test="service-meta"]').text()
+      // 既有 version/replicas 优先级不变——它们仍然是 meta 文本最前面的部分。
+      expect(meta).toContain('v1.2.3')
+      expect(meta).toContain('2 replicas')
+      expect(meta.indexOf('v1.2.3')).toBeLessThan(meta.indexOf('9100'))
+      expect(meta).toContain(':9100')
+      expect(meta).toContain('已镜像')
+    })
+
+    it('没有镜像时不渲染任何镜像相关 meta 片段', () => {
+      const wrapper = mount(EnvGroup, {
+        props: {
+          envName: 'dev',
+          isDev: true,
+          projectId: 'proj-1',
+          services: [makeService('svc-1', 'web', 'dev')],
+          selectedServiceIds: new Set<string>(),
+        },
+        global: { plugins: [installTestI18n()] },
+      })
+
+      expect(wrapper.find('[data-test="service-meta-mirror"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="service-meta-mirror-conflict"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="service-mirror-open"]').exists()).toBe(false)
+    })
+
+    it('冲突镜像渲染 .meta-warn 且点击 emit mirror-conflict-click，不触发行点击', async () => {
+      const portMirrorStore = usePortMirrorStore()
+      portMirrorStore.applySnapshot([mirror({ host_id: 'h2', port: 5173, state: 'conflict' })])
+
+      const wrapper = mount(EnvGroup, {
+        props: {
+          envName: 'dev',
+          isDev: true,
+          projectId: 'proj-1',
+          services: [makeService('svc-1', 'web', 'dev')],
+          selectedServiceIds: new Set<string>(),
+        },
+        global: { plugins: [installTestI18n()] },
+      })
+
+      const warn = wrapper.find('[data-test="service-meta-mirror-conflict"]')
+      expect(warn.exists()).toBe(true)
+      expect(warn.classes()).toContain('meta-warn')
+      expect(warn.text()).toContain('5173')
+
+      await warn.trigger('click')
+
+      const emitted = wrapper.emitted('mirror-conflict-click')
+      expect(emitted).toBeTruthy()
+      expect(emitted![0][0]).toEqual({ hostId: 'h2', port: 5173 })
+      // 冲突段点击只应打开弹窗（Task 11 消费该事件），不应连带触发行点击打开日志面板。
+      expect(wrapper.emitted('open-deployment')).toBeFalsy()
+    })
+
+    it('active 镜像的 ↗ 打开按钮通过 plugin-shell 打开本机地址，不触发行点击', async () => {
+      const portMirrorStore = usePortMirrorStore()
+      portMirrorStore.applySnapshot([mirror({ port: 9100, state: 'active' })])
+
+      const wrapper = mount(EnvGroup, {
+        props: {
+          envName: 'dev',
+          isDev: true,
+          projectId: 'proj-1',
+          services: [makeService('svc-1', 'web', 'dev')],
+          selectedServiceIds: new Set<string>(),
+        },
+        global: { plugins: [installTestI18n()] },
+      })
+
+      const openBtn = wrapper.find('[data-test="service-mirror-open"]')
+      expect(openBtn.exists()).toBe(true)
+
+      await openBtn.trigger('click')
+
+      expect(shellMocks.open).toHaveBeenCalledWith('http://127.0.0.1:9100')
+      expect(wrapper.emitted('open-deployment')).toBeFalsy()
+    })
   })
 })

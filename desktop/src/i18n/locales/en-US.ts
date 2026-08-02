@@ -1123,6 +1123,11 @@ export default {
         'collector-failed': 'collector failed',
         'collector-error': 'collector error',
       },
+      mirror: {
+        active: ':{port} ⇄ local:{port} mirrored',
+        conflict: ':{port} port mirror conflict',
+        open: 'Open',
+      },
     },
   },
   runtimeWorkbench: {
@@ -1202,6 +1207,11 @@ export default {
     noSyncCopy: 'No logs to copy in the log recording range',
     noSyncExport: 'No logs to export in the log recording range',
     exportTitle: 'Export log recording logs',
+    mirror: {
+      groupLabel: 'Port Mirroring',
+      active: 'Mirrored',
+      conflict: 'Port conflict',
+    },
   },
   panel: {
     emptyTitle: 'No selection',

@@ -11,12 +11,14 @@ import OperationApprovalPopover from '@/components/OperationApprovalPopover.vue'
 import EvidenceDrawer from '@/components/Evidence/EvidenceDrawer.vue'
 import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
+import { usePortMirrorStore } from '@/stores/portMirror'
 import {
   buildDeploymentNodeStatus,
   type DeploymentAggregateNodeStatus,
   type DeploymentNodeIssueKind,
   type DeploymentNodeState,
 } from '@/lib/deploymentNodeStatus'
+import { mirrorRowsForDeployment } from '@/lib/portMirrorView'
 import { AGENT_HOST } from '@/api/agent'
 import type { Deployment } from '@/api/agent'
 
@@ -29,6 +31,7 @@ const evidenceStore = useLogEvidenceStore()
 const operationApprovalStore = useOperationApprovalStore()
 const remoteStore = useRemoteStore()
 const nodeStore = useNodeStore()
+const portMirrorStore = usePortMirrorStore()
 const router = useRouter()
 const { t } = useI18n()
 const approvalsPopoverOpen = ref(false)
@@ -163,6 +166,33 @@ const nodeHealthColor = (health: string) => {
 
 function deploymentDotColor(svc: { deployment: Deployment; status: string; aggregate: DeploymentAggregateNodeStatus }) {
   return svc.deployment.location === 'remote' ? nodeHealthColor(svc.aggregate.health) : statusColor(svc.status)
+}
+
+/** MirrorChip 是端口镜像 group 单个 chip 的呈现数据，key 用于 v-for，其余字段直接渲染。 */
+interface MirrorChip {
+  key: string
+  port: number
+  hostName: string
+  conflict: boolean
+}
+
+// mirrorChips 端口镜像 group 用的 chip 列表：只看当前已在面板打开的 deployment
+// （与 open-group/log-display-group 同一套"打开的部署"作用域，不是项目里全部镜像），
+// 每个 deployment 只取 active/conflict 两种稳定态——pending/纯技术性 failed 不进 chip，
+// 与 mirrorRowsForDeployment 的调用方约定一致（见 lib/portMirrorView.ts）。
+const mirrorChips = computed<MirrorChip[]>(() => {
+  const chips: MirrorChip[] = []
+  for (const svc of panelServices.value) {
+    for (const row of mirrorRowsForDeployment(svc.id, portMirrorStore.mirrors)) {
+      if (row.state !== 'active' && !row.conflict) continue
+      chips.push({ key: `${svc.id}:${row.hostId}:${row.port}`, port: row.port, hostName: row.hostName, conflict: row.conflict })
+    }
+  }
+  return chips
+})
+
+function mirrorDotColor(conflict: boolean): string {
+  return conflict ? 'var(--status-warning)' : 'var(--status-running)'
 }
 
 function issueLabel(kind: DeploymentNodeIssueKind, detail?: string): string {
@@ -396,6 +426,28 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <!-- 端口镜像 group：新增，放在运行状态 group 之前。证据 group（上方）不受影响——
+         这是追加的新 group，不是替换任何既有 group。 -->
+    <section
+      v-if="mirrorChips.length > 0"
+      class="bottom-group mirror-group"
+      data-test="bottom-mirror"
+    >
+      <span class="group-label">{{ t('bottomBar.mirror.groupLabel') }}</span>
+      <div class="mirror-chips">
+        <div
+          v-for="chip in mirrorChips"
+          :key="chip.key"
+          class="service-chip mirror-chip"
+          data-test="bottom-mirror-chip"
+          :title="chip.conflict ? t('bottomBar.mirror.conflict') : t('bottomBar.mirror.active')"
+        >
+          <span class="dot" :style="{ background: mirrorDotColor(chip.conflict) }" />
+          <span class="svc-name">:{{ chip.port }} ⇄ {{ chip.hostName }}</span>
+        </div>
+      </div>
+    </section>
+
     <section class="bottom-group runtime-group" data-test="bottom-runtime-status">
       <span class="group-label">{{ t('bottomBar.runtimeStatus') }}</span>
       <div data-test="agent-status" class="agent-status" :title="agentHost">
@@ -469,6 +521,18 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.mirror-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 复用 .service-chip 的盒模型（边框/背景/高度/圆角），这里没有勾选框，所以去掉
+   继承来的 pointer 光标——chip 本身不可点击，只是状态展示。 */
+.mirror-chip {
+  cursor: default;
 }
 
 .deployment-node-group {

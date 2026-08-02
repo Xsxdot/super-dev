@@ -15,9 +15,11 @@ EnvGroup：侧边栏 Environment 分组。
 <script setup lang="ts">
 import { ref, computed, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { open as openShellUrl } from '@tauri-apps/plugin-shell'
 import { useAgentStore } from '@/stores/agent'
 import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
+import { usePortMirrorStore } from '@/stores/portMirror'
 import { useDragDrop } from '@/composables/useDragDrop'
 import {
   buildDeploymentNodeStatus,
@@ -25,6 +27,11 @@ import {
   type DeploymentNodeIssueKind,
   type DeploymentNodeState,
 } from '@/lib/deploymentNodeStatus'
+import {
+  mirrorRowsForDeployment,
+  mirrorSummaryForDeployment,
+  type MirrorRowView,
+} from '@/lib/portMirrorView'
 import type { Deployment, RuntimeInstanceStatus, Service } from '@/api/agent'
 
 const props = withDefaults(defineProps<{
@@ -42,11 +49,14 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'open-deployment': [payload: { deploymentId: string; title: string }]
   'search': []
+  // 冲突段被点击时 emit，携带 hostId/port；本组件不负责弹窗，Task 11 的冲突详情弹窗消费该事件。
+  'mirror-conflict-click': [payload: { hostId: string; port: number }]
 }>()
 
 const agentStore = useAgentStore()
 const remoteStore = useRemoteStore()
 const nodeStore = useNodeStore()
+const portMirrorStore = usePortMirrorStore()
 const { t } = useI18n()
 const { startServiceDrag, moveServiceDrag, endServiceDrag, finishServiceDrag } = useDragDrop()
 const remoteManagedStatuses = computed(() =>
@@ -258,6 +268,70 @@ function deploymentMetaLabel(svc: Service): string {
   }
   const mode = dep.control_mode ?? dep.runtime?.type ?? dep.location
   return t('shell.env.serviceMetaFallback', { location: dep.location, mode })
+}
+
+// ===== 端口镜像呈现（Task 10）=====
+//
+// 为什么镜像段拼在 deploymentMetaLabel 之后而不是重写它：deploymentMetaLabel 已经承载了
+// version/replicas（或远端节点摘要/兜底文案）这条既有的、优先级明确的信息线，端口镜像是
+// 后加的正交信息（服务在哪个版本/多少副本运行 vs. 它的端口有没有镜像到本机），两者不冲突、
+// 不该互相覆盖。用同一个字符串重写会把"要不要展示镜像"和"版本溯源"两套判断逻辑耦合到一起，
+// 未来任何一边改判断条件都可能误伤另一边；拼接段则让 mirrorSummaryFor 保持独立可测，
+// deploymentMetaLabel 的既有行为（含它自己的测试用例）完全不受影响。
+
+/** mirrorSummaryFor 返回该 service 对应 deployment 的端口镜像摘要，服务行 meta 追加段据此渲染。 */
+function mirrorSummaryFor(svc: Service) {
+  const dep = deploymentForService(svc)
+  if (!dep) return { kind: 'none' as const }
+  return mirrorSummaryForDeployment(dep.id, portMirrorStore.mirrors)
+}
+
+/**
+ * mirrorMetaText 把镜像摘要渲染成追加到 deploymentMetaLabel 之后的文本（不含前导" · "
+ * 分隔符和冲突态的"⚠"后缀——两者的展现形式因摘要 kind 不同，交给模板决定）。
+ *
+ * 注意：
+ *   - deploymentMetaLabel 只有在 !dep 时才返回空串，而 !dep 时 mirrorSummaryFor 也一定是
+ *     none（不会走到这里）——因此只要本函数返回非空，deploymentMetaLabel(svc) 一定已经是
+ *     非空文本，模板拼接的前导" · "分隔符不会出现在空文本前面，无需额外判空兜底。
+ */
+function mirrorMetaText(svc: Service): string {
+  const summary = mirrorSummaryFor(svc)
+  if (summary.kind === 'conflict') return t('shell.env.mirror.conflict', { port: summary.port })
+  if (summary.kind === 'ok') return summary.ports.map(port => t('shell.env.mirror.active', { port })).join(', ')
+  return ''
+}
+
+/**
+ * onMirrorConflictClick 冲突段被点击时 emit 事件，携带发生冲突的 hostId/port。
+ *
+ * 注意：本任务只负责 emit，冲突详情弹窗由 Task 11 消费该事件实现。
+ */
+function onMirrorConflictClick(svc: Service) {
+  const dep = deploymentForService(svc)
+  if (!dep) return
+  const row = mirrorRowsForDeployment(dep.id, portMirrorStore.mirrors).find(r => r.conflict)
+  if (!row) return
+  emit('mirror-conflict-click', { hostId: row.hostId, port: row.port })
+}
+
+/** activeMirrorRows 取该 service 当前已建立（active、可打开）的镜像行，供 hover 打开按钮使用。 */
+function activeMirrorRows(svc: Service): MirrorRowView[] {
+  const dep = deploymentForService(svc)
+  if (!dep) return []
+  return mirrorRowsForDeployment(dep.id, portMirrorStore.mirrors).filter(row => row.state === 'active')
+}
+
+/**
+ * openMirrorUrl 打开镜像后的本机地址。
+ *
+ * 注意：Tauri 桌面壳里普通 <a>/window.open 打开外部链接不可靠（没有系统浏览器上下文），
+ * 必须走 @tauri-apps/plugin-shell 的 open()，由系统默认程序处理，这里显式导入使用而不是
+ * window.open。
+ */
+async function openMirrorUrl(url: string | undefined) {
+  if (!url) return
+  await openShellUrl(url)
 }
 
 // isServiceOpen 判断本 env 下 service 的 deployment 是否已在某面板打开（用于行高亮）。
@@ -486,7 +560,40 @@ onUnmounted(() => {
             <div class="service-topline">
               <span class="service-name">{{ svc.name }}</span>
             </div>
-            <div class="service-meta" data-test="service-meta">{{ deploymentMetaLabel(svc) }}</div>
+            <!-- 镜像段拼在 deploymentMetaLabel(svc) 之后，见上方 script 里同名注释：保持
+                 既有 version/replicas 优先级不动，端口镜像是正交的追加信息。 -->
+            <div class="service-meta" data-test="service-meta">{{ deploymentMetaLabel(svc) }}<span
+              v-if="mirrorSummaryFor(svc).kind === 'ok'"
+              class="mirror-meta-segment"
+              data-test="service-meta-mirror"
+            > · {{ mirrorMetaText(svc) }}</span><span
+              v-else-if="mirrorSummaryFor(svc).kind === 'conflict'"
+              class="mirror-meta-segment meta-warn"
+              data-test="service-meta-mirror-conflict"
+              role="button"
+              tabindex="0"
+              @click.stop="onMirrorConflictClick(svc)"
+              @pointerdown.stop
+              @keydown.enter.prevent="onMirrorConflictClick(svc)"
+              @keydown.space.prevent="onMirrorConflictClick(svc)"
+            > · {{ mirrorMetaText(svc) }} ⚠</span></div>
+          </div>
+          <div
+            v-if="activeMirrorRows(svc).length > 0"
+            class="mirror-open-actions"
+            data-test="service-mirror-open-actions"
+            @click.stop
+            @pointerdown.stop
+          >
+            <button
+              v-for="row in activeMirrorRows(svc)"
+              :key="row.port"
+              type="button"
+              class="mirror-open-btn"
+              data-test="service-mirror-open"
+              :title="t('shell.env.mirror.open')"
+              @click="openMirrorUrl(row.openUrl)"
+            >↗ {{ t('shell.env.mirror.open') }}</button>
           </div>
           <button
             v-if="shouldShowNodeLeaves(svc)"
@@ -690,7 +797,10 @@ onUnmounted(() => {
 
 .env-service-row {
   display: grid;
-  grid-template-columns: 14px 10px minmax(0, 1fr) auto auto;
+  /* 第 4 个 auto 轨道给 .mirror-open-actions（Task 10 新增，条件渲染）；它和后面的
+     node-toggle/row-actions 一样都是 auto 尺寸，不存在时不占空间，行为与既有两个
+     可选列一致，不影响没有镜像的行的既有布局。 */
+  grid-template-columns: 14px 10px minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 9px;
   min-height: 72px;
@@ -871,5 +981,46 @@ onUnmounted(() => {
 
 .row-action.stop {
   color: #f85149;
+}
+
+/* 端口镜像呈现（Task 10）。颜色沿用项目已有的 --status-* 语义变量（style.css 的
+   :root 定义，与本文件其余状态色一致），不搬原型 CSS 里的裸 hex 值。 */
+.mirror-meta-segment.meta-warn {
+  color: var(--status-warning);
+  cursor: pointer;
+}
+
+.mirror-meta-segment.meta-warn:hover {
+  text-decoration: underline;
+}
+
+.mirror-open-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.mirror-open-btn {
+  padding: 2px 7px;
+  border: 1px solid rgba(139, 148, 158, 0.24);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  /* hover 显示：默认透明、行 hover 时才显现，与 ServiceRail.vue 的 .rail-del/:hover
+     revealed-action 是同一约定。 */
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.env-service-row:hover .mirror-open-btn {
+  opacity: 1;
+}
+
+.mirror-open-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 </style>

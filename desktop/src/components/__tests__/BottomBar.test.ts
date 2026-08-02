@@ -20,8 +20,9 @@ import { useLogEvidenceStore } from '../../stores/logEvidence'
 import { useOperationApprovalStore } from '../../stores/operationApproval'
 import { usePanelStore } from '../../stores/panel'
 import { useDeploymentNodeSelectionStore } from '../../stores/deploymentNodeSelection'
+import { usePortMirrorStore } from '../../stores/portMirror'
 import { installTestI18n } from '@/test-utils/i18n'
-import type { LogEntry, Project, Service } from '../../api/agent'
+import type { LogEntry, MirrorStatus, Project, Service } from '../../api/agent'
 
 const tauriMocks = vi.hoisted(() => ({
   save: vi.fn(),
@@ -91,6 +92,20 @@ function makeRemoteService(
   }
 }
 
+
+// mirror 构造一条测试用 MirrorStatus，默认是一条正常建立的 active 镜像。
+function mirror(overrides: Partial<MirrorStatus> = {}): MirrorStatus {
+  return {
+    host_id: 'h1',
+    host_name: 'dev-box',
+    deployment_id: 'dep-api',
+    service_name: 'api',
+    port: 9100,
+    state: 'active',
+    updated_at: '2026-06-06T10:00:00Z',
+    ...overrides,
+  }
+}
 
 function makeLog(deploymentId: string, message: string, timestamp: string): LogEntry {
   return {
@@ -385,5 +400,47 @@ describe('BottomBar', () => {
     expect(nodeSelectionStore.selectedHostIds('dep-api')).toEqual(['h1', 'h2'])
     expect(nodeSelectionStore.selectedHostIds('dep-worker')).toEqual(['h2'])
     expect(wrapper.find('[data-test="bottom-log-display-toggle"]').text()).toContain('节点 3/4')
+  })
+
+  describe('端口镜像 group', () => {
+    it('有镜像时渲染 chips group，且证据 group 仍然保留（新 group 是追加，不是替换）', async () => {
+      const { wrapper, apiDep, workerDep } = await mountBottomBarWithServices()
+      const portMirrorStore = usePortMirrorStore()
+      portMirrorStore.applySnapshot([
+        mirror({ deployment_id: apiDep, host_id: 'h1', host_name: 'dev-box', port: 9100, state: 'active' }),
+        mirror({ deployment_id: workerDep, host_id: 'h2', host_name: 'dev-box-2', port: 5173, state: 'conflict' }),
+      ])
+      await nextTick()
+
+      expect(wrapper.find('[data-test="bottom-mirror"]').exists()).toBe(true)
+      const chips = wrapper.findAll('[data-test="bottom-mirror-chip"]')
+      expect(chips).toHaveLength(2)
+      expect(chips[0].text()).toContain(':9100')
+      expect(chips[0].text()).toContain('dev-box')
+      expect(chips[1].text()).toContain(':5173')
+      expect(chips[1].text()).toContain('dev-box-2')
+
+      // 端口镜像 group 是新增的，证据 group（既有功能）必须仍然保留，不能被顶掉。
+      expect(wrapper.find('[data-test="bottom-evidence"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="bottom-evidence-open"]').exists()).toBe(true)
+    })
+
+    it('pending/duplicate-failed 镜像不渲染 chip（只有 active/conflict 才是用户需要关注的稳定态）', async () => {
+      const { wrapper, apiDep } = await mountBottomBarWithServices()
+      const portMirrorStore = usePortMirrorStore()
+      portMirrorStore.applySnapshot([
+        mirror({ deployment_id: apiDep, port: 9100, state: 'pending' }),
+        mirror({ deployment_id: apiDep, port: 9200, state: 'failed', error: 'duplicate_port_declaration' }),
+      ])
+      await nextTick()
+
+      expect(wrapper.find('[data-test="bottom-mirror"]').exists()).toBe(false)
+    })
+
+    it('没有任何镜像时不渲染端口镜像 group', async () => {
+      const { wrapper } = await mountBottomBarWithServices()
+
+      expect(wrapper.find('[data-test="bottom-mirror"]').exists()).toBe(false)
+    })
   })
 })
