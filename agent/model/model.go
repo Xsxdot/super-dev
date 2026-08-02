@@ -1109,6 +1109,10 @@ type Deployment struct {
 	Logs *LogConfig `json:"logs,omitempty" yaml:"logs,omitempty"`
 	// Web 描述该 deployment 暴露给本机浏览器的前端入口。
 	Web *WebEntrypointConfig `json:"web,omitempty" yaml:"web,omitempty"`
+	// Ports 声明该 deployment 运行时监听的本机端口（服务自身绑定的端口）。
+	// 端口镜像据此建立同端口转发——「不猜端口、不扫描」的唯一事实来源。
+	// 属共享层配置（project.yaml 随 git 流动）；为空表示不参与端口镜像。
+	Ports []int `json:"ports,omitempty" yaml:"ports,omitempty"`
 	// CodeDebug 描述该 deployment 是否允许 AI 打开本机代码调试会话。
 	CodeDebug *CodeDebugConfig `json:"code_debug,omitempty" yaml:"code_debug,omitempty"`
 

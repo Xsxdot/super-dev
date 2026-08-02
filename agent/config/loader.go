@@ -592,21 +592,24 @@ type deploymentYAML struct {
 	EnvFile     string `yaml:"env_file,omitempty"`
 	// EnvVars 使用 yaml key "env_vars" 而非 "env"，因为 "env" 已被 Env 字段（env_name）
 	// 占用。serviceYAML 沿用老格式的 "env" key，两者最终都映射到 model.Deployment.Env。
-	EnvVars      map[string]string          `yaml:"env_vars,omitempty"`
-	Hosts        []string                   `yaml:"hosts,omitempty"`
-	LogType      string                     `yaml:"log_type,omitempty"`
-	LogTarget    string                     `yaml:"log_target,omitempty"`
-	ExtraArgs    []string                   `yaml:"extra_args,omitempty"`
-	Runtime      *model.RuntimeConfig       `yaml:"runtime,omitempty"`
-	Logs         *model.LogConfig           `yaml:"logs,omitempty"`
-	Web          *model.WebEntrypointConfig `yaml:"web,omitempty"`
-	CodeDebug    *model.CodeDebugConfig     `yaml:"code_debug,omitempty"`
-	StartOnBoot  bool                       `yaml:"start_on_boot,omitempty"`
-	DependsOn    []string                   `yaml:"depends_on,omitempty"`
-	Readiness    *model.ReadinessProbe      `yaml:"readiness,omitempty"`
-	ReadOnly     bool                       `yaml:"read_only,omitempty"`
-	StartCommand string                     `yaml:"start_command,omitempty"`
-	StopCommand  string                     `yaml:"stop_command,omitempty"`
+	EnvVars   map[string]string          `yaml:"env_vars,omitempty"`
+	Hosts     []string                   `yaml:"hosts,omitempty"`
+	LogType   string                     `yaml:"log_type,omitempty"`
+	LogTarget string                     `yaml:"log_target,omitempty"`
+	ExtraArgs []string                   `yaml:"extra_args,omitempty"`
+	Runtime   *model.RuntimeConfig       `yaml:"runtime,omitempty"`
+	Logs      *model.LogConfig           `yaml:"logs,omitempty"`
+	Web       *model.WebEntrypointConfig `yaml:"web,omitempty"`
+	// Ports 声明该 deployment 运行时监听的本机端口，随 model.Deployment.Ports 直传，
+	// 不做路径解析——端口是纯数值，没有相对/绝对之分。
+	Ports        []int                  `yaml:"ports,omitempty"`
+	CodeDebug    *model.CodeDebugConfig `yaml:"code_debug,omitempty"`
+	StartOnBoot  bool                   `yaml:"start_on_boot,omitempty"`
+	DependsOn    []string               `yaml:"depends_on,omitempty"`
+	Readiness    *model.ReadinessProbe  `yaml:"readiness,omitempty"`
+	ReadOnly     bool                   `yaml:"read_only,omitempty"`
+	StartCommand string                 `yaml:"start_command,omitempty"`
+	StopCommand  string                 `yaml:"stop_command,omitempty"`
 }
 
 // serviceYAML 对应 yaml 文件中服务条目，仅作为 deployment 的逻辑分组。
@@ -749,6 +752,7 @@ func deploymentsFromYAML(raw []deploymentYAML, rootPath string) []model.Deployme
 			Runtime:      d.Runtime,
 			Logs:         d.Logs,
 			Web:          d.Web,
+			Ports:        d.Ports,
 			CodeDebug:    d.CodeDebug,
 			StartOnBoot:  d.StartOnBoot,
 			DependsOn:    d.DependsOn,
@@ -844,6 +848,7 @@ func deploymentsToYAML(deps []model.Deployment, rootPath string) []deploymentYAM
 			Runtime:      relativizeRuntime(d.Runtime, rootPath),
 			Logs:         d.Logs,
 			Web:          d.Web,
+			Ports:        d.Ports,
 			CodeDebug:    d.CodeDebug,
 			StartOnBoot:  d.StartOnBoot,
 			DependsOn:    d.DependsOn,

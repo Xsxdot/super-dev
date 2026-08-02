@@ -111,6 +111,28 @@ func validateDeployment(projectRoot, serviceName string, language model.ServiceL
 	errs = append(errs, validateDeploymentLanguageRuntimeConfig(projectRoot, serviceName, language, dep)...)
 	errs = append(errs, validateDeploymentWebConfig(dep)...)
 	errs = append(errs, validateDeploymentCodeDebugConfig(serviceName, dep)...)
+	errs = append(errs, validateDeploymentPorts(dep)...)
+	return errs
+}
+
+// validateDeploymentPorts 校验 deployment.ports：每个端口须落在 1-65535，
+// 且去重后不得重复声明。
+func validateDeploymentPorts(dep model.Deployment) []string {
+	var errs []string
+	seen := map[int]bool{}
+	for _, p := range dep.Ports {
+		if p < 1 || p > 65535 {
+			errs = append(errs, fmt.Sprintf("deployment %s: 端口 %d 超出 1-65535", dep.ID, p))
+			continue
+		}
+		// 同一 deployment 内重复声明同一端口必然是笔误（复制粘贴或手误重复），
+		// 在配置校验阶段就拒绝，比等到端口镜像建转发时才冲突更容易定位。
+		if seen[p] {
+			errs = append(errs, fmt.Sprintf("deployment %s: 端口 %d 重复声明", dep.ID, p))
+			continue
+		}
+		seen[p] = true
+	}
 	return errs
 }
 
