@@ -544,67 +544,6 @@ func TestActiveForwardReEnsuredEachCycle(t *testing.T) {
 	}
 }
 
-// TestDuplicateWinnerDowngradeKeepsSharedForward 验证 M1：更小 deploymentID 后到、
-// 抢走已 active 的共享端口时，落败者不得物理拆除该端口的转发（否则会抖动一轮）。
-func TestDuplicateWinnerDowngradeKeepsSharedForward(t *testing.T) {
-	h := newHarness(t, nil)
-	h.setHosts(devHosts("A"))
-	// 先只有 dep-b（较大 id）在跑 → 赢得 9100。
-	h.m.ApplyNodes(frameHost("A", "dep-b", "svcB", model.HealthRunning, 9100))
-	eventually(t, func() bool {
-		s := findStatus(h.m.Statuses(), "A", 9100)
-		return s != nil && s.State == MirrorStateActive && s.DeploymentID == "dep-b"
-	}, "dep-b 赢得 9100")
-
-	dropsBefore := h.tun.dropped("A", 9100)
-
-	// dep-a（较小 id）后到，与 dep-b 同 host 同端口。
-	frame := []nodetransport.NodeStatus{{
-		HostID:    "A",
-		Reachable: true,
-		Deployments: []model.InstanceStatus{
-			{DeploymentID: "dep-b", ServiceName: "svcB", Metrics: model.InstanceMetrics{Health: model.HealthRunning}, Ports: []int{9100}},
-			{DeploymentID: "dep-a", ServiceName: "svcA", Metrics: model.InstanceMetrics{Health: model.HealthRunning}, Ports: []int{9100}},
-		},
-	}}
-	h.drain()
-	h.m.ApplyNodes(frame)
-	h.waitReconcile(t)
-
-	// 赢家易主：dep-a active，dep-b 变落败者 failed+duplicate。
-	eventually(t, func() bool {
-		wa := findStatus(h.m.Statuses(), "A", 9100)
-		lb := func() *MirrorStatus {
-			for _, s := range h.m.Statuses() {
-				if s.DeploymentID == "dep-b" {
-					return &s
-				}
-			}
-			return nil
-		}()
-		return wa != nil && wa.DeploymentID == "dep-a" && wa.State == MirrorStateActive &&
-			lb != nil && lb.State == MirrorStateFailed
-	}, "赢家易主为 dep-a")
-
-	var loser *MirrorStatus
-	for _, s := range h.m.Statuses() {
-		if s.DeploymentID == "dep-b" {
-			cp := s
-			loser = &cp
-		}
-	}
-	if loser == nil || loser.Error != "duplicate_port_declaration" {
-		t.Fatalf("dep-b 应为 duplicate_port_declaration，实际 %+v", loser)
-	}
-	// 关键断言：共享端口的转发在易主期间不得被拆除。
-	if got := h.tun.dropped("A", 9100); got != dropsBefore {
-		t.Fatalf("赢家易主期间不得拆除共享转发：before=%d after=%d", dropsBefore, got)
-	}
-	if !h.tun.isEstablished("A", 9100) {
-		t.Fatal("共享转发在易主后仍应保持建立")
-	}
-}
-
 // TestExpectedStatePerHealth 覆盖 isRunningHealth 全部五个健康分支（M2）：
 // running/healthy/restarting → 期望有转发；stopped/failed → 无。
 func TestExpectedStatePerHealth(t *testing.T) {

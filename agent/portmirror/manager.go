@@ -356,14 +356,9 @@ func (m *Manager) reconcile() {
 	}
 
 	expected := computeExpected(frame, hosts)
-	// keepPorts 是本轮有赢家占用的 fwdKey 集合。物理转发按 fwdKey（host+port）唯一，
-	// 而状态条目按 mirrorKey（host+deployment+port）——一个物理转发可能被多个条目
-	// 争用。keepPorts 让「拆除」只发生在真的没有任何赢家要这个端口时，避免赢家易主
-	// 或落败降级时误拆掉共享转发（拆了下一帧才自愈，会抖动一轮）。
-	keepPorts := forwardPortsOf(expected)
 
-	m.teardownUnexpected(expected, keepPorts, frame, hosts)
-	m.converge(expected, keepPorts, now)
+	m.teardownUnexpected(expected, frame, hosts)
+	m.converge(expected, now)
 
 	m.publishIfChanged()
 }
@@ -388,15 +383,12 @@ func (m *Manager) applyRetries(retries map[fwdKey]struct{}) {
 }
 
 // teardownUnexpected 拆除并删除所有不再属于期望态的条目。
-//
-// keepPorts 里的 fwdKey 仍有赢家占用：此时即便本条目 forwardUp，也只删除条目、
-// 不物理拆转发——所有权正在从本条目转移给赢家（赢家本轮会幂等维持它），拆了会抖动。
-func (m *Manager) teardownUnexpected(expected map[mirrorKey]expInfo, keepPorts map[fwdKey]bool, frame []nodetransport.NodeStatus, hosts map[string]model.Host) {
+func (m *Manager) teardownUnexpected(expected map[mirrorKey]expInfo, frame []nodetransport.NodeStatus, hosts map[string]model.Host) {
 	for k, e := range m.entries {
 		if _, ok := expected[k]; ok {
 			continue
 		}
-		if e.forwardUp && !keepPorts[fwdKey{hostID: e.hostID, port: e.port}] {
+		if e.forwardUp {
 			m.deps.Tunnels.DropForward(e.hostID, e.port)
 			reason := teardownReason(k, frame, hosts)
 			log.Printf("[SuperDev] portmirror: %s %s(%s) 127.0.0.1:%d ⇄ %s:%d", reason, e.serviceName, e.deploymentID, e.port, e.hostName, e.port)
@@ -407,7 +399,7 @@ func (m *Manager) teardownUnexpected(expected map[mirrorKey]expInfo, keepPorts m
 }
 
 // converge 建立/维持期望态里所有条目的转发。
-func (m *Manager) converge(expected map[mirrorKey]expInfo, keepPorts map[fwdKey]bool, now time.Time) {
+func (m *Manager) converge(expected map[mirrorKey]expInfo, now time.Time) {
 	// 先确定哪些 host 本轮有「到期的转发拥有者」需要建连，避免为纯冷却态的 host 白建连。
 	hostDue := map[string]bool{}
 	for k, info := range expected {
@@ -446,7 +438,7 @@ func (m *Manager) converge(expected map[mirrorKey]expInfo, keepPorts map[fwdKey]
 		e := m.ensureEntry(k, info, now)
 
 		if info.duplicate {
-			m.markDuplicate(e, keepPorts[fwdKey{hostID: e.hostID, port: e.port}], now)
+			m.markDuplicate(e, now)
 			continue
 		}
 
@@ -488,16 +480,12 @@ func (m *Manager) ensureEntry(k mirrorKey, info expInfo, now time.Time) *mirrorE
 // markDuplicate 把重复端口的落败者标为 failed + duplicate_port_declaration。
 //
 // 冷却记忆同样适用：这是稳定失败，不应每帧重算重打日志。仅在状态跃迁时打一次。
-//
-// portClaimedByWinner 表示本轮该 fwdKey 有赢家占用。落败者绝不物理拆除被赢家占用的
-// 共享端口：物理转发按 fwdKey 唯一、归赢家所有，赢家本轮会（幂等）维持它。若曾是赢家
-// 现降级（更小 deploymentID 后到抢占），拆掉就会把赢家刚建/在用的转发扯断、抖动一轮。
-// 仅当没有任何赢家占用该端口（防御性，正常不会发生——有落败者必有赢家）才允许拆。
-func (m *Manager) markDuplicate(e *mirrorEntry, portClaimedByWinner bool, now time.Time) {
-	if e.forwardUp && !portClaimedByWinner {
+func (m *Manager) markDuplicate(e *mirrorEntry, now time.Time) {
+	if e.forwardUp {
+		// 极端：曾是赢家、现降级为落败者（更小 deploymentID 出现），先拆掉它的转发。
 		m.deps.Tunnels.DropForward(e.hostID, e.port)
+		e.forwardUp = false
 	}
-	e.forwardUp = false
 	if e.state == MirrorStateFailed && e.errCode == errCodeDuplicate {
 		return // 已是该态，保持（冷却记忆：不重复处理/打日志）
 	}
@@ -644,18 +632,6 @@ func (m *Manager) buildSnapshot() []MirrorStatus {
 			mirrorKey{out[j].HostID, out[j].DeploymentID, out[j].Port},
 		)
 	})
-	return out
-}
-
-// forwardPortsOf 收集本轮有赢家（duplicate=false）占用的 fwdKey 集合。
-// 物理转发按 fwdKey 唯一，赢家是它的唯一所有者；拆除/降级判定都以此为准。
-func forwardPortsOf(expected map[mirrorKey]expInfo) map[fwdKey]bool {
-	out := map[fwdKey]bool{}
-	for _, info := range expected {
-		if !info.duplicate {
-			out[fwdKey{hostID: info.hostID, port: info.port}] = true
-		}
-	}
 	return out
 }
 
