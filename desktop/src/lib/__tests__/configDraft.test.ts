@@ -150,6 +150,24 @@ describe('configDraft', () => {
     })
   })
 
+  it('draftToPayload 序列化 deployment.ports——端口镜像的唯一事实来源', () => {
+    const draft = projectToDraft(makeProject())
+    draft.services[0].deployments[0].ports = [9100, 9101]
+
+    const payload = draftToPayload(draft)
+
+    expect(payload.services[0].deployments[0].ports).toEqual([9100, 9101])
+  })
+
+  it('projectToDraft → draftToPayload 往返保留 deployment.ports（加载和保存都不丢端口声明）', () => {
+    const project = makeProject()
+    project.services[0].deployments![0].ports = [9100]
+
+    const payload = draftToPayload(projectToDraft(project))
+
+    expect(payload.services[0].deployments[0].ports).toEqual([9100])
+  })
+
   it('preserves deployment autostart fields through draft payload conversion', () => {
     const project = makeProject()
     project.services[0].deployments![0] = {

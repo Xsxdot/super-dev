@@ -94,6 +94,27 @@ watch(
   },
 )
 
+// 上面按"端口集合是否相等"判断是否回显，对识别"切到了另一份 deployment"这件
+// 事本身有个盲区：非法文本（如 'abc'）解析出的 currentParsed 恒为 []，如果新
+// deployment 也没声明 ports（undefined ?? [] 同样是 []），[] 与 [] "相等"就会
+// 让上面的 watch 判定"没变化"而跳过重置，导致非法文本和错误提示原样留在一份
+// 其实完全无关的新 deployment 上。因此单独按"deployment 身份"（id+env_name）
+// 兜底重置一次，不管端口集合看起来是否相等。
+//
+// 注意：source 必须返回字符串（值语义）而非数组/对象字面量（引用语义）——
+// setPortsText 每次 patch() 都会让父层传回一个新的 modelValue 对象引用（哪怕
+// id/env_name 没变，纯属用户敲字符的 prop 回声），若 source 返回新数组/对象，
+// Vue 会按引用判定"每次都变"，这个 watch 就会在用户每次敲键时都误触发、把
+// 用户正在输入的文本连同合法尾随逗号一起冲掉；返回字符串则是按值比较，只有
+// id/env_name 真正变化时才会触发。
+watch(
+  () => `${props.modelValue.id ?? ''}::${props.modelValue.env_name}`,
+  () => {
+    portsText.value = formatPorts(props.modelValue.ports)
+    portsInvalid.value = false
+  },
+)
+
 function formatPorts(ports?: number[]): string {
   return (ports ?? []).join(', ')
 }

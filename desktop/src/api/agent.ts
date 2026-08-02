@@ -1059,6 +1059,8 @@ export interface SetupDeployment {
   runtime?: RuntimeConfig
   logs?: LogConfig
   web?: WebEntrypointConfig
+  /** 该 deployment 声明的监听端口，随 project.yaml 持久化，供端口镜像使用。 */
+  ports?: number[]
   code_debug?: CodeDebugConfig
   /** 是否随 SuperDev 启动自动拉起（仅 local + managed 生效）。 */
   start_on_boot?: boolean

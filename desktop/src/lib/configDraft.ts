@@ -314,6 +314,9 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
           runtime,
           logs,
           web: dep.web,
+          // ports 必须显式序列化：draftToPayload 是白名单式，漏掉就静默丢弃端口声明——
+          // 端口镜像的唯一事实来源。
+          ports: dep.ports?.length ? [...dep.ports] : undefined,
           code_debug: normalizeCodeDebug(dep.code_debug),
           start_on_boot: dep.start_on_boot ? true : undefined,
           depends_on: dep.depends_on?.length ? [...dep.depends_on] : undefined,
