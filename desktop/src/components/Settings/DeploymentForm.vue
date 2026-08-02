@@ -64,6 +64,77 @@ function patch(partial: Partial<Deployment>) {
   emit('update:modelValue', { ...props.modelValue, ...partial })
 }
 
+// ===== 端口镜像声明（ports）=====
+// 端口镜像的期望态只看目标 host 的 dev_machine_mode，不看当前 deployment 的
+// location：本机部署的端口声明对"自己"是死数据（本机 is_self 节点恒
+// dev_machine_mode=false，不镜像自己），但 ports 属共享层配置，project.yaml
+// 随 git 共享后，其他人的桌面端把这台机器加为标了开发机的远端主机时，同样会
+// 消费这份声明。因此这个输入不放进 location==='local' 或 'remote' 的任一条件
+// 区块里，两种 location 都必须能编辑。
+const portsText = ref(formatPorts(props.modelValue.ports))
+const portsInvalid = ref(false)
+
+watch(
+  () => props.modelValue.ports,
+  next => {
+    // 只有"解析当前文本得到的端口集合"与外部新值不同（比如父层把 modelValue 换成
+    // 了另一个 deployment）才用外部值覆盖文本；否则是我们自己 patch() 触发的 prop
+    // 回声——无脑覆盖的话，用户刚敲下的尾随逗号/空格会在下一次渲染时被吃掉，
+    // 永远打不出"3000, 8080"里的第二个端口。
+    const { ports: currentParsed } = parsePortsText(portsText.value)
+    if (!portsEqual(currentParsed, next ?? [])) {
+      portsText.value = formatPorts(next)
+    }
+  },
+)
+
+function formatPorts(ports?: number[]): string {
+  return (ports ?? []).join(', ')
+}
+
+function portsEqual(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i])
+}
+
+/**
+ * parsePortsText 把逗号分隔的端口文本解析成 number[]。
+ *
+ * 返回：
+ *   - ports: 解析出的端口数组（文本为空或全是分隔符时为 []）
+ *   - valid: 是否整体合法；出现任意不是 1-65535 整数的非空 token 时为 false
+ *
+ * 注意：
+ *   - 多余的逗号/空白（相邻逗号、首尾逗号）被忽略、不算错误，匹配常见的逗号
+ *     列表输入习惯；只有"这一段非空但不是合法端口号"才判非法
+ */
+function parsePortsText(text: string): { ports: number[]; valid: boolean } {
+  const tokens = text.split(',').map(token => token.trim()).filter(token => token !== '')
+  const ports: number[] = []
+  for (const token of tokens) {
+    if (!/^\d+$/.test(token)) return { ports: [], valid: false }
+    const n = Number(token)
+    if (n < 1 || n > 65535) return { ports: [], valid: false }
+    ports.push(n)
+  }
+  return { ports, valid: true }
+}
+
+/**
+ * setPortsText 处理端口输入框的 @input。
+ *
+ * 注意：
+ *   - 合法时 emit number[]（空文本或解析结果为空数组时 emit undefined）
+ *   - 非法时只置 portsInvalid 提示、不 emit——避免非法值（如 NaN）污染
+ *     modelValue.ports，也不冻结用户还没敲完的文本
+ */
+function setPortsText(raw: string) {
+  portsText.value = raw
+  const { ports, valid } = parsePortsText(raw)
+  portsInvalid.value = !valid
+  if (!valid) return
+  patch({ ports: ports.length ? ports : undefined })
+}
+
 function serviceLogTarget(serviceName?: string) {
   if (!serviceName) return undefined
   return serviceName.endsWith('.service') ? serviceName : `${serviceName}.service`
@@ -552,6 +623,19 @@ watch(
             <option value="docker">{{ t('settings.deployment.dockerContainer') }}</option>
             <option v-if="controlMode === 'monitor'" value="nginx_static">{{ t('settings.deployment.nginxStatic') }}</option>
           </select>
+        </div>
+
+        <div class="settings-field dep-field">
+          <label class="settings-field-label dep-label">{{ t('settings.deployment.ports') }}</label>
+          <input
+            class="settings-input dep-input"
+            data-test="dep-ports"
+            :placeholder="t('settings.deployment.portsPlaceholder')"
+            :value="portsText"
+            @input="setPortsText(($event.target as HTMLInputElement).value)"
+          />
+          <div class="dep-help">{{ t('settings.deployment.portsHint') }}</div>
+          <div v-if="portsInvalid" class="dep-warning" data-test="dep-ports-error">{{ t('settings.deployment.portsInvalid') }}</div>
         </div>
       </section>
 

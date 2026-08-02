@@ -215,6 +215,8 @@ export interface RuntimeInstanceStatus {
   error?: string
   metrics: InstanceMetrics
   debugger?: DebuggerStatus
+  /** 该 deployment 声明的监听端口（来自共享层配置），端口镜像据此建立本机转发。 */
+  ports?: number[]
 }
 
 export interface EnvRuntimeStatus {
@@ -552,6 +554,12 @@ export interface Deployment {
   runtime?: RuntimeConfig
   logs?: LogConfig
   web?: WebEntrypointConfig
+  /**
+   * Ports 声明该 deployment 运行时监听的本机端口，端口镜像据此建立同端口转发。
+   * 属共享层配置（project.yaml 随 git 流动）——不看 location：即使是本机部署，
+   * 只要另一台桌面端把当前机器加为标了 dev_machine_mode 的远端主机，同样会消费这份声明。
+   */
+  ports?: number[]
   code_debug?: CodeDebugConfig
   /** 是否随 SuperDev 启动自动拉起（仅 local + managed 生效）。 */
   start_on_boot?: boolean
@@ -1017,6 +1025,8 @@ export interface Host {
   ssh_password_configured?: boolean
   ssh_private_key_configured?: boolean
   ssh_host_key_fingerprint_configured?: boolean
+  /** 该主机是否被当前控制面当作开发机消费（端口镜像开关）；本机 is_self 节点恒为 false。 */
+  dev_machine_mode?: boolean
   is_self?: boolean
   node_id?: string
 }
@@ -1466,6 +1476,8 @@ export interface HostCreatePayload {
   clear_ssh_password?: boolean
   clear_ssh_private_key?: boolean
   clear_ssh_host_key_fingerprint?: boolean
+  /** 勾选后该主机进入端口镜像的期望态计算范围；创建/更新本机 is_self 节点时后端强制忽略。 */
+  dev_machine_mode?: boolean
 }
 
 export type HostUpdatePayload = Partial<HostCreatePayload>
@@ -1486,6 +1498,34 @@ export interface LogSourceCreatePayload {
 }
 
 export type LogSourceUpdatePayload = Partial<LogSourceCreatePayload>
+
+// ===== 端口镜像（port mirror） =====
+
+/** MirrorOccupier 描述 conflict 态下占用本机端口的进程。 */
+export interface MirrorOccupier {
+  pid: number
+  name: string
+  started_at: string
+  /** 非空表示占用者是 SuperDev 托管 deployment，处理动作走 stop_service 语义。 */
+  managed_deployment_id?: string
+}
+
+export type MirrorState = 'pending' | 'active' | 'conflict' | 'failed'
+
+/** MirrorStatus 是一条「host × 端口」端口镜像的当前状态，对应 agent 侧 portmirror.MirrorStatus。 */
+export interface MirrorStatus {
+  host_id: string
+  host_name: string
+  deployment_id: string
+  service_name: string
+  port: number
+  state: MirrorState
+  /** conflict 固定 "port_mirror_conflict"；failed 为脱敏码或重复声明码。 */
+  error?: string
+  /** 仅 conflict 且占用者识别成功时存在。 */
+  occupier?: MirrorOccupier
+  updated_at: string
+}
 
 export const api = {
   // 项目
@@ -1511,6 +1551,17 @@ export const api = {
   continueDeploymentDebug: (id: string) =>
     request<void>(`/api/deployments/${encodeURIComponent(id)}/debug/continue`, { method: 'POST' }),
   listNodes: () => request<NodeStatus[]>('/api/nodes'),
+  listPortMirrors: () => request<MirrorStatus[]>('/api/port-mirrors'),
+  retryPortMirror: (hostId: string, port: number) =>
+    request<void>('/api/port-mirrors/retry', {
+      method: 'POST',
+      body: JSON.stringify({ host_id: hostId, port }),
+    }),
+  stopMirrorOccupier: (hostId: string, port: number) =>
+    request<void>('/api/port-mirrors/stop-occupier', {
+      method: 'POST',
+      body: JSON.stringify({ host_id: hostId, port }),
+    }),
   listAgents: () => request<AgentDTO[]>('/api/agents'),
   createAgent: (payload: AgentCreatePayload) =>
     request<AgentDTO>('/api/agents', { method: 'POST', body: JSON.stringify(payload) }),
@@ -1882,6 +1933,11 @@ export async function deploymentWsUrl(
 /** nodesWsUrl 返回 NodeRegistry 快照 WebSocket URL（同上，附带 access_token）。 */
 export async function nodesWsUrl(): Promise<string> {
   return withWsToken(`${WS_BASE}/ws/nodes`)
+}
+
+/** portMirrorWsUrl 返回端口镜像状态 WebSocket URL（同上，附带 access_token）。 */
+export async function portMirrorWsUrl(): Promise<string> {
+  return withWsToken(`${WS_BASE}/ws/port-mirrors`)
 }
 
 /** runLogsWsUrl 返回指定 pipeline run 的 WebSocket 日志流 URL（同上，附带 access_token）。 */

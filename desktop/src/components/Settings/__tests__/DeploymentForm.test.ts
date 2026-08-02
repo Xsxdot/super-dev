@@ -685,4 +685,85 @@ describe('DeploymentForm', () => {
 
     expect(wrapper.find('[data-test="pipeline-enable"]').exists()).toBe(false)
   })
+
+  describe('ports (端口镜像声明)', () => {
+    it('逗号分隔文本转换为 number[] 并 emit', async () => {
+      const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
+
+      await wrapper.find('[data-test="dep-ports"]').setValue('3000, 8080')
+
+      const emitted = wrapper.emitted('update:modelValue')
+      const last = emitted![emitted!.length - 1][0] as Deployment
+      expect(last.ports).toEqual([3000, 8080])
+    })
+
+    it('容忍多余逗号/空白，尾随逗号不视为非法', async () => {
+      const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
+
+      await wrapper.find('[data-test="dep-ports"]').setValue('3000,, 8080,')
+
+      expect(wrapper.find('[data-test="dep-ports-error"]').exists()).toBe(false)
+      const emitted = wrapper.emitted('update:modelValue')
+      const last = emitted![emitted!.length - 1][0] as Deployment
+      expect(last.ports).toEqual([3000, 8080])
+    })
+
+    it('清空文本 emit undefined', async () => {
+      const dep = { ...localDep(), ports: [3000] }
+      const wrapper = mount(DeploymentForm, { props: { modelValue: dep, hosts: [] } })
+
+      await wrapper.find('[data-test="dep-ports"]').setValue('')
+
+      const emitted = wrapper.emitted('update:modelValue')
+      const last = emitted![emitted!.length - 1][0] as Deployment
+      expect(last.ports).toBeUndefined()
+    })
+
+    it('非法值展示错误提示，且不 emit 损坏数据', async () => {
+      const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
+
+      await wrapper.find('[data-test="dep-ports"]').setValue('abc')
+
+      expect(wrapper.find('[data-test="dep-ports-error"]').exists()).toBe(true)
+      expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    })
+
+    it('超出端口范围（>65535）视为非法', async () => {
+      const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
+
+      await wrapper.find('[data-test="dep-ports"]').setValue('70000')
+
+      expect(wrapper.find('[data-test="dep-ports-error"]').exists()).toBe(true)
+      expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    })
+
+    it('端口 0 视为非法', async () => {
+      const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
+
+      await wrapper.find('[data-test="dep-ports"]').setValue('0')
+
+      expect(wrapper.find('[data-test="dep-ports-error"]').exists()).toBe(true)
+      expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    })
+
+    it('remote 部署同样可以声明 ports，不受 location 限制', async () => {
+      const wrapper = mount(DeploymentForm, {
+        props: { modelValue: systemdRemoteDep(), hosts: [{ id: 'h1', name: 'box1' }] },
+      })
+
+      expect(wrapper.find('[data-test="dep-ports"]').exists()).toBe(true)
+      await wrapper.find('[data-test="dep-ports"]').setValue('9000')
+
+      const emitted = wrapper.emitted('update:modelValue')
+      const last = emitted![emitted!.length - 1][0] as Deployment
+      expect(last.ports).toEqual([9000])
+    })
+
+    it('切换到已声明 ports 的 deployment 时回显文本', () => {
+      const dep = { ...localDep(), ports: [3000, 8080] }
+      const wrapper = mount(DeploymentForm, { props: { modelValue: dep, hosts: [] } })
+
+      expect((wrapper.find('[data-test="dep-ports"]').element as HTMLInputElement).value).toBe('3000, 8080')
+    })
+  })
 })
