@@ -7,8 +7,9 @@
 // 边界：
 //   - 不挂载 Vue 组件，不测试 DOM 样式和滚动行为
 import { describe, it, expect } from 'vitest'
-import { makeDisplayItems, computeDisplayStats } from '../logDisplay'
+import { makeDisplayItems, computeDisplayStats, type LogDisplayItem } from '../logDisplay'
 import type { DisplayLogEntry } from '../logEngine'
+import type { MirrorEvent } from '@/stores/portMirror'
 
 function makeLog(id: number, ts: string, repeatCount = 1): DisplayLogEntry {
   const logId = String(id)
@@ -22,6 +23,14 @@ function makeLog(id: number, ts: string, repeatCount = 1): DisplayLogEntry {
     stream: 'stdout',
     repeat_count: repeatCount,
   }
+}
+
+function toMs(ts: string): number {
+  return new Date(ts).getTime()
+}
+
+function makeMirrorEvent(kind: MirrorEvent['kind'], ts: string): MirrorEvent {
+  return { deploymentId: 'dep-1', port: 9100, hostName: 'dev-box', kind, at: toMs(ts) }
 }
 
 describe('makeDisplayItems', () => {
@@ -166,5 +175,71 @@ describe('makeDisplayItems', () => {
 
     expect(items.map(item => item.kind)).toEqual(['entry', 'gapSeparator', 'entry'])
     expect(computeDisplayStats(items).total).toBe(2)
+  })
+
+  it('按时间插入端口镜像事件行', () => {
+    const logs = [
+      makeLog(1, '2026-05-21T10:00:01.000Z'),
+      makeLog(2, '2026-05-21T10:00:03.000Z'),
+    ]
+    const mirrorEvents: MirrorEvent[] = [
+      makeMirrorEvent('established', '2026-05-21T10:00:02.000Z'),
+    ]
+
+    const items = makeDisplayItems(logs, null, markers, null, [], [], mirrorEvents)
+
+    expect(items.map(item => item.kind)).toEqual(['entry', 'mirrorEvent', 'entry'])
+  })
+
+  it('端口镜像事件行携带 port/hostName/event 且不参与统计', () => {
+    const mirrorEvents: MirrorEvent[] = [
+      { deploymentId: 'dep-1', port: 5173, hostName: 'dev-box', kind: 'conflict', at: toMs('2026-05-21T10:00:02.000Z') },
+    ]
+
+    const items = makeDisplayItems([], null, markers, null, [], [], mirrorEvents)
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        kind: 'mirrorEvent',
+        port: 5173,
+        hostName: 'dev-box',
+        event: 'conflict',
+      }),
+    ])
+    expect(computeDisplayStats(items).total).toBe(0)
+  })
+
+  it('多条端口镜像事件按时间排序插入，不受入参顺序影响', () => {
+    const logs = [
+      makeLog(1, '2026-05-21T10:00:01.000Z'),
+      makeLog(2, '2026-05-21T10:00:10.000Z'),
+    ]
+    // 刻意乱序传入（failed 在前，established 在后），验证插入结果仍按 at 排序，
+    // 而不是按数组顺序排列。
+    const mirrorEvents: MirrorEvent[] = [
+      makeMirrorEvent('failed', '2026-05-21T10:00:07.000Z'),
+      makeMirrorEvent('established', '2026-05-21T10:00:03.000Z'),
+    ]
+
+    const items = makeDisplayItems(logs, null, markers, null, [], [], mirrorEvents)
+
+    expect(items.map(item => item.kind)).toEqual(['entry', 'mirrorEvent', 'mirrorEvent', 'entry'])
+    const mirrorKinds = items
+      .filter((item): item is Extract<LogDisplayItem, { kind: 'mirrorEvent' }> => item.kind === 'mirrorEvent')
+      .map(item => item.event)
+    expect(mirrorKinds).toEqual(['established', 'failed'])
+  })
+
+  it('空 mirrorEvents 数组对显示列表零影响', () => {
+    const logs = [
+      makeLog(1, '2026-05-21T10:00:01.000Z'),
+      makeLog(2, '2026-05-21T10:00:03.000Z'),
+    ]
+
+    const withoutArg = makeDisplayItems(logs, null, markers, null, [], [])
+    const withEmptyArray = makeDisplayItems(logs, null, markers, null, [], [], [])
+
+    expect(withEmptyArray).toEqual(withoutArg)
+    expect(withEmptyArray.map(item => item.kind)).toEqual(['entry', 'entry'])
   })
 })

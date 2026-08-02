@@ -12,6 +12,7 @@ import { useLogEvidenceStore } from '@/stores/logEvidence'
 import { usePanelStore } from '@/stores/panel'
 import { useRemoteStore } from '@/stores/remote'
 import { useNodeStore } from '@/stores/node'
+import { usePortMirrorStore } from '@/stores/portMirror'
 import { useWorkspaceStore } from '@/stores/workspace'
 import PanelToolbar from './PanelToolbar.vue'
 import LogRow from './LogRow.vue'
@@ -21,6 +22,7 @@ import PinNotePopover from './PinNotePopover.vue'
 import LogHistorySeparatorRow from './LogHistorySeparatorRow.vue'
 import LogLifecycleSeparatorRow from './LogLifecycleSeparatorRow.vue'
 import LogGapSeparatorRow from './LogGapSeparatorRow.vue'
+import LogMirrorEventRow from './LogMirrorEventRow.vue'
 import {
   buildDeploymentNodeStatus,
   logMatchesSelectedNodes,
@@ -66,6 +68,9 @@ const panelStore = usePanelStore()
 const workspaceStore = useWorkspaceStore()
 const remoteStore = useRemoteStore()
 const nodeStore = useNodeStore()
+// portMirrorStore 的 WS 订阅生命周期在页面级（MainPage.vue）统一发起，这里只读
+// events，不调用 start()/stop()——和 nodeStore.managedStatuses 的既有读法一致。
+const portMirrorStore = usePortMirrorStore()
 const { t } = useI18n()
 
 const toolbarRef = ref<InstanceType<typeof PanelToolbar> | null>(null)
@@ -333,6 +338,15 @@ const lifecycleMarkers = computed(() => {
   return deploymentId ? logLifecycleStore.getMarkers(deploymentId) : []
 })
 
+// mirrorEvents 按当前面板的 deploymentId 过滤 portMirrorStore 的全量事件环形缓冲区
+// （跨 deployment 共用一份、上限 200 条），store 本身不提供按 deployment 过滤的
+// helper（不同于 mirrors 有 mirrorsForDeployment），过滤职责留在消费端。
+const mirrorEvents = computed(() => {
+  const deploymentId = deploymentIdFromSource(props.source)
+  if (!deploymentId) return []
+  return portMirrorStore.events.filter(e => e.deploymentId === deploymentId)
+})
+
 function makeLogDisplay() {
   const logs = filteredLogs.value
   const bm = bookmarkStore.getBookmark(props.panelId)
@@ -351,7 +365,7 @@ function makeLogDisplay() {
   const items = makeDisplayItems(logs, displayBm, {
     start: markerStartId.value,
     end: markerEndId.value,
-  }, historyBoundary.value, lifecycleMarkers.value, gapMarkers)
+  }, historyBoundary.value, lifecycleMarkers.value, gapMarkers, mirrorEvents.value)
   cachedDisplay.value = { items, stats: computeDisplayStats(items) }
 }
 
@@ -502,6 +516,15 @@ watch(
 
 watch(
   lifecycleMarkers,
+  () => scheduleDisplayRefresh(),
+  { deep: true },
+)
+
+// mirrorEvents 源自 portMirrorStore（第三个与 deploymentLogStore.logSourceRevision
+// 无关的 store），不会被上面那个 revision watch 覆盖到，需要和 lifecycleMarkers
+// 同样单独订阅，否则新的端口镜像事件到达后要等下一条真实日志触发刷新才会显示。
+watch(
+  mirrorEvents,
   () => scheduleDisplayRefresh(),
   { deep: true },
 )
@@ -1090,6 +1113,13 @@ function toggleNode(hostId: string) {
             <LogGapSeparatorRow
               v-else-if="displayItems[vRow.index].kind === 'gapSeparator'"
               :time="(displayItems[vRow.index] as any).time"
+            />
+            <LogMirrorEventRow
+              v-else-if="displayItems[vRow.index].kind === 'mirrorEvent'"
+              :at="(displayItems[vRow.index] as any).at"
+              :port="(displayItems[vRow.index] as any).port"
+              :host-name="(displayItems[vRow.index] as any).hostName"
+              :event="(displayItems[vRow.index] as any).event"
             />
             <LogRow
               v-else-if="displayItems[vRow.index].kind === 'entry'"

@@ -1309,6 +1309,13 @@ export default {
       historyEnd: '- 已到最早记录 -',
       historySeparator: '历史消息 · 之后为实时输出',
       gapSeparator: '断线期间此处可能缺失日志（{time} 前后）',
+      mirrorEvent: {
+        badge: '本机',
+        established: '端口镜像已建立 127.0.0.1:{port} ⇄ {host}:{port}',
+        failed: '端口镜像已失效 127.0.0.1:{port} ⇄ {host}:{port}',
+        conflict: '端口镜像冲突：本机端口被占 :{port}',
+        removed: '端口镜像已拆除 127.0.0.1:{port} ⇄ {host}:{port}',
+      },
       addSelectionToFilter: '填入过滤关键词',
       newLogs: '↓ {count} 条新日志',
       liveStats: '实时 · 显示 {total} 条',

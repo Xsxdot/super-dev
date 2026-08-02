@@ -12,6 +12,7 @@ import type { LogEntry } from '@/api/agent'
 import type { DisplayLogEntry } from '@/lib/logEngine'
 import type { BookmarkState } from '@/stores/bookmark'
 import type { LogLifecycleMarker } from '@/stores/logLifecycle'
+import type { MirrorEvent } from '@/stores/portMirror'
 
 export type LogDisplayItem =
   | { kind: 'entry'; id: string; log: DisplayLogEntry }
@@ -20,6 +21,11 @@ export type LogDisplayItem =
   | { kind: 'historySeparator'; id: string }
   | { kind: 'lifecycleSeparator'; id: string; marker: LogLifecycleMarker }
   | { kind: 'gapSeparator'; id: string; time: string }
+  // mirrorEvent 语义边界对齐 lifecycleSeparator：纯展示行，不进日志数组、不参与
+  // 过滤/导出/搜索/证据钉、不持久化，只出现在 makeDisplayItems 的输出里。
+  // 为什么不伪造 LogEntry：会污染导出/证据钉且需凑 run_id 等必填字段（Global Constraints 偏离 2）。
+  | { kind: 'mirrorEvent'; id: string; at: number; port: number; hostName: string;
+      event: 'established' | 'failed' | 'conflict' | 'removed' }
 
 export interface BookmarkDisplayInput {
   state: BookmarkState
@@ -113,6 +119,37 @@ function withGapSeparators(
   return out
 }
 
+// withMirrorEvents 把端口镜像事件（MirrorEvent）按时间插入显示列表。
+//
+// 与 withLifecycleSeparators 同构，包括先排序再插入这一步——插入位置只看"下一条
+// entry 的时间"，如果两个事件都落在同一段 entry 间隙里，不按时间排序就处理会导致
+// 后处理的事件被插在先处理的事件前面（顺序倒挂）。先按 at 升序排序，就能保证每条
+// 事件相对之前已插入的事件而言，也一定落在正确的时间位置上。
+function withMirrorEvents(
+  items: LogDisplayItem[],
+  events: MirrorEvent[] = [],
+): LogDisplayItem[] {
+  if (!events.length) return items
+  const out = [...items]
+  const sorted = [...events].sort((a, b) => a.at - b.at)
+  for (const event of sorted) {
+    const insertAt = out.findIndex(item =>
+      item.kind === 'entry' && new Date(item.log.timestamp).getTime() > event.at
+    )
+    const displayItem: LogDisplayItem = {
+      kind: 'mirrorEvent',
+      id: `mirror-${event.deploymentId}-${event.port}-${event.kind}-${event.at}`,
+      at: event.at,
+      port: event.port,
+      hostName: event.hostName,
+      event: event.kind,
+    }
+    if (insertAt < 0) out.push(displayItem)
+    else out.splice(insertAt, 0, displayItem)
+  }
+  return out
+}
+
 /**
  * makeDisplayItems 构造带书签标记的日志显示列表。
  *
@@ -126,6 +163,7 @@ function withGapSeparators(
  *
  * 注意：
  *   - lockedLogs 仅用于复制/导出，显示层不使用它替换 live 日志流
+ *   - mirrorEvents 同 lifecycleMarkers/gapMarkers：纯展示插入，不影响 logs 本身
  */
 export function makeDisplayItems(
   logs: DisplayLogEntry[],
@@ -134,13 +172,17 @@ export function makeDisplayItems(
   historyBoundary: HistoryBoundary | null = null,
   lifecycleMarkers: LogLifecycleMarker[] = [],
   gapMarkers: { id: string; time: string }[] = [],
+  mirrorEvents: MirrorEvent[] = [],
 ): LogDisplayItem[] {
   const items: LogDisplayItem[] = []
   if (!bm?.startTime) {
     for (const log of logs) items.push(entryItem(log))
-    return withGapSeparators(
-      withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers),
-      gapMarkers,
+    return withMirrorEvents(
+      withGapSeparators(
+        withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers),
+        gapMarkers,
+      ),
+      mirrorEvents,
     )
   }
 
@@ -164,9 +206,12 @@ export function makeDisplayItems(
       items.push({ kind: 'markerEnd', id: markerIds.end, date: endTime })
     }
     for (const log of after) items.push(entryItem(log))
-    return withGapSeparators(
-      withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers),
-      gapMarkers,
+    return withMirrorEvents(
+      withGapSeparators(
+        withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers),
+        gapMarkers,
+      ),
+      mirrorEvents,
     )
   }
 
@@ -177,9 +222,12 @@ export function makeDisplayItems(
     items.push({ kind: 'markerStart', id: markerIds.start, date: startTime })
   }
   for (const log of after) items.push(entryItem(log))
-  return withGapSeparators(
-    withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers),
-    gapMarkers,
+  return withMirrorEvents(
+    withGapSeparators(
+      withLifecycleSeparators(withHistorySeparator(items, historyBoundary), lifecycleMarkers),
+      gapMarkers,
+    ),
+    mirrorEvents,
   )
 }
 

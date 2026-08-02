@@ -1309,6 +1309,13 @@ export default {
       historyEnd: '- Earliest record reached -',
       historySeparator: 'History messages · live output follows',
       gapSeparator: 'Logs may be missing here after a disconnect (around {time})',
+      mirrorEvent: {
+        badge: 'Local',
+        established: 'Port mirror established 127.0.0.1:{port} ⇄ {host}:{port}',
+        failed: 'Port mirror failed 127.0.0.1:{port} ⇄ {host}:{port}',
+        conflict: 'Port mirror conflict: local port in use :{port}',
+        removed: 'Port mirror removed 127.0.0.1:{port} ⇄ {host}:{port}',
+      },
       addSelectionToFilter: 'Use as filter keyword',
       newLogs: '↓ {count} new logs',
       liveStats: 'Live · showing {total}',
