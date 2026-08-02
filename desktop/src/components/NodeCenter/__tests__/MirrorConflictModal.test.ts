@@ -8,6 +8,10 @@
  *   - Verify the primary action calls portMirrorStore.stopOccupier with {hostId, port} and
  *     closes on success, and shows the backend error text without closing on failure
  *   - Verify "稍后处理" closes without calling stopOccupier
+ *   - Verify a slow stopOccupier request that resolves AFTER the user has already left for
+ *     a different conflict does not clobber the modal now showing that different conflict
+ *     (I-A fix: stale-target race, since the modal is a persistent singleton whose v-if
+ *     only toggles the DOM — it never remounts between two different targets)
  *
  * Boundaries:
  *   - Does not mount NodeCard/EnvGroup (the two trigger paths are tested at their own
@@ -130,6 +134,38 @@ describe('MirrorConflictModal', () => {
 
     expect(stopSpy).toHaveBeenCalledWith('h1', 5173)
     expect(modalStore.target).toBeNull()
+  })
+
+  it('慢请求的 stopOccupier 在用户已切换到另一个冲突后才 resolve，不应关闭当前正显示的新弹窗（stale-target race，I-A 修复的回归用例）', async () => {
+    usePortMirrorStore().applySnapshot([mirror({
+      host_id: 'h1',
+      port: 5173,
+      occupier: { pid: 8123, name: 'node', started_at: '2026-06-06T10:00:00Z' },
+    })])
+    const modalStore = useMirrorConflictModalStore()
+    modalStore.open('h1', 5173)
+
+    // stopOccupier 走 SSH 隧道到远端开发机，可能很慢——手动控制它何时 resolve，
+    // 模拟"请求还没回来，用户已经关掉这个弹窗、打开了另一个冲突"的时序。
+    let resolveStopOccupier!: () => void
+    const pending = new Promise<void>(resolve => {
+      resolveStopOccupier = resolve
+    })
+    vi.spyOn(usePortMirrorStore(), 'stopOccupier').mockReturnValue(pending)
+
+    const wrapper = mountModal()
+    await wrapper.find('[data-test="mirror-conflict-stop"]').trigger('click')
+    // h1 的请求仍是 pending；用户已经离开这个冲突，去看另一个了。
+    modalStore.close()
+    modalStore.open('h2', 9200)
+
+    // h1 的请求这时才姗姗来迟地成功——它在调用时刻捕获的 target 早已不是当前 target，
+    // 不应该把用户正在看的 h2 弹窗关掉。
+    resolveStopOccupier()
+    await flushPromises()
+
+    expect(modalStore.target).toEqual({ hostId: 'h2', port: 9200 })
+    expect(wrapper.find('[data-test="mirror-conflict-modal"]').exists()).toBe(true)
   })
 
   it('stopOccupier 失败时展示后端 error 文案，弹窗保持打开', async () => {

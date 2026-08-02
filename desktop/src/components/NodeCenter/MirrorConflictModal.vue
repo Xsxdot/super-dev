@@ -79,19 +79,30 @@ function close() {
  * "停止动作已被接受并同步执行完成"，冲突是否真正解除交给 WS 快照自然回流到其它已在
  * 消费 portMirrorStore.mirrors 的呈现位置，见文件头边界注释）；失败则原地展示后端
  * error 文案，弹窗保持打开，让用户能看清原因、决定要不要再试一次或换成"稍后处理"。
+ *
+ * 注意（stale-target race）：本弹窗是挂在 MainPage 的常驻单例，v-if 只是切换是否
+ * 渲染，组件本身从不重新挂载——stopOccupier 走 SSH 隧道到远端开发机，可能很慢；
+ * 如果用户在这次调用还没返回时就点了"稍后处理"关闭、又打开了另一个冲突，这里捕获的
+ * target 早就不是 modalStore.target 当前指向的目标了。close()/写 stopError 之前必须
+ * 先确认 modalStore.target 仍然等于调用时刻捕获的 target，否则一次姗姗来迟的成功/
+ * 失败会错误地关掉或写脏用户正在看的、完全不相关的另一个冲突弹窗。
  */
 async function stopAndRetry() {
   const target = modalStore.target
   if (!target) return
+  const isStaleTarget = () =>
+    modalStore.target?.hostId !== target.hostId || modalStore.target?.port !== target.port
   stopping.value = true
   stopError.value = null
   try {
     await mirrorStore.stopOccupier(target.hostId, target.port)
+    if (isStaleTarget()) return
     modalStore.close()
   } catch (err) {
+    if (isStaleTarget()) return
     stopError.value = err instanceof Error ? err.message : String(err)
   } finally {
-    stopping.value = false
+    if (!isStaleTarget()) stopping.value = false
   }
 }
 </script>
