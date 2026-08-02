@@ -246,6 +246,17 @@ func waitForSnapshot(t *testing.T, ch <-chan []MirrorStatus, pred func([]MirrorS
 	}
 }
 
+// drainSnapshots 清空订阅 channel 里遗留的快照，便于随后断言「无新广播」。
+func drainSnapshots(ch <-chan []MirrorStatus) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
 // ---- 测试用例 ------------------------------------------------------------
 
 func TestReconcileEstablishesForRunningPortsOnDevMachineHosts(t *testing.T) {
@@ -488,4 +499,176 @@ func TestCloseTearsDownAllForwards(t *testing.T) {
 	}
 	// 二次 Close 幂等，不 panic。
 	m.Close()
+}
+
+// TestActiveForwardReEnsuredEachCycle 是自愈不变量的守护测试（I1）。
+//
+// active 转发每轮 reconcile 都会被幂等重加（isDue 对 active 恒为真、converge 无
+// active 早返回）——这正是治愈 Task 5 pin 轮换良性竞态的机制。若未来有重构给 active
+// 加了早返回，本测试会红：断言 EnsureForward 调用数「严格增加」，且状态保持 active、
+// 不产生新广播（幂等重加不改变快照）。
+func TestActiveForwardReEnsuredEachCycle(t *testing.T) {
+	h := newHarness(t, nil)
+	h.setHosts(devHosts("A"))
+	ch, unsub := h.m.Subscribe()
+	defer unsub()
+
+	h.m.ApplyNodes(frameHost("A", "dep1", "svc1", model.HealthRunning, 9100))
+	eventually(t, func() bool { return h.tun.isEstablished("A", 9100) }, "建立 A:9100")
+	// 消费掉建立时的 active 快照，随后 channel 应保持空。
+	waitForSnapshot(t, ch, func(s []MirrorStatus) bool {
+		return len(s) == 1 && s[0].State == MirrorStateActive
+	})
+	drainSnapshots(ch)
+
+	before := h.tun.forwardCalls("A", 9100)
+	h.drain()
+	h.m.ReconcileNow()
+	h.waitReconcile(t)
+
+	// 自愈：EnsureForward 每轮重加，调用数严格增加。
+	if after := h.tun.forwardCalls("A", 9100); after <= before {
+		t.Fatalf("active 转发必须每轮被重加（自愈）：before=%d after=%d", before, after)
+	}
+	// 状态保持 active。
+	s := findStatus(h.m.Statuses(), "A", 9100)
+	if s == nil || s.State != MirrorStateActive {
+		t.Fatalf("状态应保持 active，实际 %+v", s)
+	}
+	// 幂等重加不产生新广播（快照不变）。
+	select {
+	case snap := <-ch:
+		t.Fatalf("幂等重加不应广播新快照，却收到 %+v", snap)
+	case <-time.After(150 * time.Millisecond):
+		// 正常：无新广播
+	}
+}
+
+// TestDuplicateWinnerDowngradeKeepsSharedForward 验证 M1：更小 deploymentID 后到、
+// 抢走已 active 的共享端口时，落败者不得物理拆除该端口的转发（否则会抖动一轮）。
+func TestDuplicateWinnerDowngradeKeepsSharedForward(t *testing.T) {
+	h := newHarness(t, nil)
+	h.setHosts(devHosts("A"))
+	// 先只有 dep-b（较大 id）在跑 → 赢得 9100。
+	h.m.ApplyNodes(frameHost("A", "dep-b", "svcB", model.HealthRunning, 9100))
+	eventually(t, func() bool {
+		s := findStatus(h.m.Statuses(), "A", 9100)
+		return s != nil && s.State == MirrorStateActive && s.DeploymentID == "dep-b"
+	}, "dep-b 赢得 9100")
+
+	dropsBefore := h.tun.dropped("A", 9100)
+
+	// dep-a（较小 id）后到，与 dep-b 同 host 同端口。
+	frame := []nodetransport.NodeStatus{{
+		HostID:    "A",
+		Reachable: true,
+		Deployments: []model.InstanceStatus{
+			{DeploymentID: "dep-b", ServiceName: "svcB", Metrics: model.InstanceMetrics{Health: model.HealthRunning}, Ports: []int{9100}},
+			{DeploymentID: "dep-a", ServiceName: "svcA", Metrics: model.InstanceMetrics{Health: model.HealthRunning}, Ports: []int{9100}},
+		},
+	}}
+	h.drain()
+	h.m.ApplyNodes(frame)
+	h.waitReconcile(t)
+
+	// 赢家易主：dep-a active，dep-b 变落败者 failed+duplicate。
+	eventually(t, func() bool {
+		wa := findStatus(h.m.Statuses(), "A", 9100)
+		lb := func() *MirrorStatus {
+			for _, s := range h.m.Statuses() {
+				if s.DeploymentID == "dep-b" {
+					return &s
+				}
+			}
+			return nil
+		}()
+		return wa != nil && wa.DeploymentID == "dep-a" && wa.State == MirrorStateActive &&
+			lb != nil && lb.State == MirrorStateFailed
+	}, "赢家易主为 dep-a")
+
+	var loser *MirrorStatus
+	for _, s := range h.m.Statuses() {
+		if s.DeploymentID == "dep-b" {
+			cp := s
+			loser = &cp
+		}
+	}
+	if loser == nil || loser.Error != "duplicate_port_declaration" {
+		t.Fatalf("dep-b 应为 duplicate_port_declaration，实际 %+v", loser)
+	}
+	// 关键断言：共享端口的转发在易主期间不得被拆除。
+	if got := h.tun.dropped("A", 9100); got != dropsBefore {
+		t.Fatalf("赢家易主期间不得拆除共享转发：before=%d after=%d", dropsBefore, got)
+	}
+	if !h.tun.isEstablished("A", 9100) {
+		t.Fatal("共享转发在易主后仍应保持建立")
+	}
+}
+
+// TestExpectedStatePerHealth 覆盖 isRunningHealth 全部五个健康分支（M2）：
+// running/healthy/restarting → 期望有转发；stopped/failed → 无。
+func TestExpectedStatePerHealth(t *testing.T) {
+	cases := []struct {
+		health   model.Health
+		expected bool
+	}{
+		{model.HealthRunning, true},
+		{model.HealthHealthy, true},
+		{model.HealthRestarting, true},
+		{model.HealthStopped, false},
+		{model.HealthFailed, false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(string(tc.health), func(t *testing.T) {
+			h := newHarness(t, nil)
+			h.setHosts(devHosts("A"))
+			h.drain()
+			h.m.ApplyNodes(frameHost("A", "dep1", "svc1", tc.health, 9100))
+			h.waitReconcile(t)
+			if tc.expected {
+				eventually(t, func() bool { return h.tun.isEstablished("A", 9100) },
+					"health="+string(tc.health)+" 应建立转发")
+			} else {
+				if h.tun.isEstablished("A", 9100) {
+					t.Fatalf("health=%s 不应建立转发", tc.health)
+				}
+				if got := len(h.m.Statuses()); got != 0 {
+					t.Fatalf("health=%s 不应产生镜像状态，实际 %d 条", tc.health, got)
+				}
+				if got := h.tun.connectCalls("A"); got != 0 {
+					t.Fatalf("health=%s 不应建立隧道，EnsureConnected=%d", tc.health, got)
+				}
+			}
+		})
+	}
+}
+
+// TestEnsureConnectedFailureMarksAllPortsFailed 验证 M3：EnsureConnected 失败时
+// 该 host 全部声明端口都标 failed（脱敏码），且隧道只尝试连一次（非每端口一次）。
+func TestEnsureConnectedFailureMarksAllPortsFailed(t *testing.T) {
+	h := newHarness(t, nil)
+	h.setHosts(devHosts("A"))
+	h.tun.setConnErr("A", errors.New("dial failed"))
+	h.m.ApplyNodes(frameHost("A", "dep1", "svc1", model.HealthRunning, 9100, 9101))
+
+	eventually(t, func() bool {
+		s1 := findStatus(h.m.Statuses(), "A", 9100)
+		s2 := findStatus(h.m.Statuses(), "A", 9101)
+		return s1 != nil && s1.State == MirrorStateFailed && s2 != nil && s2.State == MirrorStateFailed
+	}, "两个端口都因连接失败标 failed")
+
+	s1 := findStatus(h.m.Statuses(), "A", 9100)
+	s2 := findStatus(h.m.Statuses(), "A", 9101)
+	if s1.Error != "ssh_connection_failed" || s2.Error != "ssh_connection_failed" {
+		t.Fatalf("两个端口都应携带脱敏码，实际 %q / %q", s1.Error, s2.Error)
+	}
+	// EnsureConnected 每 host 只尝试一次。
+	if got := h.tun.connectCalls("A"); got != 1 {
+		t.Fatalf("EnsureConnected 应每 host 一次，实际 %d", got)
+	}
+	// 连接失败不应有任何转发建立。
+	if h.tun.isEstablished("A", 9100) || h.tun.isEstablished("A", 9101) {
+		t.Fatal("连接失败时不应建立任何转发")
+	}
 }
