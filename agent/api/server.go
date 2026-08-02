@@ -46,6 +46,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/onboarding"
 	"github.com/xsxdot/super-dev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/portmirror"
 	"github.com/xsxdot/super-dev/agent/process"
 	"github.com/xsxdot/super-dev/agent/remote"
 	"github.com/xsxdot/super-dev/agent/remoteexec"
@@ -256,6 +257,11 @@ type App struct {
 	ingressCertService *ingress.CertService
 	// ingressCertManager 定期续期已托管的入口证书。
 	ingressCertManager *ingress.CertManager
+	// mirrorManager 收敛端口镜像期望态到实际隧道转发，状态供 UI 查询/订阅（Task 7/8）。
+	mirrorManager *portmirror.Manager
+	// mirrorRegistryUnsub 取消端口镜像对 nodeRegistry 的订阅；Close 时先于
+	// mirrorManager.Close 调用，避免订阅 channel 关闭后 goroutine 泄漏。
+	mirrorRegistryUnsub func()
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -573,6 +579,43 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 	app.managedReconciler = NewHostDeploymentReconciler(app, nodeTransport, cfg.ManagedDeploymentReconcileInterval)
+
+	// 端口镜像装配：Deps.Target/Resolve 都是 app 方法（定义在 handler_port_mirrors.go），
+	// 此时 app 已完整赋值，闭包捕获的 app 指针在 Manager 首次 reconcile 前必然可用。
+	assemblyHosts, assemblyHostsErr := remoteStore.ListHosts()
+	if assemblyHostsErr != nil {
+		log.Printf("[SuperDev] portmirror 已装配 hosts=0（读取主机列表失败: %v）", assemblyHostsErr)
+	} else {
+		log.Printf("[SuperDev] portmirror 已装配 hosts=%d", len(assemblyHosts))
+	}
+	app.mirrorManager = portmirror.NewManager(portmirror.Deps{
+		Hosts: func() []model.Host {
+			hosts, err := remoteStore.ListHosts()
+			if err != nil {
+				log.Printf("[SuperDev] portmirror: 读取主机列表失败: %v", err)
+				return nil
+			}
+			for i := range hosts {
+				model.ApplyHostDefaults(&hosts[i])
+			}
+			return hosts
+		},
+		Target:   app.portMirrorTarget,
+		Tunnels:  app.tunnels,
+		Occupier: portmirror.LookupOccupier,
+		Resolve:  app.resolveManagedPID,
+	})
+	// 桥接 nodeRegistry 快照订阅 → mirrorManager.ApplyNodes：与 wsNodes 消费同一份
+	// Subscribe 语义（慢消费者丢帧），Close 时必须先 mirrorRegistryUnsub 再
+	// mirrorManager.Close，否则该 goroutine 会永久阻塞在已无人消费的 channel 上。
+	mirrorFrames, mirrorUnsub := app.nodeRegistry.Subscribe()
+	app.mirrorRegistryUnsub = mirrorUnsub
+	go func() {
+		for frames := range mirrorFrames {
+			app.mirrorManager.ApplyNodes(frames)
+		}
+	}()
+
 	return app, nil
 }
 
@@ -662,6 +705,15 @@ func (a *App) doClose() {
 		_ = closer.Close()
 	}
 	a.buf.Close()
+	// mirrorRegistryUnsub 必须先于 mirrorManager.Close：先掐断新帧输入，再让
+	// reconcile loop 拆除全部转发退出；mirrorManager 必须先于 tunnels.Close，
+	// 否则转发拆除时隧道已关闭，DropForward 会在无效连接上操作。
+	if a.mirrorRegistryUnsub != nil {
+		a.mirrorRegistryUnsub()
+	}
+	if a.mirrorManager != nil {
+		a.mirrorManager.Close()
+	}
 	if a.tunnels != nil {
 		a.tunnels.Close()
 	}
@@ -888,6 +940,12 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/tunnels/{host_id}", a.connectTunnel)
 	mux.HandleFunc("DELETE /api/tunnels/{host_id}", a.disconnectTunnel)
 	mux.HandleFunc("GET /ws/tunnels", a.wsTunnels)
+
+	// 端口镜像
+	mux.HandleFunc("GET /api/port-mirrors", a.listPortMirrors)
+	mux.HandleFunc("GET /ws/port-mirrors", a.wsPortMirrors)
+	mux.HandleFunc("POST /api/port-mirrors/retry", a.retryPortMirror)
+	mux.HandleFunc("POST /api/port-mirrors/stop-occupier", a.stopPortMirrorOccupier)
 
 	// 远程监听聚合视图
 	mux.HandleFunc("GET /api/remote/view", a.remoteView)

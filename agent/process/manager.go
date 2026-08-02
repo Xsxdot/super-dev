@@ -170,6 +170,29 @@ func (m *Manager) PID(serviceID string) int {
 	return 0
 }
 
+// RunningPIDs 返回当前运行中 deployment 的 deploymentID → pid 反查表（仅 running/starting）。
+//
+// 用途：端口镜像冲突识别需要「本机 pid 反查 deploymentID」的反向查询，PID/DeploymentPID
+// 只提供正向查询（deploymentID→pid），故补充本方法；调用方按需跨多个 Manager 聚合。
+func (m *Manager) RunningPIDs() map[string]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]int, len(m.runners))
+	for id, r := range m.runners {
+		st := m.status[id]
+		if st != model.StatusRunning && st != model.StatusStarting {
+			continue
+		}
+		if r == nil {
+			continue
+		}
+		if pid := r.PID(); pid > 0 {
+			out[id] = pid
+		}
+	}
+	return out
+}
+
 // setStatus 线程安全地更新服务状态；状态发生实际跃迁时在锁外通知 onStatusChange。
 func (m *Manager) setStatus(id string, st model.ServiceStatus) {
 	m.mu.Lock()

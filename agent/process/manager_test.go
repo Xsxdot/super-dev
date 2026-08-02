@@ -504,3 +504,43 @@ func TestManagerNotifiesStatusChange(t *testing.T) {
 		return false
 	}, 3*time.Second, 20*time.Millisecond, "应收到 stopped 状态变更通知")
 }
+
+// TestManagerRunningPIDsReflectsOnlyRunningDeployments 验证 RunningPIDs 只暴露仍在运行的
+// deployment，且 pid 与 DeploymentPID 一致——它是端口镜像 Deps.Resolve（pid 反查 deploymentID）
+// 反向扫描的数据来源，必须与正向查询（DeploymentPID）严格对应，否则反查会认错占用者归属。
+func TestManagerRunningPIDsReflectsOnlyRunningDeployments(t *testing.T) {
+	mgr := process.NewManager(func(model.LogEntry) {})
+
+	running := model.Deployment{
+		ID:       "dep-running",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 60",
+		WorkDir:  t.TempDir(),
+	}
+	require.NoError(t, mgr.StartDeployment(running))
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, model.StatusRunning, mgr.DeploymentStatus("dep-running"))
+
+	stopped := model.Deployment{
+		ID:       "dep-stopped",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  `echo "done"`,
+		WorkDir:  t.TempDir(),
+	}
+	require.NoError(t, mgr.StartDeployment(stopped))
+	time.Sleep(300 * time.Millisecond)
+	require.Equal(t, model.StatusStopped, mgr.DeploymentStatus("dep-stopped"))
+
+	pids := mgr.RunningPIDs()
+	pid, ok := pids["dep-running"]
+	require.True(t, ok, "运行中的 deployment 应出现在 RunningPIDs 里")
+	assert.Equal(t, mgr.DeploymentPID("dep-running"), pid)
+	assert.Positive(t, pid)
+
+	_, stoppedPresent := pids["dep-stopped"]
+	assert.False(t, stoppedPresent, "已停止的 deployment 不应出现在 RunningPIDs 里")
+
+	mgr.StopDeployment("dep-running")
+}

@@ -58,6 +58,13 @@ const (
 	//   - 该 kind 只描述减少现有访问面的 fail-closed 失效，不用于主动 connect/disconnect
 	//   - 配置写入完成后不能继续保留旧身份连接，因此无需二次审批，但必须写入审计
 	OperationTunnelInvalidate = "tunnel.invalidate"
+	// KindPortMirrorStopOccupier 表示端口镜像冲突处理动作——停止占用本机端口的进程。
+	//
+	// 注意：
+	//   - 该 kind 同 OperationTunnelInvalidate 一样不参与审批门禁（UI 点击本身即人工审查），
+	//     但两条路径（托管走 runDeploymentRuntimeAction 语义 / 非托管 SIGTERM）都必须
+	//     写入 prepared + executed/failed 审计，保证冲突处理动作事后可追溯
+	KindPortMirrorStopOccupier = "port_mirror.stop_occupier"
 
 	// RiskLow 表示仅影响开发环境本机目标的低风险操作。
 	RiskLow = "low"

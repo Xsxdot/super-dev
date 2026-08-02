@@ -100,6 +100,11 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if a.mirrorManager != nil {
+		// dev-machine-mode 开关是 Host 更新的一部分字段，成功持久化后立即重算，
+		// 让开关生效不必等下一帧节点状态到来。
+		a.mirrorManager.ReconcileNow()
+	}
 	jsonOK(w, a.hostView(updated))
 }
 
