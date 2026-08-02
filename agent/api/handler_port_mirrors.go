@@ -70,6 +70,20 @@ func (a *App) wsPortMirrors(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// 读 pump：镜像快照流是稀疏的（可能数小时零帧），没有写失败可借以发现断连；
+	// WS 升级（hijack）后 r.Context() 也不会因客户端断开而 Done。必须主动读连接，
+	// 读出错即退出主循环，及时回收断开客户端占用的 goroutine/fd/订阅项。
+	// （wsNodes 无此问题：它的流是 ≤5s 心跳级高频，写失败很快暴露。）
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
 	ch, unsubscribe := a.mirrorManager.Subscribe()
 	defer unsubscribe()
 	for {
@@ -81,6 +95,8 @@ func (a *App) wsPortMirrors(w http.ResponseWriter, r *http.Request) {
 			if err := conn.WriteJSON(snapshot); err != nil {
 				return
 			}
+		case <-readDone:
+			return
 		case <-r.Context().Done():
 			return
 		}
@@ -121,8 +137,40 @@ func (a *App) retryPortMirror(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "retrying"})
 }
 
-// stopPortMirrorOccupier 处理 POST /api/port-mirrors/stop-occupier：解析冲突占用者
-// 并按托管/非托管分流停止，裁决逻辑见 resolvePortMirrorConflict。
+// lookupPortMirrorOccupierFresh 是执行停止前重新识别端口占用者的入口；
+// var 形式供测试覆写，模拟「占用者已变化/端口已释放」的竞态场景。
+var lookupPortMirrorOccupierFresh = portmirror.LookupOccupier
+
+// portMirrorOccupierVerdict 表示 stop-occupier 执行前复核的裁决结果。
+type portMirrorOccupierVerdict int
+
+const (
+	// occupierVerdictProceed 表示实时占用者与快照一致，可以执行停止。
+	occupierVerdictProceed portMirrorOccupierVerdict = iota
+	// occupierVerdictAlreadyFreed 表示端口已无人监听，冲突已自行消解。
+	occupierVerdictAlreadyFreed
+	// occupierVerdictChanged 表示占用者 pid 已变化，按旧快照执行会打到无辜进程。
+	occupierVerdictChanged
+)
+
+// verdictForOccupierRecheck 比对快照占用者与执行时实时占用者，产出裁决。
+//
+// 为什么必须复核：快照来自 reconcile 时的 lsof 结果并受 30s 冷却记忆约束，用户点击
+// "停止"时这份 pid 可能已陈旧——原进程退出、OS 复用 pid 后，SIGTERM 会送达一个与
+// 端口无关的进程。展示身份用快照（与 UI 冲突卡片一致），执行授权用实时复核。
+func verdictForOccupierRecheck(snapshot, fresh *portmirror.Occupier) portMirrorOccupierVerdict {
+	switch {
+	case fresh == nil:
+		return occupierVerdictAlreadyFreed
+	case fresh.PID != snapshot.PID:
+		return occupierVerdictChanged
+	default:
+		return occupierVerdictProceed
+	}
+}
+
+// stopPortMirrorOccupier 处理 POST /api/port-mirrors/stop-occupier：解析冲突占用者，
+// 执行前实时复核占用者未变化，再按托管/非托管分流停止（裁决见 resolvePortMirrorConflict）。
 func (a *App) stopPortMirrorOccupier(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodePortMirrorTargetRequest(w, r)
 	if !ok {
@@ -131,6 +179,26 @@ func (a *App) stopPortMirrorOccupier(w http.ResponseWriter, r *http.Request) {
 	occ, found := a.findPortMirrorOccupier(req.HostID, req.Port)
 	if !found {
 		jsonError(w, http.StatusNotFound, "no port mirror conflict found for host/port")
+		return
+	}
+	fresh, err := lookupPortMirrorOccupierFresh(req.Port, a.resolveManagedPID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, fmt.Sprintf("复核端口占用者失败: %v", err))
+		return
+	}
+	switch verdictForOccupierRecheck(occ, fresh) {
+	case occupierVerdictAlreadyFreed:
+		// 端口已释放：无需停止任何进程，立即重试镜像让它收敛。
+		log.Printf("[SuperDev] portmirror: stop-occupier 复核发现端口 %d 已释放，跳过停止并重试镜像", req.Port)
+		if a.mirrorManager != nil {
+			a.mirrorManager.Retry(req.HostID, req.Port)
+		}
+		jsonOK(w, map[string]string{"status": "already_freed"})
+		return
+	case occupierVerdictChanged:
+		log.Printf("[SuperDev] portmirror: stop-occupier 复核发现占用者已变化 port=%d snapshot_pid=%d fresh_pid=%d，拒绝执行",
+			req.Port, occ.PID, fresh.PID)
+		jsonError(w, http.StatusConflict, "port occupier has changed; refresh conflict details and retry")
 		return
 	}
 	if err := a.resolvePortMirrorConflict(r.Context(), req.HostID, req.Port, occ); err != nil {
@@ -144,8 +212,9 @@ func (a *App) stopPortMirrorOccupier(w http.ResponseWriter, r *http.Request) {
 //
 // 注意：
 //   - 占用者信息由 portmirror.Manager 在 reconcile 时通过 LookupOccupier 解析并缓存
-//     进 MirrorStatus，本函数不重新触发一次 lsof——与 UI 冲突卡片展示的是同一份数据，
-//     保证「用户看到的占用者」与「即将被停止的占用者」严格一致
+//     进 MirrorStatus——与 UI 冲突卡片展示的是同一份数据（身份展示用快照）
+//   - 但快照 pid 可能陈旧（冷却记忆 ≥30s），执行停止前必须经
+//     verdictForOccupierRecheck 实时复核，防 pid 复用后误伤无辜进程
 func (a *App) findPortMirrorOccupier(hostID string, port int) (*portmirror.Occupier, bool) {
 	if a.mirrorManager == nil {
 		return nil, false

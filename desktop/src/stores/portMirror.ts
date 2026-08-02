@@ -107,6 +107,8 @@ export const usePortMirrorStore = defineStore('portMirror', () => {
   async function loadSnapshot() {
     // 初次拉取是基线水位，直接赋值、不经 applySnapshot 的 diff——否则启动时一整批
     // 既有 active 镜像会被误判成"刚刚建立"，刷出一屏幕并不新鲜的假事件。
+    // 代价（有意接受）：断连窗口内发生的跃迁（conflict/removed 等）不会补发事件——
+    // 重连即重置基线，gap 内的变化只体现在最新状态里，不出现在日志流事件行。
     mirrors.value = await api.listPortMirrors()
   }
 

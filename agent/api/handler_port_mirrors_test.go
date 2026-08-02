@@ -211,6 +211,21 @@ func TestStopOccupierAuditTrail(t *testing.T) {
 	})
 }
 
+// TestVerdictForOccupierRecheck 覆盖 stop-occupier 执行前的实时复核裁决：
+// pid 一致才放行；端口已释放或占用者已变化都不得执行停止——快照 pid 可能陈旧 ≥30s
+// （冷却记忆），OS 复用 pid 后按旧快照发 SIGTERM 会误伤无辜进程。
+func TestVerdictForOccupierRecheck(t *testing.T) {
+	snap := &portmirror.Occupier{PID: 100, Name: "node"}
+	assert.Equal(t, occupierVerdictProceed,
+		verdictForOccupierRecheck(snap, &portmirror.Occupier{PID: 100, Name: "node"}))
+	assert.Equal(t, occupierVerdictAlreadyFreed,
+		verdictForOccupierRecheck(snap, nil),
+		"端口已释放：跳过停止，只重试镜像")
+	assert.Equal(t, occupierVerdictChanged,
+		verdictForOccupierRecheck(snap, &portmirror.Occupier{PID: 101, Name: "node"}),
+		"pid 已变化：拒绝执行，让用户刷新冲突详情")
+}
+
 func listPortMirrorAuditEvents(t *testing.T, app *App, hostID string) []operation.AuditEvent {
 	t.Helper()
 	all, err := app.operationAudit.List(context.Background(), operation.AuditFilter{Kind: operation.KindPortMirrorStopOccupier})
