@@ -50,6 +50,7 @@ func (a *HostAssembler) ToView(host model.Host) dto.HostView {
 		SSHPasswordConfigured:           passwordConfigured,
 		SSHPrivateKeyConfigured:         privateKeyConfigured,
 		SSHHostKeyFingerprintConfigured: host.SSHHostKeyFingerprint != "",
+		DevMachineMode:                  host.DevMachineMode,
 	}
 }
 
@@ -76,6 +77,7 @@ func (a *HostAssembler) ToModel(write dto.HostWrite) model.Host {
 		SSHPassword:           write.SSHPassword,
 		SSHPrivateKey:         write.SSHPrivateKey,
 		SSHHostKeyFingerprint: write.SSHHostKeyFingerprint,
+		DevMachineMode:        write.DevMachineMode,
 	}
 }
 

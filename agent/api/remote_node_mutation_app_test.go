@@ -224,11 +224,14 @@ func TestRemoteNodeMutationApplicationUpdateHostDoesNotInvalidateDisplayFields(t
 	dto := remoteNodeMutationHostDTO(base)
 	dto.Name = "renamed"
 	dto.Tags = []string{"prod", "gpu"}
+	dto.DevMachineMode = true // display/behavior 字段翻转：不动 SSH 身份，不应触发隧道失效
 
-	_, err := app.UpdateHost(context.Background(), base.ID, dto)
+	updated, err := app.UpdateHost(context.Background(), base.ID, dto)
 
 	require.NoError(t, err)
-	assert.Empty(t, invalidator.hostIDs)
+	assert.True(t, updated.DevMachineMode, "DevMachineMode 翻转应正常持久化")
+	assert.Empty(t, invalidator.hostIDs, "display 字段变更不应调用 tunnel 失效")
+	assert.Empty(t, hosts.host.PendingTunnelInvalidationRevision, "display 字段变更不应产生待完成的 tunnel 失效 outbox 标记")
 }
 
 func TestRemoteNodeMutationApplicationUpdateHostPersistenceFailureKeepsTunnel(t *testing.T) {
@@ -459,6 +462,7 @@ func remoteNodeMutationHostDTO(host model.Host) hostWriteDTO {
 		SSHPassword:           host.SSHPassword,
 		SSHPrivateKey:         host.SSHPrivateKey,
 		SSHHostKeyFingerprint: host.SSHHostKeyFingerprint,
+		DevMachineMode:        host.DevMachineMode,
 	}
 }
 

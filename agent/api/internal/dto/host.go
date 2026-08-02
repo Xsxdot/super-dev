@@ -30,6 +30,7 @@ type HostWrite struct {
 	ClearSSHPassword           bool     `json:"clear_ssh_password,omitempty"`
 	ClearSSHPrivateKey         bool     `json:"clear_ssh_private_key,omitempty"`
 	ClearSSHHostKeyFingerprint bool     `json:"clear_ssh_host_key_fingerprint,omitempty"`
+	DevMachineMode             bool     `json:"dev_machine_mode,omitempty"`
 }
 
 // HostView 是 Host HTTP API 返回的不含秘密的安全读视图。
@@ -49,6 +50,7 @@ type HostView struct {
 	SSHPasswordConfigured           bool     `json:"ssh_password_configured"`
 	SSHPrivateKeyConfigured         bool     `json:"ssh_private_key_configured"`
 	SSHHostKeyFingerprintConfigured bool     `json:"ssh_host_key_fingerprint_configured"`
+	DevMachineMode                  bool     `json:"dev_machine_mode,omitempty"`
 	IsSelf                          bool     `json:"is_self"`
 	NodeID                          string   `json:"node_id,omitempty"`
 }

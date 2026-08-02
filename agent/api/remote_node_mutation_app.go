@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,6 +252,12 @@ func (a *remoteNodeMutationApplication) UpdateHost(ctx context.Context, hostID s
 	if err := importHostPrivateKey(&updated, dto.SSHKeyPath); err != nil {
 		log.WithErr(err).Error("Host SSH 私钥导入失败")
 		return model.Host{}, &invalidHostMutationError{cause: err}
+	}
+	if existing.DevMachineMode != updated.DevMachineMode {
+		// 开发机模式是纯 display/behavior 开关（端口镜像消费该字段），翻转不影响下面
+		// changedHostTunnelTargetFields 的判定、也不产生 tunnel 失效 outbox；但镜像行为的
+		// 开关变更本身必须可追溯，单独记一条日志。
+		logDevMachineModeFlip(hostID, existing.DevMachineMode, updated.DevMachineMode)
 	}
 	changedFields := changedHostTunnelTargetFields(existing, updated)
 	if len(changedFields) == 0 {
@@ -731,6 +738,13 @@ func (a *remoteNodeMutationApplication) RecoverPendingAgentRemoval(ctx context.C
 	return true, nil
 }
 
+// changedHostTunnelTargetFields 返回本次更新中发生变化的 SSH 连接身份字段；非空即触发 tunnel 失效。
+//
+// 白名单式判定：只枚举真正构成 tunnel.Target 的 SSH 身份字段（host/port/user/password/
+// private key/host key fingerprint）。DevMachineMode、Name、Tags、PublicIP、PrivateIP 等纯
+// display/behavior 字段有意不在此列——它们不影响 SSH 如何连接这台机器，变更它们不需要、
+// 也不应该撤销既有隧道运行态。新增任何"纯展示/行为"字段时，保持它不进入这个白名单即可，
+// 不需要额外排除逻辑。
 func changedHostTunnelTargetFields(before, after model.Host) []string {
 	changed := make([]string, 0, 6)
 	if before.SSHHost != after.SSHHost {
@@ -752,6 +766,22 @@ func changedHostTunnelTargetFields(before, after model.Host) []string {
 		changed = append(changed, "ssh_host_key_fingerprint")
 	}
 	return changed
+}
+
+// logDevMachineModeFlip 记录 DevMachineMode 开关翻转，供开发机端口镜像行为审计追溯。
+//
+// 参数：
+//   - hostID: 发生翻转的 Host ID
+//   - oldMode: 翻转前的值
+//   - newMode: 翻转后的值
+//
+// 注意：
+//   - 该字段不触发 tunnel 失效（见 changedHostTunnelTargetFields），因此单独记一条日志，
+//     不与 tunnel target 变更的审计日志混淆
+//   - 用标准库 log（而非本文件其余处的 gokit logger）是因为调用处的 `log` 局部变量已被
+//     gokit logger 实例占用，此处用独立包级函数避免变量遮蔽
+func logDevMachineModeFlip(hostID string, oldMode, newMode bool) {
+	log.Printf("[SuperDev] host %s 开发机模式 %v→%v", hostID, oldMode, newMode)
 }
 
 func effectiveSSHPort(port int) int {

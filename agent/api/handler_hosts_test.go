@@ -398,13 +398,57 @@ func TestListHosts_IncludesSelfNode(t *testing.T) {
 	assert.NotEmpty(t, selfNode.Name, "self node must have a display name")
 }
 
+// TestHostDevMachineModeRoundTrip 验证 dev_machine_mode 字段的完整往返：
+// 创建时按请求回显、更新后持久化生效，且合成的本机 is_self 条目恒为 false（本机不镜像自己）。
+func TestHostDevMachineModeRoundTrip(t *testing.T) {
+	srv, _ := newTestApp(t)
+
+	// POST /api/hosts 带 "dev_machine_mode": true → HostView 返回 dev_machine_mode=true
+	body, _ := json.Marshal(map[string]any{
+		"name":             "dev01",
+		"dev_machine_mode": true,
+	})
+	resp, err := http.Post(srv.URL+"/api/hosts", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	var created hostDTOWithSelf
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.True(t, created.DevMachineMode, "创建时 dev_machine_mode=true 应完整回显")
+
+	// PUT 更新为 false → GET 列表中该 host 为 false
+	created.DevMachineMode = false
+	updateBody, _ := json.Marshal(created)
+	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/hosts/"+created.ID, bytes.NewReader(updateBody))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, err = http.Get(srv.URL + "/api/hosts")
+	require.NoError(t, err)
+	var list []hostDTOWithSelf
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&list))
+	_ = resp.Body.Close()
+	require.Len(t, list, 2)
+
+	// 断言合成的 is_self 本机条目 dev_machine_mode 恒为 false（本机不镜像自己）
+	assert.True(t, list[0].IsSelf, "首条是本机节点")
+	assert.False(t, list[0].DevMachineMode, "本机 is_self 节点必须恒为 false，不镜像自己")
+
+	assert.Equal(t, "dev01", list[1].Name)
+	assert.False(t, list[1].DevMachineMode, "PUT 更新为 false 后 GET 列表应持久化为 false")
+}
+
 // hostDTOWithSelf 是含 is_self 字段的扩展视图，供本测试解析。
 type hostDTOWithSelf struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	PublicIP  string   `json:"public_ip,omitempty"`
-	PrivateIP string   `json:"private_ip,omitempty"`
-	Tags      []string `json:"tags"`
-	IsSelf    bool     `json:"is_self"`
-	NodeID    string   `json:"node_id"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	PublicIP       string   `json:"public_ip,omitempty"`
+	PrivateIP      string   `json:"private_ip,omitempty"`
+	Tags           []string `json:"tags"`
+	DevMachineMode bool     `json:"dev_machine_mode,omitempty"`
+	IsSelf         bool     `json:"is_self"`
+	NodeID         string   `json:"node_id"`
 }

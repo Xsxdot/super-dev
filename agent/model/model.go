@@ -429,6 +429,10 @@ type Host struct {
 	SSHPassword           string   `json:"ssh_password,omitempty"`
 	SSHPrivateKey         string   `json:"ssh_private_key,omitempty"`
 	SSHHostKeyFingerprint string   `json:"ssh_host_key_fingerprint,omitempty"`
+	// DevMachineMode 标记该主机被本控制面当作开发机消费（端口镜像开关）。
+	// 这是控制面本地设置：只落本机 hosts.json，不下发节点、不跨控制面同步——
+	// 开发机自己的桌面端天然不镜像自己（spec §3）。
+	DevMachineMode bool `json:"dev_machine_mode,omitempty"`
 	// PendingTunnelInvalidationRevision 与连接目标变更同文件落盘，作为待完成安全审计的 outbox 标记。
 	PendingTunnelInvalidationRevision string `json:"pending_tunnel_invalidation_revision,omitempty"`
 }
