@@ -421,3 +421,86 @@ func TestManagerLogEntryDeploymentID(t *testing.T) {
 		assert.Equal(t, "dep-log", e.DeploymentID, "所有日志条目应归属于 dep.ID")
 	}
 }
+
+// TestManagerNotifiesStatusChange 验证 onStatusChange 回调收到 deployment 的状态跃迁序列，
+// 且回调本身不在 Manager 内部锁持有期间被调用——这是端口镜像事件帧机制的时延来源，
+// 回调若在锁内触发，任何重入 Manager（如调用 m.Status）的调用方都会自死锁。
+func TestManagerNotifiesStatusChange(t *testing.T) {
+	type change struct {
+		id string
+		st model.ServiceStatus
+	}
+	var mu sync.Mutex
+	var changes []change
+
+	mgr := process.NewManager(func(model.LogEntry) {})
+	mgr.SetOnStatusChange(func(id string, st model.ServiceStatus) {
+		// 死锁探针：setStatus 若在持锁状态下调用本回调，这里对 Manager 的重入调用
+		// （mgr.Status）会永久阻塞在 mu.Lock() 上。真正暴露该问题的不是"收集到了状态"，
+		// 而是这一行重入调用是否能返回。
+		_ = mgr.Status(id)
+		mu.Lock()
+		changes = append(changes, change{id: id, st: st})
+		mu.Unlock()
+	})
+
+	dep := model.Deployment{
+		ID:       "dep-status-change",
+		EnvName:  "dev",
+		Location: model.LocationLocal,
+		Command:  "sleep 5",
+		WorkDir:  t.TempDir(),
+	}
+
+	// StartDeployment 在独立 goroutine 中调用并用超时兜底：若回调死锁，StartDeployment
+	// 内部的 setStatus 调用会永久阻塞，直接调用会把整个测试拖到 go test 的全局超时
+	// （分钟级、栈信息难读）。有界超时能在几秒内给出清晰的失败原因。
+	started := make(chan error, 1)
+	go func() { started <- mgr.StartDeployment(dep) }()
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("mgr.StartDeployment 未在 3s 内返回：onStatusChange 回调很可能在持锁状态下被调用，触发死锁")
+	}
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		var sawStarting, sawRunning bool
+		for _, c := range changes {
+			if c.id != dep.ID {
+				continue
+			}
+			switch c.st {
+			case model.StatusStarting:
+				sawStarting = true
+			case model.StatusRunning:
+				sawRunning = true
+			}
+		}
+		return sawStarting && sawRunning
+	}, 3*time.Second, 20*time.Millisecond, "应依次收到 starting、running 两次状态变更通知")
+
+	stopped := make(chan struct{})
+	go func() {
+		mgr.StopDeployment(dep.ID)
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("mgr.StopDeployment 未在 3s 内返回：onStatusChange 回调很可能在持锁状态下被调用，触发死锁")
+	}
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range changes {
+			if c.id == dep.ID && c.st == model.StatusStopped {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 20*time.Millisecond, "应收到 stopped 状态变更通知")
+}

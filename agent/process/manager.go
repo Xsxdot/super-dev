@@ -20,6 +20,7 @@ import (
 //   - 提供不绑定 deployment 概念的低阶启动原语 StartProcess（供 collector 等子系统使用）
 //   - 监控进程退出并更新状态
 //   - 将进程输出通过 onLog 回调传递给上层，日志以 DeploymentID 归属
+//   - 状态发生实际跃迁时通过可选的 onStatusChange 回调通知上层（SetOnStatusChange 构造后注入）
 //
 // 边界：
 //   - 不持久化状态，仅在内存维护 runners/status 映射
@@ -35,8 +36,12 @@ type Manager struct {
 	readiness    map[string]*model.ReadinessProbe
 	backgrounded map[string]bool
 	onLog        func(model.LogEntry)
-	runID        string
-	logSeq       atomic.Int64 // 单调递增，为每条 LogEntry 分配唯一 ID
+	// onStatusChange 在 deployment 运行态变更时回调（starting/running/failed/stopped）。
+	// 用于驱动节点状态事件帧——「运行即转发」的时延来源。回调在锁外调用，
+	// 实现方不得阻塞（应只做 signal/入队）。
+	onStatusChange func(deploymentID string, st model.ServiceStatus)
+	runID          string
+	logSeq         atomic.Int64 // 单调递增，为每条 LogEntry 分配唯一 ID
 }
 
 // NewManager 创建一个新的 Manager。
@@ -62,6 +67,17 @@ func NewManager(onLog func(model.LogEntry)) *Manager {
 func (m *Manager) SetRunID(id string) {
 	m.mu.Lock()
 	m.runID = id
+	m.mu.Unlock()
+}
+
+// SetOnStatusChange 注册 deployment 状态跃迁回调，构造后可选调用（不调用则 onStatusChange 为 nil，
+// setStatus 直接跳过通知）。
+//
+// 与 onLog 的差异：onLog 是 NewManager 的必填构造参数，每条日志行都会调用；onStatusChange
+// 沿用 SetRunID 的 setter 惯例做构造后可选注入，仅在状态发生实际跃迁时才调用一次。
+func (m *Manager) SetOnStatusChange(cb func(deploymentID string, st model.ServiceStatus)) {
+	m.mu.Lock()
+	m.onStatusChange = cb
 	m.mu.Unlock()
 }
 
@@ -154,11 +170,19 @@ func (m *Manager) PID(serviceID string) int {
 	return 0
 }
 
-// setStatus 线程安全地更新服务状态。
+// setStatus 线程安全地更新服务状态；状态发生实际跃迁时在锁外通知 onStatusChange。
 func (m *Manager) setStatus(id string, st model.ServiceStatus) {
 	m.mu.Lock()
+	prev := m.status[id]
 	m.status[id] = st
+	cb := m.onStatusChange
 	m.mu.Unlock()
+	// 回调必须在锁外调用：回调可能重入 Manager（如调用 m.Status(id)），持锁调用会自死锁。
+	// 只在状态真正跃迁（prev != st）时才通知，避免幂等的重复 setStatus（如已 running 时
+	// 重复 StartDeployment 的跳过路径）产生冗余事件帧。
+	if cb != nil && prev != st {
+		cb(id, st)
+	}
 }
 
 // setReadiness 登记 deployment 的就绪探测配置。nil 表示「进程起来即就绪」。

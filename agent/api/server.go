@@ -1121,6 +1121,11 @@ func (a *App) getOrCreateManager(projectID string) *process.Manager {
 		return mgr
 	}
 	mgr := process.NewManager(a.buf.Append)
+	mgr.SetOnStatusChange(func(deploymentID string, st model.ServiceStatus) {
+		// 事件帧：deployment 状态一变（starting/running/failed/stopped）就催发一帧节点状态，
+		// 5s 周期心跳继续兜底纠偏。高频、无失败分支，不打日志。
+		a.signalNodeStatusPublishers()
+	})
 	a.managers[projectID] = mgr
 	return mgr
 }
