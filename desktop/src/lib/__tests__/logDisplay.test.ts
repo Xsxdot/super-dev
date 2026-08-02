@@ -230,6 +230,28 @@ describe('makeDisplayItems', () => {
     expect(mirrorKinds).toEqual(['established', 'failed'])
   })
 
+  it('两条端口镜像事件仅 hostName 不同（同 deploymentId/port/kind/at）时 id 也必须不同', () => {
+    // 复现场景：同一 deployment 的两个副本跑在不同 host 上，同一端口，WS 一次
+    // diff 里在同一毫秒内都跃迁到 established（diffSnapshots 在一个同步循环里
+    // 逐条 Date.now()，撞同一毫秒很常见）。id 里如果不带 host 判别符，两条本质
+    // 不同（host 不同）的事件会拿到完全相同的 id，破坏虚拟列表 getItemKey 的
+    // 唯一性契约——这正是 store 自己的 mirrorEntryKey（portMirror.ts:38-39）
+    // 早就用 host_id::deployment_id::port 三元组规避掉的同一个坑。
+    const sharedAt = toMs('2026-05-21T10:00:02.000Z')
+    const mirrorEvents: MirrorEvent[] = [
+      { deploymentId: 'dep-1', port: 9100, hostName: 'dev-box-a', kind: 'established', at: sharedAt },
+      { deploymentId: 'dep-1', port: 9100, hostName: 'dev-box-b', kind: 'established', at: sharedAt },
+    ]
+
+    const items = makeDisplayItems([], null, markers, null, [], [], mirrorEvents)
+
+    const ids = items
+      .filter((item): item is Extract<LogDisplayItem, { kind: 'mirrorEvent' }> => item.kind === 'mirrorEvent')
+      .map(item => item.id)
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+  })
+
   it('空 mirrorEvents 数组对显示列表零影响', () => {
     const logs = [
       makeLog(1, '2026-05-21T10:00:01.000Z'),

@@ -138,7 +138,13 @@ function withMirrorEvents(
     )
     const displayItem: LogDisplayItem = {
       kind: 'mirrorEvent',
-      id: `mirror-${event.deploymentId}-${event.port}-${event.kind}-${event.at}`,
+      // id 必须带 hostName：一个 deployment 可能有多个副本跑在不同 host 上，
+      // 同端口同时跃迁到同一 kind 时 diffSnapshots 常在同一毫秒内产出多条事件
+      // （见 portMirror.ts diffSnapshots，同步循环里逐条 Date.now()）。缺了
+      // host 判别符会让两条本质不同的事件撞成同一个 id，破坏虚拟列表
+      // getItemKey 的唯一性——这是 store 自己的 mirrorEntryKey（同文件
+      // host_id::deployment_id::port 三元组）已经踩过并修复的同一个坑。
+      id: `mirror-${event.deploymentId}-${event.hostName}-${event.port}-${event.kind}-${event.at}`,
       at: event.at,
       port: event.port,
       hostName: event.hostName,
