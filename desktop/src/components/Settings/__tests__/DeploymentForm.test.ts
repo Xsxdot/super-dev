@@ -765,5 +765,18 @@ describe('DeploymentForm', () => {
 
       expect((wrapper.find('[data-test="dep-ports"]').element as HTMLInputElement).value).toBe('3000, 8080')
     })
+
+    it('在无效输入后实时切换到另一个合法 deployment 时清除错误提示（不留假错误覆盖有效数据）', async () => {
+      const wrapper = mount(DeploymentForm, { props: { modelValue: localDep(), hosts: [] } })
+
+      await wrapper.find('[data-test="dep-ports"]').setValue('abc')
+      expect(wrapper.find('[data-test="dep-ports-error"]').exists()).toBe(true)
+
+      const deploymentB = { ...localDep(), id: 'd2', ports: [9000] }
+      await wrapper.setProps({ modelValue: deploymentB })
+
+      expect(wrapper.find('[data-test="dep-ports-error"]').exists()).toBe(false)
+      expect((wrapper.find('[data-test="dep-ports"]').element as HTMLInputElement).value).toBe('9000')
+    })
   })
 })

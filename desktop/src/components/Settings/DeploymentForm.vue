@@ -84,6 +84,12 @@ watch(
     const { ports: currentParsed } = parsePortsText(portsText.value)
     if (!portsEqual(currentParsed, next ?? [])) {
       portsText.value = formatPorts(next)
+      // 走到这个分支的 next 一定来自 Deployment.ports: number[] | undefined，按构造
+      // 就是合法值——必须顺带清掉上一个 deployment 遗留的 portsInvalid，否则切换到
+      // 另一份合法数据后，输入框已经回显了正确文本，错误提示却还留在屏幕上，
+      // 变成一条盖在有效数据上的假错误（不清会一直悬空，因为 portsInvalid 只在
+      // setPortsText 里被清，而这里不经过 setPortsText）。
+      portsInvalid.value = false
     }
   },
 )
