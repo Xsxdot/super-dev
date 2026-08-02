@@ -120,12 +120,14 @@ async function requestHeaders(headers?: HeadersInit): Promise<Record<string, str
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const { headers, ...rest } = options ?? {}
   // 首次 401：多半是 agent 重启轮换了本机 token——失效缓存重取一次再试。
+  // 仅在首次请求确实带了凭据时才重试：裸连（token 为 null）的 401 重发只会原样再失败一次。
   // 仍 401 则按既有错误路径抛出（真无凭据/凭据被拒），重试过程不打日志（高频路径）。
+  const firstHeaders = await requestHeaders(headers)
   let res = await fetch(`${BASE}${path}`, {
     ...rest,
-    headers: await requestHeaders(headers),
+    headers: firstHeaders,
   })
-  if (res.status === 401) {
+  if (res.status === 401 && firstHeaders.Authorization) {
     invalidateAgentToken()
     res = await fetch(`${BASE}${path}`, {
       ...rest,

@@ -131,10 +131,19 @@ func TestSecurityBypassPathsRemainOpen(t *testing.T) {
 	require.NoError(t, err)
 	defer app.Close()
 
-	for _, path := range []string{"/api/security/health"} {
+	// bypass 的语义是「跳过 Bearer 中间件」，不是「永不 401」：
+	// install.sh / install-binary 有自己的一次性安装 token 鉴权（query 参数），
+	// 缺 token 时返回自有文案的 401。因此这里断言的是响应不含中间件的
+	// "agent token required" 拒绝文案，而非状态码不等于 401。
+	for _, path := range []string{
+		"/api/security/health",
+		"/api/security/provision",
+		"/api/agents/install.sh",
+		"/api/agents/install-binary",
+	} {
 		rec := httptestDoWithHeader(t, app, http.MethodGet, path, nil, map[string]string{
 			"Authorization": "",
 		})
-		require.NotEqual(t, http.StatusUnauthorized, rec.Code, path)
+		require.NotContains(t, rec.Body.String(), "agent token required", path)
 	}
 }

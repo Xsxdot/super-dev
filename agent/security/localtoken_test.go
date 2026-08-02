@@ -54,6 +54,11 @@ func TestRotateLocalTokenFixesLoosePermissions(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "历史宽权限文件必须被收紧")
+
+	// 原子替换路径下，rename 成功后目录里只该剩最终文件，不许残留 .tmp-* 中间产物。
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "轮换成功后不应残留临时文件")
 }
 
 func TestReadLocalTokenMissingFileReturnsError(t *testing.T) {

@@ -335,11 +335,15 @@ impl AgentProcess {
 /// 注意：Attached 模式的 agent 不归桌面端管理，退出时保持运行——绝不能对它发信号，
 /// 否则会杀掉一个可能承载其他客户端连接的服务化/headless agent。
 fn stop_with_mode_gate<T: FnMut()>(mode: Option<&AgentMode>, mut terminate: T) {
-    if !matches!(mode, Some(AgentMode::Sidecar)) {
-        eprintln!("[SuperDev] attached agent 不归桌面端管理，退出时保持运行");
-        return;
+    match mode {
+        Some(AgentMode::Sidecar) => terminate(),
+        Some(AgentMode::Attached { .. }) => {
+            eprintln!("[SuperDev] attached agent 不归桌面端管理，退出时保持运行");
+        }
+        // None = agent 从未成功启动（sidecar 缺失/启动失败），没有进程需要停止；
+        // 与 Attached 分开打日志，避免误导排障（此时并不存在 attached agent）。
+        None => eprintln!("[SuperDev] 无已记录的 agent 进程，退出时无需停止"),
     }
-    terminate();
 }
 
 /// agent_addr_and_data_dir 解析桌面端自带 sidecar 使用的监听地址与数据目录。

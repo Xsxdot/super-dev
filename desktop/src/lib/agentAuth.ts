@@ -14,6 +14,9 @@ import { invoke } from '@tauri-apps/api/core'
 
 let cached: string | null = null
 let pending: Promise<string | null> | null = null
+// generation 标记缓存代际：invalidate 时自增，让在途读取的结果不再写回缓存，
+// 避免「invalidate 后，更早发起的 invoke 完成时把已过期 token 塞回 cached」的竞态。
+let generation = 0
 
 // agentToken 返回本机 agent 的 local-access-token，内存缓存并对并发调用去重。
 //
@@ -22,26 +25,34 @@ let pending: Promise<string | null> | null = null
 //
 // 注意：
 //   - 缓存命中直接返回，不重复 invoke；多个并发调用共享同一次 invoke 的 pending Promise
+//   - 读取中途发生 invalidate 时，本次结果只返回给等待者（他们会经 401 重试自愈），不进缓存
 export async function agentToken(): Promise<string | null> {
   if (cached) return cached
   if (!pending) {
+    const startedGeneration = generation
     pending = (async () => {
+      let value: string | null
       try {
-        cached = await invoke<string>('local_agent_token')
+        value = await invoke<string>('local_agent_token')
       } catch {
         // 纯浏览器 dev：VITE_AGENT_TOKEN=$(cat ~/.superdev-dev/local-access-token) pnpm dev
-        cached = (import.meta.env.VITE_AGENT_TOKEN as string | undefined) || null
+        value = (import.meta.env.VITE_AGENT_TOKEN as string | undefined) || null
       }
-      pending = null
-      return cached
+      if (startedGeneration === generation) {
+        cached = value
+        pending = null
+      }
+      return value
     })()
   }
   return pending
 }
 
-/** 401 后调用：丢弃缓存，下次 agentToken() 重新读取。 */
+/** 401 后调用：丢弃缓存与在途读取，下次 agentToken() 重新读取。 */
 export function invalidateAgentToken(): void {
   cached = null
+  pending = null
+  generation++
 }
 
 /** 为 ws:// URL 追加 access_token（仅 /ws/ 路径的服务端例外通道）。 */

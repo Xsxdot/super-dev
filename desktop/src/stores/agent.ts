@@ -31,9 +31,14 @@ export const useAgentStore = defineStore('agent', () => {
   let pollTimer: ReturnType<typeof setInterval> | null = null
 
   async function fetchProjects() {
+    const wasConnected = connected.value
     try {
       projects.value = await api.listProjects()
       connected.value = true
+      // 断连→重连成功时刷新连接形态：attached 的服务化 agent 可能已被
+      // launchd/systemd 重启（版本变化），甚至换成了别的进程占回端口——
+      // 只在启动拉一次会让底栏一直展示过期的 attached 快照。
+      if (!wasConnected) void fetchConnectionInfo()
     } catch {
       connected.value = false
     }
