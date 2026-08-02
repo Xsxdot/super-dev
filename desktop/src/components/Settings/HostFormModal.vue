@@ -233,9 +233,6 @@ function buildPayload(fingerprint: string): HostCreatePayload {
     // dev_machine_mode 必须无条件带入 payload：后端主机更新是整体替换 + omitempty，
     // 不重新发送这个字段就会被静默重置为 false——即便用户这次编辑压根没碰这个开关。
     // 不能像别的字段那样「只在变化时才带」，那正是这个 bug 曾经复现过的写法。
-    // dev_machine_mode 必须无条件带入 payload：后端主机更新是整体替换 + omitempty，
-    // 不重新发送这个字段就会被静默重置为 false——即便用户这次编辑压根没碰这个开关。
-    // 不能像别的字段那样「只在变化时才带」，那正是这个 bug 曾经复现过的写法。
     dev_machine_mode: form.value.dev_machine_mode ?? false,
   }
 }
