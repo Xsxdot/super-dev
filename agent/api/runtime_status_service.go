@@ -20,6 +20,14 @@ func (a *App) runtimeStatusService() *runtimeStatusService {
 }
 
 // Snapshot 聚合一个项目在所有环境和节点上的运行态快照。
+//
+// 注意：
+//   - 下面的 deployment 遍历对每个已配置项都无条件产出一条 InstanceStatus，
+//     不按 Health/运行态过滤——已停止的本机 managed deployment 同样会有条目
+//     （Health=stopped）。这是端口镜像「停止即拆除」可靠性的前提：帧条数
+//     跨启停保持稳定，才不会触发 noderegistry 的不完整帧兜底规则而把停止
+//     事实吞掉（agent/noderegistry/registry.go:241-246）。不要在此处按
+//     Health 加过滤条件。
 func (s *runtimeStatusService) Snapshot(ctx context.Context, project model.Project) model.RuntimeStatusResponse {
 	timeout := s.app.runtimeStatusRequestTimeout
 	if timeout == 0 {
@@ -110,6 +118,9 @@ func (s *runtimeStatusService) localInstance(ctx context.Context, projectID stri
 		NodeName:     s.localNodeName(),
 		IsLocal:      true,
 		Metrics:      got,
+		// Ports 直接来自共享层配置，与采样得到的运行态（got.Health）无关：
+		// 已停止的 deployment 同样携带声明端口，端口镜像的期望态计算只看 Health。
+		Ports: dep.Ports,
 	}
 	inst.Debugger = debugger
 	if err != nil {

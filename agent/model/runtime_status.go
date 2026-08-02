@@ -99,4 +99,8 @@ type InstanceStatus struct {
 	Metrics      InstanceMetrics `json:"metrics"`
 	// Debugger 描述该实例上调试器的状态，nil 表示无调试器。与 Metrics.Health 正交。
 	Debugger *DebuggerStatus `json:"debugger,omitempty"`
+	// Ports 是该 deployment 声明的监听端口（来自共享层配置）。
+	// 随节点状态帧下发，本机端口镜像据此建立同端口转发；与运行态无关，
+	// 停止的实例同样携带（镜像期望态只看 Health，端口清单保持稳定）。
+	Ports []int `json:"ports,omitempty"`
 }

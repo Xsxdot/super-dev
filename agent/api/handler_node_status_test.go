@@ -156,6 +156,76 @@ func TestWsNodeStatusPushesManagedDeploymentChanges(t *testing.T) {
 	assert.Equal(t, "dep-2", pushed[0].Deployments[0].DeploymentID)
 }
 
+// TestNodeStatusSnapshotCarriesPortsAndStoppedInstances 是端口镜像功能的诊断性测试。
+//
+// 诊断目的：Snapshot 对「已配置但未启动」的本机 managed deployment 是否仍产出实例条目，
+// 决定 Ports 字段能否直接透传，还是需要先把运行态服务改为「managed deployment 全量产出」。
+// 断言顺序刻意分层：先判定条目是否存在（若不存在，在此处失败，即为「不产出」分支的证据），
+// 再判定 Ports/Health 取值（若条目存在但字段不对，在此处失败，即为「已产出」分支的证据）。
+func TestNodeStatusSnapshotCarriesPortsAndStoppedInstances(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	const projectID = "proj-portmirror"
+	const depID = "dep-portmirror"
+	dep := model.Deployment{
+		ID:          depID,
+		EnvName:     "dev",
+		Location:    model.LocationLocal,
+		ControlMode: model.ControlModeManaged,
+		Command:     "sleep 30",
+		WorkDir:     t.TempDir(),
+		Ports:       []int{9100},
+	}
+	project := model.Project{
+		ID:   projectID,
+		Name: projectID,
+		Services: []model.Service{{
+			ID:          "svc-portmirror",
+			ProjectID:   projectID,
+			Name:        "api",
+			Deployments: []model.Deployment{dep},
+		}},
+	}
+	// 直接注入 app.projects/managedProjectIDs：走 /api/managed-deployments 的
+	// PUT 流程会经 managedProjectsFromDeployments 转换，而该转换目前不透传 Ports
+	// （model.ManagedDeployment 本身也没有 Ports 字段），不是本任务改动范围。
+	// 这里用常规 Project 配置 + 直接标记 managed，绕开该无关流程。
+	app.mu.Lock()
+	app.projects = append(app.projects, project)
+	app.managedProjectIDs[projectID] = struct{}{}
+	app.mu.Unlock()
+
+	ctx := context.Background()
+	findInstance := func(snap nodetransport.NodeStatus) *model.InstanceStatus {
+		for i := range snap.Deployments {
+			if snap.Deployments[i].DeploymentID == depID {
+				return &snap.Deployments[i]
+			}
+		}
+		return nil
+	}
+
+	beforeSnap := app.nodeStatusSnapshot(ctx, "h1", "ali-01")
+	beforeInst := findInstance(beforeSnap)
+	require.NotNil(t, beforeInst, "diagnostic: stopped managed deployment produced no instance entry — full-emission rework is required")
+	assert.Equal(t, model.HealthStopped, beforeInst.Metrics.Health)
+	assert.Equal(t, []int{9100}, beforeInst.Ports)
+
+	require.NoError(t, app.startDeploymentRuntime(ctx, projectID, dep, intentStartNormal))
+	mgr := app.getOrCreateManager(projectID)
+	t.Cleanup(func() { mgr.StopDeployment(depID) })
+
+	require.Eventually(t, func() bool {
+		afterInst := findInstance(app.nodeStatusSnapshot(ctx, "h1", "ali-01"))
+		return afterInst != nil && afterInst.Metrics.Health == model.HealthRunning
+	}, 2*time.Second, 20*time.Millisecond, "expected health to become running after a real process start")
+
+	afterInst := findInstance(app.nodeStatusSnapshot(ctx, "h1", "ali-01"))
+	require.NotNil(t, afterInst)
+	assert.Equal(t, model.HealthRunning, afterInst.Metrics.Health)
+	assert.Equal(t, []int{9100}, afterInst.Ports)
+}
+
 func TestNodeEndpointsExposeRegistrySnapshot(t *testing.T) {
 	reg := noderegistry.New([]nodetransport.NodeTransport{}, noderegistry.Options{StaleAfter: time.Hour})
 	app, err := NewApp(AppConfig{
