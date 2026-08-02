@@ -5,6 +5,7 @@ HostFormModal：单 Host 身份信息新建与编辑表单。
   - 收集 Host 展示名、入口地址元数据、SSH 登录信息和 tag 字段
   - 在 Host 尚无 host key 指纹时，保存前自动采集并要求用户显式确认
   - 提供「从本机 ~/.ssh 一键导入私钥路径」入口，与手填私钥内容互斥归一
+  - 收集「角色」分区的 dev_machine_mode 开关，新建默认关闭、编辑回显既有值（Task 12）
   - 将 Host payload 交由父组件保存
 
 边界：
@@ -159,6 +160,9 @@ function emptyForm(): HostCreatePayload {
     clear_ssh_private_key: false,
     clear_ssh_host_key_fingerprint: false,
     tags: [],
+    // 为什么默认不勾选：spec §9 添加主机不默认成为开发机——避免用户新建一台普通
+    // 远端主机时无意间把它纳入端口镜像范围。
+    dev_machine_mode: false,
   }
 }
 
@@ -191,6 +195,10 @@ watch(
         clear_ssh_private_key: false,
         clear_ssh_host_key_fingerprint: false,
         tags: [...initial.tags],
+        // 编辑时必须回显既有值，而不是重新默认为 false——否则「不改动开发机开关直接
+        // 保存」会静默把已开启的开发机模式关掉（buildPayload 的 dev_machine_mode 注释
+        // 说明了这条链路的另一半：提交时也必须无条件带上这个字段）。
+        dev_machine_mode: initial.dev_machine_mode ?? false,
       }
       return
     }
@@ -222,6 +230,13 @@ function buildPayload(fingerprint: string): HostCreatePayload {
     clear_ssh_private_key: form.value.clear_ssh_private_key,
     clear_ssh_host_key_fingerprint: false,
     tags: form.value.tags ?? [],
+    // dev_machine_mode 必须无条件带入 payload：后端主机更新是整体替换 + omitempty，
+    // 不重新发送这个字段就会被静默重置为 false——即便用户这次编辑压根没碰这个开关。
+    // 不能像别的字段那样「只在变化时才带」，那正是这个 bug 曾经复现过的写法。
+    // dev_machine_mode 必须无条件带入 payload：后端主机更新是整体替换 + omitempty，
+    // 不重新发送这个字段就会被静默重置为 false——即便用户这次编辑压根没碰这个开关。
+    // 不能像别的字段那样「只在变化时才带」，那正是这个 bug 曾经复现过的写法。
+    dev_machine_mode: form.value.dev_machine_mode ?? false,
   }
 }
 
@@ -477,6 +492,25 @@ function saveWithoutFingerprint() {
         <div v-if="tunnelInvalidationPending" class="settings-alert settings-alert-warning" data-test="host-form-tunnel-invalidation">
           {{ t('settings.hostForm.tunnelInvalidationWarning') }}
         </div>
+
+        <!--
+          角色分区：目前唯一的新增配置旋钮。为什么默认不勾选：spec §9 添加主机不默认
+          成为开发机——emptyForm() 里 dev_machine_mode 恒为 false，编辑态则回显既有值
+          （见 script 里 emptyForm / hydration watcher / buildPayload 三处的对应注释）。
+        -->
+        <div class="settings-field">
+          <label class="settings-field-label">{{ t('settings.hostForm.role.title') }}</label>
+          <label class="role-toggle">
+            <input v-model="form.dev_machine_mode" type="checkbox" data-test="host-form-dev-machine-mode" />
+            {{ t('settings.hostForm.role.devMachineMode') }}
+          </label>
+          <span class="settings-field-hint">{{ t('settings.hostForm.role.subtitle') }}</span>
+          <ul class="role-explain">
+            <li>{{ t('settings.hostForm.role.explainPorts') }}</li>
+            <li>{{ t('settings.hostForm.role.explainLocalPort') }}</li>
+            <li>{{ t('settings.hostForm.role.explainScope') }}</li>
+          </ul>
+        </div>
       </div>
 
       <div class="settings-modal-footer">
@@ -552,5 +586,21 @@ function saveWithoutFingerprint() {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.role-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.role-explain {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
 }
 </style>

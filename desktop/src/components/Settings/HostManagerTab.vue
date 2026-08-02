@@ -5,6 +5,7 @@ HostManagerTab：设置页 Host 身份管理标签页。
   - 列出远程 Host 的身份、地址元数据和 tag
   - 提供 Host 新建、编辑、删除入口
   - 展示 SSH 登录方式摘要
+  - 标记 dev_machine_mode 主机的「开发机」角色徽标（Task 12）
 
 边界：
   - 不编辑 Agent 连接方式，Agent 配置由 AgentManagerTab 负责
@@ -166,7 +167,14 @@ async function confirmRescan() {
         </thead>
         <tbody>
           <tr v-for="host in sortedHosts" :key="host.id" data-test="host-row">
-            <td>{{ host.name }}</td>
+            <td>
+              {{ host.name }}
+              <span
+                v-if="host.dev_machine_mode"
+                class="node-route-badge dev-machine-badge"
+                data-test="host-dev-machine-badge"
+              >{{ t('settings.hosts.devMachineBadge') }}</span>
+            </td>
             <td>
               <div class="address-meta" data-test="host-address-meta">{{ addressLabel(host) }}</div>
             </td>
@@ -282,5 +290,27 @@ async function confirmRescan() {
   background: var(--status-failed);
   color: #fff;
   font-size: 11px;
+}
+/* 复用 NodeCenter/NodeCard.vue 的 .node-route-badge 徽标视觉家族（胶囊外观、原型
+   settings.html:51 已背书）；Vue scoped 样式不跨组件生效，这里按同一套视觉规则重新
+   声明基础样式，再叠加开发机专属的绿色变体——这个徽标只有「是/否为开发机」一种
+   状态，不像 NodeCard 的路由徽标那样需要区分降级/直连等多种配色分支。 */
+.node-route-badge {
+  display: inline-block;
+  max-width: 112px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dev-machine-badge {
+  margin-left: 6px;
+  color: var(--status-running);
+  border-color: rgba(63, 185, 80, 0.4);
 }
 </style>

@@ -309,4 +309,19 @@ describe('HostManagerTab', () => {
     expect(wrapper.find('[data-test="host-rescan-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="host-rescan-new-fingerprint"]').text()).toContain('SHA256:for-b')
   })
+
+  // 角色徽标（Task 12）：只有 dev_machine_mode 主机在列表行里展示「开发机」徽标。
+  it('renders the dev machine badge only for hosts with dev_machine_mode', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [
+      host({ id: 'h1', name: 'dev-box', dev_machine_mode: true }),
+      host({ id: 'h2', name: 'plain-host', dev_machine_mode: false }),
+    ]
+    await wrapper.vm.$nextTick()
+
+    const badges = wrapper.findAll('[data-test="host-dev-machine-badge"]')
+    expect(badges).toHaveLength(1)
+    expect(badges[0].text()).toBe('开发机')
+  })
 })

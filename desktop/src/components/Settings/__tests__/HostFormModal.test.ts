@@ -596,4 +596,65 @@ describe('HostFormModal', () => {
     // Host A 的采集结果绝不能出现在 Host B 的表单里
     expect(wrapper.find('[data-test="host-form-key-path"]').exists()).toBe(false)
   })
+
+  // 角色分区：开发机模式开关（Task 12）
+  it('新建主机默认不勾选开发机模式', async () => {
+    const scanHostKey = vi.fn().mockResolvedValue({ fingerprint: 'SHA256:abc123' })
+    const wrapper = mountForm({ scanHostKey })
+
+    expect((wrapper.find('[data-test="host-form-dev-machine-mode"]').element as HTMLInputElement).checked).toBe(false)
+
+    await wrapper.find('[data-test="host-form-name"]').setValue('plain-host')
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="host-form-scan-trust"]').trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual(expect.objectContaining({
+      dev_machine_mode: false,
+    }))
+  })
+
+  it('勾选开发机模式后 submit payload 携带 dev_machine_mode: true', async () => {
+    const scanHostKey = vi.fn().mockResolvedValue({ fingerprint: 'SHA256:abc123' })
+    const wrapper = mountForm({ scanHostKey })
+
+    await wrapper.find('[data-test="host-form-name"]').setValue('dev-box')
+    await wrapper.find('[data-test="host-form-dev-machine-mode"]').setValue(true)
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="host-form-scan-trust"]').trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual(expect.objectContaining({
+      dev_machine_mode: true,
+    }))
+  })
+
+  // 回归（Task 2 carry-forward）：后端 PUT 是整体替换 + omitempty，编辑弹窗若不把
+  // dev_machine_mode 无条件带入 payload，用户编辑一台开发机主机的其他字段（完全不碰
+  // 这个开关）保存后会被静默关闭。这里必须验证「不触碰开关」的编辑路径依然保留 true。
+  it('回归：编辑已开启开发机模式的主机且不触碰开关，保存后 payload 仍保留 dev_machine_mode: true', async () => {
+    const wrapper = mountForm({
+      initial: {
+        id: 'h1',
+        name: 'dev-box',
+        tags: [],
+        ssh_host: '10.0.0.10',
+        ssh_port: 22,
+        ssh_user: 'root',
+        ssh_host_key_fingerprint_configured: true,
+        dev_machine_mode: true,
+      },
+    })
+
+    // 编辑态回显必须是勾选的，否则下面「不触碰开关」的前提就不成立。
+    expect((wrapper.find('[data-test="host-form-dev-machine-mode"]').element as HTMLInputElement).checked).toBe(true)
+
+    // 只点保存，不触碰开发机模式开关。
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual(expect.objectContaining({
+      dev_machine_mode: true,
+    }))
+  })
 })

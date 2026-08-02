@@ -376,6 +376,7 @@ export default {
       agentNotConfigured: 'Agent not configured',
       agentConfiguredUnknown: 'Configured',
       fingerprintMissing: 'No fingerprint',
+      devMachineBadge: 'Dev machine',
     },
     agents: {
       title: 'Agents',
@@ -604,6 +605,14 @@ export default {
       keyStoredHint: 'An imported private key is saved. No need to choose the file again.',
       connectSuccess: 'Connected ({latency}ms)',
       importCount: 'Import {count}',
+      role: {
+        title: 'Role',
+        devMachineMode: 'Dev machine mode',
+        subtitle: 'Treat this host as a remote dev machine',
+        explainPorts: 'Only ports a service has declared get mirrored',
+        explainLocalPort: 'Mirrored ports appear on this machine at the same port (127.0.0.1)',
+        explainScope: 'Regular remote hosts are not mirrored; project config needs no new toggles',
+      },
     },
     env: {
       dev: 'Development environment',

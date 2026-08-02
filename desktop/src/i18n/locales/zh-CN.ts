@@ -376,6 +376,7 @@ export default {
       agentNotConfigured: '未配置 Agent',
       agentConfiguredUnknown: '已配置',
       fingerprintMissing: '未采集指纹',
+      devMachineBadge: '开发机',
     },
     agents: {
       title: 'Agent',
@@ -604,6 +605,14 @@ export default {
       keyStoredHint: '已保存导入的私钥；无需重新选择文件。',
       connectSuccess: '连接成功（{latency}ms）',
       importCount: '导入 {count} 项',
+      role: {
+        title: '角色',
+        devMachineMode: '开发机模式',
+        subtitle: '把这台主机当作远程开发机',
+        explainPorts: '只有服务已声明的端口才会被镜像',
+        explainLocalPort: '镜像后以相同端口出现在本机（127.0.0.1 直接可用）',
+        explainScope: '普通远端主机不参与镜像；项目配置无需新增任何开关',
+      },
     },
     env: {
       dev: '开发环境',
