@@ -1,19 +1,25 @@
 /**
- * portMirrorView 提供服务行 meta、底栏 chips、（Task 11）冲突详情弹窗三处呈现共享的纯视图模型。
+ * portMirrorView 提供服务行 meta、底栏 chips、节点卡镜像区、冲突详情弹窗四处呈现共享的
+ * 纯视图模型。
  *
  * 职责：
- *   - 把某个 deployment 的端口镜像原始状态（MirrorStatus[]）转换成可直接渲染的行视图
- *     （MirrorRowView[]，按端口升序）与一句话摘要（mirrorSummaryForDeployment，供服务行
- *     meta 这种单行空间使用）
+ *   - 把端口镜像原始状态（MirrorStatus[]）按 deployment 或按 host 两种归属方式转换成
+ *     可直接渲染的行视图（MirrorRowView[]，按端口升序）：
+ *       - mirrorRowsForDeployment：按 deployment 归属，供服务行/底栏 chip 消费
+ *       - mirrorRowsForHost：按 host 归属，汇总该主机上所有 deployment 声明的镜像行，
+ *         供节点中心的节点卡镜像区（Task 11）消费——节点卡按主机而非按 deployment 组织
+ *   - mirrorSummaryForDeployment 进一步把 deployment 的镜像行浓缩成一句话摘要，供服务行
+ *     meta 这种单行空间使用
  *   - 剔除"重复声明"型 failed 条目——它们从未真正尝试建立转发（同 host 同端口被另一个
  *     deployment 抢先声明，见 agent/portmirror/manager.go 的 markDuplicate），不该被呈现
- *     成"一次转发失败"，否则用户会去 retry 一个根本不存在的转发
+ *     成"一次转发失败"，否则用户会去 retry 一个根本不存在的转发；两个 mirrorRowsFor*
+ *     函数共享同一条剔除规则（isRealForwardAttempt），归属维度不同但呈现规则一致
  *
  * 边界：
  *   - 纯函数：参数进、参数出，不读任何 Pinia store、不感知 Vue 响应式
  *   - 不做 i18n——label 只承载结构性（数字/符号/IP 地址）文本，不含任何自然语言词汇；
- *     "本机"/"已镜像"/"镜像冲突"这类可译文案由组件层（EnvGroup.vue/BottomBar.vue）用
- *     i18n key 包裹 port/hostName 等结构化字段拼出，本文件不导入 vue-i18n
+ *     "本机"/"已镜像"/"镜像冲突"这类可译文案由组件层（EnvGroup.vue/BottomBar.vue/
+ *     NodeCard.vue）用 i18n key 包裹 port/hostName 等结构化字段拼出，本文件不导入 vue-i18n
  */
 import type { MirrorState, MirrorStatus } from '@/api/agent'
 
@@ -68,6 +74,14 @@ function toRowView(m: MirrorStatus): MirrorRowView {
   }
 }
 
+/** toRows 是 mirrorRowsForDeployment/mirrorRowsForHost 共享的过滤+转换+排序流水线。 */
+function toRows(mirrors: MirrorStatus[]): MirrorRowView[] {
+  return mirrors
+    .filter(isRealForwardAttempt)
+    .map(toRowView)
+    .sort((a, b) => a.port - b.port)
+}
+
 /**
  * mirrorRowsForDeployment 取出某 deployment 的端口镜像行视图，按端口升序排列。
  *
@@ -79,10 +93,26 @@ function toRowView(m: MirrorStatus): MirrorRowView {
  *   - 该 deployment 下的镜像行视图列表，端口升序；重复声明型 failed 条目已被剔除
  */
 export function mirrorRowsForDeployment(depId: string, mirrors: MirrorStatus[]): MirrorRowView[] {
-  return mirrors
-    .filter(m => m.deployment_id === depId && isRealForwardAttempt(m))
-    .map(toRowView)
-    .sort((a, b) => a.port - b.port)
+  return toRows(mirrors.filter(m => m.deployment_id === depId))
+}
+
+/**
+ * mirrorRowsForHost 取出某 host 上全部 deployment 声明的端口镜像行视图，按端口升序排列。
+ *
+ * 参数：
+ *   - hostId: 目标 host id
+ *   - mirrors: portMirrorStore 的全量快照（调用方传入，本函数不读 store）
+ *
+ * 返回：
+ *   - 该 host 下的镜像行视图列表，端口升序；重复声明型 failed 条目已被剔除
+ *
+ * 注意：
+ *   - 与 mirrorRowsForDeployment 的区别只是归属维度（host vs deployment）——节点中心的
+ *     节点卡（Task 11）是按主机组织的视图，一张卡可能同时展示该主机上多个 deployment
+ *     各自声明的端口，所以要按 host_id 聚合而不是按单个 deployment_id 过滤
+ */
+export function mirrorRowsForHost(hostId: string, mirrors: MirrorStatus[]): MirrorRowView[] {
+  return toRows(mirrors.filter(m => m.host_id === hostId))
 }
 
 /**

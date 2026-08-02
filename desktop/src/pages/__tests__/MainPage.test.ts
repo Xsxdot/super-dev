@@ -47,6 +47,10 @@ vi.mock('@/components/BottomBar.vue', () => ({
   default: { template: '<footer data-test="bottom-bar-stub" />' },
 }))
 
+vi.mock('@/components/NodeCenter/MirrorConflictModal.vue', () => ({
+  default: { template: '<div data-test="mirror-conflict-modal-stub" />' },
+}))
+
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => windowApiMock,
 }))
@@ -163,5 +167,15 @@ describe('MainPage', () => {
     // 调用 start() 的话，mirrors 永远是空数组，端口镜像 UI 在真实 app 里就是空的。
     // 这条测试钉住页面级的启动调用，防止未来重构悄悄丢掉这行。
     expect(startSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('挂载唯一一份冲突详情弹窗（Task 11）——Sidebar/EnvGroup 与 NodeCenter/NodeCard 两条触发路径共用同一实例', () => {
+    vi.spyOn(useAgentStore(), 'startPolling').mockImplementation(() => undefined)
+
+    const wrapper = mount(MainPage, { global: { plugins: [installTestI18n()] } })
+
+    // 只在 MainPage 挂一次——不是每条触发路径各自挂一个弹窗实例，否则两条路径会各开
+    // 各的、互不知道对方的存在，用户可能同时看到两个弹窗。
+    expect(wrapper.findAll('[data-test="mirror-conflict-modal-stub"]')).toHaveLength(1)
   })
 })

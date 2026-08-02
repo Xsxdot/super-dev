@@ -5,6 +5,8 @@
  *   - Verify remote hosts and node snapshots are merged into visible node cards
  *   - Verify the global view excludes local/self hosts
  *   - Verify clicking a service opens the existing deployment log workspace tab
+ *   - Verify portMirrorStore.mirrors flows into the node cards, and a node card's
+ *     conflict-click routes into the shared mirror-conflict-modal store (Task 11)
  *
  * Boundaries:
  *   - Does not connect to real WebSocket streams
@@ -18,10 +20,12 @@ import NodeCenterView from '../NodeCenterView.vue'
 import nodeCenterViewSource from '../NodeCenterView.vue?raw'
 import { installTestI18n } from '@/test-utils/i18n'
 import { useAgentStore } from '@/stores/agent'
+import { useMirrorConflictModalStore } from '@/stores/mirrorConflictModal'
 import { useNodeStore } from '@/stores/node'
+import { usePortMirrorStore } from '@/stores/portMirror'
 import { useRemoteStore } from '@/stores/remote'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { Host, NodeStatus, Project, RuntimeInstanceStatus } from '@/api/agent'
+import type { Host, MirrorStatus, NodeStatus, Project, RuntimeInstanceStatus } from '@/api/agent'
 
 function host(partial: Partial<Host> = {}): Host {
   return {
@@ -66,6 +70,19 @@ function node(partial: Partial<NodeStatus> = {}): NodeStatus {
       reachable: true,
     },
     deployments: [instance()],
+    updated_at: '2026-06-06T10:00:00Z',
+    ...partial,
+  }
+}
+
+function mirrorStatus(partial: Partial<MirrorStatus> = {}): MirrorStatus {
+  return {
+    host_id: 'host-1',
+    host_name: 'ali-01',
+    deployment_id: 'dep-api',
+    service_name: 'api',
+    port: 9100,
+    state: 'active',
     updated_at: '2026-06-06T10:00:00Z',
     ...partial,
   }
@@ -172,6 +189,34 @@ describe('NodeCenterView', () => {
     if (workspace.activeTab?.type !== 'deployment') throw new Error('expected deployment tab')
     expect(workspace.activeTab.deploymentId).toBe('dep-api')
     expect(workspace.activeTab.title).toBe('api · prod')
+  })
+
+  it('flows portMirrorStore.mirrors into the node card mirror section (Task 11)', async () => {
+    const remoteStore = useRemoteStore()
+    remoteStore.hosts = [host({ id: 'host-1', dev_machine_mode: true })]
+    useNodeStore().applySnapshot([node()])
+    usePortMirrorStore().applySnapshot([mirrorStatus({ host_id: 'host-1', port: 9100, state: 'active' })])
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const section = wrapper.find('[data-test="node-mirror-section"]')
+    expect(section.exists()).toBe(true)
+    expect(section.text()).toContain('9100')
+  })
+
+  it('routes a node card conflict-click into the shared mirror-conflict-modal store (Task 11)', async () => {
+    const remoteStore = useRemoteStore()
+    remoteStore.hosts = [host({ id: 'host-1', dev_machine_mode: true })]
+    useNodeStore().applySnapshot([node()])
+    usePortMirrorStore().applySnapshot([mirrorStatus({ host_id: 'host-1', port: 5173, state: 'conflict' })])
+    const modalStore = useMirrorConflictModalStore()
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('[data-test="node-mirror-row-5173"]').trigger('click')
+
+    expect(modalStore.target).toEqual({ hostId: 'host-1', port: 5173 })
   })
 
   it('uses the full workspace width with a four-column adaptive cap', () => {

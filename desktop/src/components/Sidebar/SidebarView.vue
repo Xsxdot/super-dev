@@ -10,6 +10,7 @@ import {
   isSampleProject,
   useGettingStartedStore,
 } from '@/stores/gettingStarted'
+import { useMirrorConflictModalStore } from '@/stores/mirrorConflictModal'
 import { useNodeStore } from '@/stores/node'
 import { usePanelStore } from '@/stores/panel'
 import { useSettingsStore } from '@/stores/settings'
@@ -24,6 +25,7 @@ import { useRouter } from 'vue-router'
 
 const agentStore = useAgentStore()
 const gettingStarted = useGettingStartedStore()
+const mirrorConflictModalStore = useMirrorConflictModalStore()
 const nodeStore = useNodeStore()
 const panelStore = usePanelStore()
 const settingsStore = useSettingsStore()
@@ -120,6 +122,17 @@ watch(
 
 function openDeployment(payload: { deploymentId: string; title: string }) {
   workspace.openDeployment(payload.deploymentId, payload.title)
+}
+
+/**
+ * onMirrorConflictClick 转发 EnvGroup 服务行的冲突段点击，打开共享冲突详情弹窗。
+ *
+ * 注意：本视图不判定/不处理冲突，只是把 EnvGroup 的 emit 转成对
+ * mirrorConflictModalStore 的一次 open() 调用——与 NodeCenterView.vue 消费 NodeCard 的
+ * 同名事件是完全独立的另一条路径，两者只在 MainPage 挂载的唯一弹窗实例处汇合。
+ */
+function onMirrorConflictClick(payload: { hostId: string; port: number }) {
+  mirrorConflictModalStore.open(payload.hostId, payload.port)
 }
 
 function selectProject(projectId: string) {
@@ -315,6 +328,7 @@ onBeforeUnmount(() => {
             :selected-service-ids="openDeploymentIdSet()"
             @open-deployment="openDeployment"
             @search="openProjectSearch(selectedProject.id)"
+            @mirror-conflict-click="onMirrorConflictClick"
           />
         </div>
       </template>

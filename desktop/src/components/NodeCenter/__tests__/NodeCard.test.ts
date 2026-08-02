@@ -5,6 +5,8 @@
  *   - Verify a node card renders rich deployment status
  *   - Verify missing metrics degrade without breaking layout
  *   - Verify clicking a deployment row requests log opening
+ *   - Verify the dev-machine badge and port-mirror section render from props only
+ *     (Task 11), and that a conflict row emits instead of resolving anything itself
  *
  * Boundaries:
  *   - Does not read Pinia stores
@@ -15,7 +17,21 @@ import { describe, expect, it } from 'vitest'
 import NodeCard from '../NodeCard.vue'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { NodeCenterNode } from '@/lib/nodeCenter'
+import type { MirrorRowView } from '@/lib/portMirrorView'
 import type { RuntimeInstanceStatus } from '@/api/agent'
+
+function mirrorRow(overrides: Partial<MirrorRowView> = {}): MirrorRowView {
+  return {
+    port: 9100,
+    state: 'active',
+    label: ':9100 ⇄ 127.0.0.1:9100',
+    conflict: false,
+    openUrl: 'http://127.0.0.1:9100',
+    hostId: 'host-1',
+    hostName: 'ali-01',
+    ...overrides,
+  }
+}
 
 function instance(partial: Partial<RuntimeInstanceStatus> = {}): RuntimeInstanceStatus {
   return {
@@ -55,6 +71,8 @@ function card(overrides: Partial<NodeCenterNode> = {}): NodeCenterNode {
     serviceCount: 1,
     updatedAt: '2026-06-06T10:00:00Z',
     configured: true,
+    mirrors: [],
+    devMachine: false,
     ...overrides,
   }
 }
@@ -209,5 +227,120 @@ describe('NodeCard', () => {
     expect(titleRow.text()).toContain('ali-01')
     expect(titleRow.find('[data-test="node-route-badge"]').text()).toBe('直连')
     expect(wrapper.text()).not.toContain('via direct')
+  })
+
+  describe('端口镜像区与开发机标记（Task 11）', () => {
+    it('devMachine 为 true 时 agent 摘要行追加 · 开发机 标记', () => {
+      const wrapper = mount(NodeCard, {
+        props: { node: card({ devMachine: true }) },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      expect(wrapper.text()).toContain('远程 · agent 0.1.0 · healthy · 1 个服务 · 开发机')
+    })
+
+    it('devMachine 为 false 时不追加开发机标记', () => {
+      const wrapper = mount(NodeCard, {
+        props: { node: card({ devMachine: false }) },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      expect(wrapper.text()).not.toContain('开发机')
+    })
+
+    it('devMachine 且有 mirrors 时渲染镜像区标题与逐行状态', () => {
+      const wrapper = mount(NodeCard, {
+        props: {
+          node: card({
+            devMachine: true,
+            mirrors: [
+              mirrorRow({ port: 9100, state: 'active', conflict: false }),
+              mirrorRow({ port: 5173, state: 'conflict', conflict: true }),
+            ],
+          }),
+        },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      const section = wrapper.find('[data-test="node-mirror-section"]')
+      expect(section.exists()).toBe(true)
+      expect(section.text()).toContain('端口镜像（本机 ⇄ ali-01）')
+
+      const activeRow = wrapper.find('[data-test="node-mirror-row-9100"]')
+      expect(activeRow.text()).toContain('127.0.0.1:9100 ⇄ :9100')
+      expect(activeRow.text()).toContain('已镜像')
+
+      const conflictRow = wrapper.find('[data-test="node-mirror-row-5173"]')
+      expect(conflictRow.text()).toContain('127.0.0.1:5173 ⇄ :5173')
+      expect(conflictRow.text()).toContain('冲突 · 本机端口被占')
+    })
+
+    it('devMachine 为 false 时即使传入 mirrors 也不渲染镜像区（节点卡不做本机判定，只服从 props）', () => {
+      const wrapper = mount(NodeCard, {
+        props: { node: card({ devMachine: false, mirrors: [mirrorRow()] }) },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      expect(wrapper.find('[data-test="node-mirror-section"]').exists()).toBe(false)
+    })
+
+    it('devMachine 为 true 但 mirrors 为空时不渲染镜像区（不展示空标题）', () => {
+      const wrapper = mount(NodeCard, {
+        props: { node: card({ devMachine: true, mirrors: [] }) },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      expect(wrapper.find('[data-test="node-mirror-section"]').exists()).toBe(false)
+    })
+
+    it('点击冲突行 emit mirror-conflict-click，携带 hostId/port', async () => {
+      const wrapper = mount(NodeCard, {
+        props: {
+          node: card({
+            devMachine: true,
+            mirrors: [mirrorRow({ port: 5173, state: 'conflict', conflict: true, hostId: 'host-1' })],
+          }),
+        },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      await wrapper.find('[data-test="node-mirror-row-5173"]').trigger('click')
+
+      expect(wrapper.emitted('mirror-conflict-click')?.[0]).toEqual([{ hostId: 'host-1', port: 5173 }])
+    })
+
+    it('点击非冲突（active）行不 emit mirror-conflict-click', async () => {
+      const wrapper = mount(NodeCard, {
+        props: {
+          node: card({
+            devMachine: true,
+            mirrors: [mirrorRow({ port: 9100, state: 'active', conflict: false })],
+          }),
+        },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      await wrapper.find('[data-test="node-mirror-row-9100"]').trigger('click')
+
+      expect(wrapper.emitted('mirror-conflict-click')).toBeFalsy()
+    })
+
+    it('pending/failed 状态行也能渲染出对应文案，不留空白', () => {
+      const wrapper = mount(NodeCard, {
+        props: {
+          node: card({
+            devMachine: true,
+            mirrors: [
+              mirrorRow({ port: 9300, state: 'pending', conflict: false, openUrl: undefined }),
+              mirrorRow({ port: 9400, state: 'failed', conflict: false, openUrl: undefined }),
+            ],
+          }),
+        },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      expect(wrapper.find('[data-test="node-mirror-row-9300"]').text()).toContain('建立中')
+      expect(wrapper.find('[data-test="node-mirror-row-9400"]').text()).toContain('镜像失败')
+    })
   })
 })

@@ -9,6 +9,7 @@ import SidebarView from '@/components/Sidebar/SidebarView.vue'
 import WorkspaceShell from '@/components/Workspace/WorkspaceShell.vue'
 import WorkspaceTabs from '@/components/Workspace/WorkspaceTabs.vue'
 import BottomBar from '@/components/BottomBar.vue'
+import MirrorConflictModal from '@/components/NodeCenter/MirrorConflictModal.vue'
 
 const agentStore = useAgentStore()
 const nodeStore = useNodeStore()
@@ -62,6 +63,12 @@ function startWindowDrag(event: MouseEvent) {
       </div>
     </div>
     <BottomBar v-if="!workspace.isRuntimeWorkspaceMaximized" />
+    <!-- 冲突详情弹窗只挂这一处：Sidebar/EnvGroup（服务行冲突段点击）与
+         Workspace/NodeCenter（节点卡冲突行点击）是两棵互不相通的子树，唯一公共祖先
+         就是这里；两条路径都只是转发 emit 给 mirrorConflictModalStore.open()，弹窗
+         本身读该 store 的 target 渲染，与 App.vue 挂 OperationApprovalNotice 一次、
+         多处写 notice 是同一先例。 -->
+    <MirrorConflictModal />
   </div>
 </template>
 

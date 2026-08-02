@@ -5,31 +5,41 @@
   - 展示所有远端节点的实时运行态总览
   - 合并 remoteStore.hosts 与 nodeStore.nodesList，保证未连接主机仍可见
   - 点击远端服务行时复用现有 deployment 日志 tab
+  - 把 portMirrorStore.mirrors 传给节点卡渲染端口镜像区；节点卡冲突行点击时打开
+    共享的冲突详情弹窗（Task 11）
 
 边界：
   - 不创建新的日志连接模型
   - 不管理远端服务启停操作
   - 不展示本机 local 服务
+  - 只读 portMirrorStore.mirrors，不负责启动订阅（订阅生命周期统一在 MainPage/
+    PopoverPage 页面级发起，见 stores/portMirror.ts 消费方约定）
+  - 不渲染冲突详情弹窗本身——只转发 open 请求，弹窗挂载在 MainPage.vue（唯一实例，
+    因为它还要服务 Sidebar/EnvGroup 那条完全独立的触发路径）
 -->
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import NodeCard from './NodeCard.vue'
 import { buildNodeCenterNodes, isRemoteNodeHost } from '@/lib/nodeCenter'
 import { useAgentStore } from '@/stores/agent'
+import { useMirrorConflictModalStore } from '@/stores/mirrorConflictModal'
 import { useNodeStore } from '@/stores/node'
+import { usePortMirrorStore } from '@/stores/portMirror'
 import { useRemoteStore } from '@/stores/remote'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useAppI18n } from '@/i18n/useAppI18n'
 
 const agentStore = useAgentStore()
 const nodeStore = useNodeStore()
+const portMirrorStore = usePortMirrorStore()
 const remoteStore = useRemoteStore()
 const workspace = useWorkspaceStore()
+const mirrorConflictModalStore = useMirrorConflictModalStore()
 const { t } = useAppI18n()
 
 const remoteHosts = computed(() => remoteStore.hosts.filter(isRemoteNodeHost))
 const nodes = computed(() =>
-  buildNodeCenterNodes(remoteStore.hosts, nodeStore.nodesList, agentStore.projects),
+  buildNodeCenterNodes(remoteStore.hosts, nodeStore.nodesList, agentStore.projects, portMirrorStore.mirrors),
 )
 const abnormalCount = computed(() =>
   nodes.value.reduce((sum, node) => sum + node.deployments.filter(item => item.abnormal).length, 0),
@@ -46,6 +56,17 @@ onMounted(() => {
 function openLogs(deploymentId: string) {
   const info = agentStore.serviceForDeployment(deploymentId)
   workspace.openDeployment(deploymentId, info ? `${info.service.name} · ${info.envName}` : deploymentId)
+}
+
+/**
+ * onMirrorConflictClick 转发节点卡冲突行点击，打开共享冲突详情弹窗。
+ *
+ * 注意：本视图不判定/不处理冲突，只是把 NodeCard 的 emit 转成对
+ * mirrorConflictModalStore 的一次 open() 调用——与 SidebarView.vue 消费 EnvGroup 的
+ * 同名事件是完全独立的另一条路径，两者只在 MainPage 挂载的唯一弹窗实例处汇合。
+ */
+function onMirrorConflictClick(payload: { hostId: string; port: number }) {
+  mirrorConflictModalStore.open(payload.hostId, payload.port)
 }
 </script>
 
@@ -73,6 +94,7 @@ function openLogs(deploymentId: string) {
         :key="node.hostId"
         :node="node"
         @open-logs="openLogs"
+        @mirror-conflict-click="onMirrorConflictClick"
       />
     </div>
   </section>

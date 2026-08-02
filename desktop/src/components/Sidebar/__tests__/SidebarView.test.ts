@@ -3,6 +3,7 @@
  *
  * 职责：
  *   - 验证主界面添加项目入口复用项目配置初始化流程
+ *   - 验证 EnvGroup 的 mirror-conflict-click 事件被转发到共享的冲突详情弹窗 store（Task 11）
  *
  * 边界：
  *   - 不打开真实目录选择器
@@ -13,9 +14,11 @@ import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { open, ask } from '@tauri-apps/plugin-dialog'
 import SidebarView from '@/components/Sidebar/SidebarView.vue'
-import { api, type Project } from '@/api/agent'
+import { api, type MirrorStatus, type Project } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
 import { useGettingStartedStore } from '@/stores/gettingStarted'
+import { useMirrorConflictModalStore } from '@/stores/mirrorConflictModal'
+import { usePortMirrorStore } from '@/stores/portMirror'
 import { useSettingsStore } from '@/stores/settings'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { installTestI18n } from '@/test-utils/i18n'
@@ -403,6 +406,29 @@ describe('SidebarView', () => {
     expect(tools.find('[data-test="sidebar-settings"]').exists()).toBe(true)
     expect(tools.text().indexOf('节点中心')).toBeLessThan(tools.text().indexOf('设置'))
     expect(wrapper.find('.sidebar-scroll [data-test="sidebar-node-center"]').exists()).toBe(false)
+  })
+
+  it('EnvGroup 的冲突段点击经 SidebarView 转发到共享冲突详情弹窗 store（Task 11）', async () => {
+    const agent = useAgentStore()
+    agent.projects = [projectWithService('proj-1', 'Demo', 'sample-api')]
+    const mirror: MirrorStatus = {
+      host_id: 'h1',
+      host_name: 'dev-box',
+      deployment_id: 'dep-sample-api',
+      service_name: 'sample-api',
+      port: 5173,
+      state: 'conflict',
+      updated_at: '2026-06-06T10:00:00Z',
+    }
+    usePortMirrorStore().applySnapshot([mirror])
+    const modalStore = useMirrorConflictModalStore()
+
+    const wrapper = mount(SidebarView, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    await wrapper.find('[data-test="service-meta-mirror-conflict"]').trigger('click')
+
+    expect(modalStore.target).toEqual({ hostId: 'h1', port: 5173 })
   })
 
   it('节点中心和设置入口使用统一的底部工具按钮结构', () => {

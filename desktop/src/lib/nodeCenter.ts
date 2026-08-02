@@ -5,6 +5,7 @@
  *   - 合并远端主机配置与 NodeRegistry 实时快照
  *   - 生成节点中心组件需要的只读渲染模型
  *   - 计算 deployment 的环境标签和异常排序
+ *   - 按 host 归位端口镜像行、派生开发机标记（Task 11），供节点卡镜像区渲染
  *
  * 边界：
  *   - 不读取 Pinia store
@@ -15,10 +16,12 @@ import type {
   AgentRuntime,
   Health,
   Host,
+  MirrorStatus,
   NodeStatus,
   Project,
   RuntimeInstanceStatus,
 } from '@/api/agent'
+import { mirrorRowsForHost, type MirrorRowView } from './portMirrorView'
 
 const ABNORMAL_HEALTHS = new Set<Health>(['failed', 'unknown', 'restarting', 'stopped'])
 
@@ -51,6 +54,14 @@ export interface NodeCenterNode {
     selectedIndex: number
     degraded: boolean
   }
+  /** 该 host 全部端口镜像行（跨该 host 上的所有 deployment 汇总），供节点卡镜像区渲染。 */
+  mirrors: MirrorRowView[]
+  /**
+   * 该 host 是否被当前控制面当作开发机消费（对应 Host.dev_machine_mode）。
+   * snapshot-only 节点（未在 hosts 中配置）恒为 false——dev_machine_mode 是 Host 级配置，
+   * 这类节点根本没有对应的 Host 记录，无从谈起。
+   */
+  devMachine: boolean
 }
 
 const unknownAgent: AgentRuntime = {
@@ -104,6 +115,8 @@ export function buildNodeCenterNodes(
   hosts: Host[],
   nodeSnapshots: NodeStatus[],
   projects: Project[],
+  // mirrors 默认空数组：向后兼容尚未传入端口镜像快照的既有调用方/测试用例。
+  mirrors: MirrorStatus[] = [],
 ): NodeCenterNode[] {
   const remoteHosts = hosts.filter(isRemoteNodeHost)
   const nodesByHost = new Map(nodeSnapshots.filter(node => node.host_id).map(node => [node.host_id, node]))
@@ -111,14 +124,14 @@ export function buildNodeCenterNodes(
   const contextByDeployment = buildDeploymentContextIndex(projects)
 
   const configuredNodes = remoteHosts.map(host =>
-    buildNodeFromHost(host, nodesByHost.get(host.id), contextByDeployment),
+    buildNodeFromHost(host, nodesByHost.get(host.id), contextByDeployment, mirrors),
   )
 
   const snapshotOnlyNodes = nodeSnapshots
     .filter(node => node.host_id && !hostIds.has(node.host_id))
     .filter(node => node.host_id !== 'local')
     .filter(node => nodeDeployments(node).some(instance => !instance.is_local) || node.agent.reachable)
-    .map(node => buildNodeFromSnapshot(node, contextByDeployment))
+    .map(node => buildNodeFromSnapshot(node, contextByDeployment, mirrors))
 
   return [...configuredNodes, ...snapshotOnlyNodes].sort(compareNodes)
 }
@@ -127,8 +140,15 @@ function buildNodeFromHost(
   host: Host,
   node: NodeStatus | undefined,
   contextByDeployment: Map<string, NodeCenterDeploymentContext>,
+  mirrors: MirrorStatus[],
 ): NodeCenterNode {
   const deployments = node ? nodeDeployments(node) : []
+  // host.dev_machine_mode 是否为 true 决定「开发机」标记；mirrors 按 host_id 独立计算——
+  // agent 侧端口镜像转发只依赖 Host 配置，不依赖 NodeStatus 快照是否已到达（见
+  // agent/portmirror/manager.go 的 expected-forward 计算逻辑），所以即使 node 未就绪
+  // （下方 !node 分支），仍然要把该 host 的镜像行带出去，不能因为快照缺失而丢失。
+  const devMachine = host.dev_machine_mode === true
+  const hostMirrors = mirrorRowsForHost(host.id, mirrors)
   if (!node) {
     return {
       hostId: host.id,
@@ -140,6 +160,8 @@ function buildNodeFromHost(
       deployments: [],
       serviceCount: 0,
       configured: true,
+      mirrors: hostMirrors,
+      devMachine,
     }
   }
   return {
@@ -155,12 +177,15 @@ function buildNodeFromHost(
     error: node.error,
     configured: true,
     route: routeFromNode(node),
+    mirrors: hostMirrors,
+    devMachine,
   }
 }
 
 function buildNodeFromSnapshot(
   node: NodeStatus,
   contextByDeployment: Map<string, NodeCenterDeploymentContext>,
+  mirrors: MirrorStatus[],
 ): NodeCenterNode {
   const deployments = nodeDeployments(node)
   return {
@@ -176,6 +201,10 @@ function buildNodeFromSnapshot(
     error: node.error,
     configured: false,
     route: routeFromNode(node),
+    mirrors: mirrorRowsForHost(node.host_id, mirrors),
+    // snapshot-only 节点没有对应的 Host 记录（未被配置），dev_machine_mode 是 Host 级
+    // 字段，无从取值——恒为 false，与「只有已配置的 Host 才能勾选开发机模式」的产品语义一致。
+    devMachine: false,
   }
 }
 

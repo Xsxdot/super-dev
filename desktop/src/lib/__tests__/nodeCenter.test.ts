@@ -5,13 +5,15 @@
  *   - Verify remote hosts remain visible even when nodeStore has no snapshot
  *   - Verify local hosts are excluded from the global Node Center
  *   - Verify env labels and abnormal service ordering are computed outside Vue components
+ *   - Verify port-mirror rows land on the right host and the devMachine flag is derived
+ *     from Host.dev_machine_mode (Task 11)
  *
  * Boundaries:
  *   - Does not render Vue components
  *   - Does not open workspace tabs or WebSocket connections
  */
 import { describe, expect, it } from 'vitest'
-import type { Host, NodeStatus, Project, RuntimeInstanceStatus } from '@/api/agent'
+import type { Host, MirrorStatus, NodeStatus, Project, RuntimeInstanceStatus } from '@/api/agent'
 import { buildDeploymentContextIndex, buildDeploymentEnvIndex, buildNodeCenterNodes } from '../nodeCenter'
 
 function host(partial: Partial<Host> = {}): Host {
@@ -57,6 +59,19 @@ function node(partial: Partial<NodeStatus> = {}): NodeStatus {
       reachable: true,
     },
     deployments: [instance()],
+    updated_at: '2026-06-06T10:00:00Z',
+    ...partial,
+  }
+}
+
+function mirrorStatus(partial: Partial<MirrorStatus> = {}): MirrorStatus {
+  return {
+    host_id: 'host-1',
+    host_name: 'ali-01',
+    deployment_id: 'dep-api',
+    service_name: 'api',
+    port: 9100,
+    state: 'active',
     updated_at: '2026-06-06T10:00:00Z',
     ...partial,
   }
@@ -278,5 +293,91 @@ describe('nodeCenter view model', () => {
     )
 
     expect(nodes.map(item => item.hostId)).toEqual(['large', 'small', 'offline', 'empty'])
+  })
+
+  describe('端口镜像归位与开发机标记（Task 11）', () => {
+    it('mirrors 按 host_id 归位到对应节点卡，不混入其他主机的行', () => {
+      const nodes = buildNodeCenterNodes(
+        [host({ id: 'host-1' }), host({ id: 'host-2', name: 'tokyo-01' })],
+        [],
+        [],
+        [
+          mirrorStatus({ host_id: 'host-1', port: 9100 }),
+          mirrorStatus({ host_id: 'host-1', port: 9101 }),
+          mirrorStatus({ host_id: 'host-2', port: 9200 }),
+        ],
+      )
+
+      const host1 = nodes.find(item => item.hostId === 'host-1')!
+      const host2 = nodes.find(item => item.hostId === 'host-2')!
+      expect(host1.mirrors.map(row => row.port)).toEqual([9100, 9101])
+      expect(host2.mirrors.map(row => row.port)).toEqual([9200])
+    })
+
+    it('devMachine 标记直接取自 Host.dev_machine_mode', () => {
+      const nodes = buildNodeCenterNodes(
+        [
+          host({ id: 'dev-box', name: 'dev-box', dev_machine_mode: true }),
+          host({ id: 'plain', name: 'plain', dev_machine_mode: false }),
+          host({ id: 'unset', name: 'unset' }),
+        ],
+        [],
+        [],
+        [],
+      )
+
+      expect(nodes.find(item => item.hostId === 'dev-box')!.devMachine).toBe(true)
+      expect(nodes.find(item => item.hostId === 'plain')!.devMachine).toBe(false)
+      expect(nodes.find(item => item.hostId === 'unset')!.devMachine).toBe(false)
+    })
+
+    it('尚无 node 快照（muted 占位态）时仍然携带该 host 的 mirrors——转发由本机 agent 独立计算，不依赖远端快照到达', () => {
+      const nodes = buildNodeCenterNodes(
+        [host({ id: 'host-1', dev_machine_mode: true })],
+        [],
+        [],
+        [mirrorStatus({ host_id: 'host-1', port: 9100, state: 'pending' })],
+      )
+
+      expect(nodes[0].muted).toBe(true)
+      expect(nodes[0].mirrors.map(row => row.port)).toEqual([9100])
+      expect(nodes[0].devMachine).toBe(true)
+    })
+
+    it('snapshot-only 节点（未在 hosts 中配置）devMachine 恒为 false，且仍按 host_id 收到 mirrors', () => {
+      const nodes = buildNodeCenterNodes(
+        [host({ id: 'host-1' })],
+        [node({
+          host_id: 'host-2',
+          name: 'tokyo-01',
+          deployments: [instance({ node_id: 'host-2', node_name: 'tokyo-01' })],
+        })],
+        [],
+        [mirrorStatus({ host_id: 'host-2', port: 9300 })],
+      )
+
+      const snapshotOnly = nodes.find(item => item.hostId === 'host-2')!
+      expect(snapshotOnly.configured).toBe(false)
+      expect(snapshotOnly.devMachine).toBe(false)
+      expect(snapshotOnly.mirrors.map(row => row.port)).toEqual([9300])
+    })
+
+    it('本机 (is_self) 节点被排除在节点中心之外，不会产出携带 mirrors 的节点卡（节点中心 remote-only 的既有裁定）', () => {
+      const nodes = buildNodeCenterNodes(
+        [host({ id: 'self', name: 'local', is_self: true, dev_machine_mode: false })],
+        [],
+        [],
+        [mirrorStatus({ host_id: 'self', port: 9100 })],
+      )
+
+      expect(nodes).toHaveLength(0)
+    })
+
+    it('省略 mirrors 参数时按空数组处理，向后兼容既有调用方（默认参数）', () => {
+      const nodes = buildNodeCenterNodes([host({ dev_machine_mode: true })], [], [])
+
+      expect(nodes[0].mirrors).toEqual([])
+      expect(nodes[0].devMachine).toBe(true)
+    })
   })
 })
