@@ -5,12 +5,16 @@
 //   - 用可信外部来源预置的 canonical SHA256 pin 校验 SSH host key
 //   - 建立 ssh.Client 连接
 //   - 在本地随机端口监听并把流量转发到远端 127.0.0.1:RemoteAgentPort
-//   - 提供 Close 释放所有资源
+//   - 在同一个 ssh.Client 上按需新增/拆除任意多路端口转发(AddForward/
+//     RemoveForward，端口镜像场景)，一条 SSH 连接承载 N 路转发
+//   - 提供 Close 释放所有资源(含全部按需新增的转发)
 //
 // 边界：
 //   - 不持久化配置,凭据通过 Credentials 显式传入
 //   - 不处理重连;由上层 Manager 决定何时重建
 //   - 不支持 TOFU 或不校验 host key 的 fallback；缺 pin、非法 pin、mismatch 均 fail closed
+//   - 本机端口占用(ErrLocalPortBusy)是独立于 PublicError 的错误通道，
+//     不在本包脱敏或打日志，由调用方(portmirror)裁决呈现
 package tunnel
 
 import (
@@ -23,8 +27,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/xsxdot/gokit/logger"
@@ -39,6 +45,14 @@ var (
 	ErrHostKeyFingerprintInvalid = errors.New("ssh host key fingerprint must be canonical OpenSSH SHA256")
 	// ErrHostKeyMismatch 表示远端实际 host key 与可信 pin 不一致。
 	ErrHostKeyMismatch = errors.New("ssh host key does not match trusted fingerprint")
+
+	// ErrLocalPortBusy 表示本机 127.0.0.1:port 已被占用——端口镜像冲突的结构化信号。
+	// 有意不经 PublicError 脱敏：它不是 SSH 凭据类错误，冲突详情要透给 UI
+	// （见 AddForward 内的详细说明）。
+	ErrLocalPortBusy = errors.New("local_port_busy")
+
+	// errTunnelClosed 表示在已关闭的 Tunnel 上尝试新增转发。
+	errTunnelClosed = errors.New("ssh tunnel is closed")
 )
 
 type sshConnectionError struct {
@@ -303,13 +317,17 @@ func DialSSHClient(address string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
 	return client, nil
 }
 
-// Tunnel 表示一个已建立的 SSH 隧道及其本地监听器。
+// Tunnel 表示一个已建立的 SSH 隧道:一个 ssh.Client 之上可以同时承载
+// Dial 建立的主 listener（转发到远端 agent 控制端口）和任意多个
+// AddForward 按需新增的 listener（端口镜像场景，转发到远端声明端口）——
+// 一条 SSH 连接:N 路转发，而不是每路转发各起一条 SSH 连接。
 type Tunnel struct {
 	mu       sync.Mutex
 	client   *ssh.Client
 	listener net.Listener
 	closed   bool
 	done     chan struct{}
+	forwards map[int]net.Listener // 本地端口 → 该端口专属 listener，AddForward/RemoveForward 维护
 }
 
 // Dial 建立 SSH 连接并在 localPort 上监听(localPort=0 时由 OS 分配)。
@@ -339,15 +357,17 @@ func Dial(sshAddr string, cfg *ssh.ClientConfig, localPort int, remoteAddr strin
 		client:   client,
 		listener: listener,
 		done:     make(chan struct{}),
+		forwards: map[int]net.Listener{},
 	}
-	go t.acceptLoop(remoteAddr)
+	go t.acceptLoop(t.listener, remoteAddr)
 	return t, actualPort, nil
 }
 
-// acceptLoop 循环接受本地连接,为每个连接建立到远端的双向转发。
-func (t *Tunnel) acceptLoop(remoteAddr string) {
+// acceptLoop 循环接受 listener 上的本地连接,为每个连接建立到远端的双向转发。
+// 主 listener(Dial 建立)和每一路 AddForward 新增的 listener 共享同一个循环体。
+func (t *Tunnel) acceptLoop(listener net.Listener, remoteAddr string) {
 	for {
-		local, err := t.listener.Accept()
+		local, err := listener.Accept()
 		if err != nil {
 			select {
 			case <-t.done:
@@ -377,9 +397,79 @@ func (t *Tunnel) handleConn(local net.Conn, remoteAddr string) {
 	<-errCh
 }
 
-// Close 关闭本地监听器和 SSH 客户端,中断所有正在传输的连接。
+// AddForward 在本机 127.0.0.1:port 上新增一路转发,把接入连接桥接到远端 remoteAddr。
+// 与 Dial 建立的主 listener 共享同一个 t.client,让一条 SSH 连接承载多路转发。
 //
-// 注意:可以并发调用,重复调用为空操作。
+// 参数：
+//   - port: 本机监听端口;端口镜像场景下与远端声明端口一致
+//   - remoteAddr: 远端目标地址,通常为 "127.0.0.1:<port>"
+//
+// 返回：
+//   - 已存在同端口转发时直接返回 nil(幂等)
+//   - 本机端口被占用时返回 wrap 了 ErrLocalPortBusy 的错误
+//   - Tunnel 已关闭时返回错误
+//
+// 注意：
+//   - 为什么 EADDRINUSE 单独成一条错误通道，不并入下面 net.Listen 的其余
+//     失败分支：这是端口镜像冲突的结构化信号，调用方(portmirror)要把
+//     「本机这个端口被谁占用了」呈现给 UI 并给出处理动作，不能被上层
+//     PublicError 脱敏成统一的 ssh_connection_failed——那样冲突详情就丢了
+func (t *Tunnel) AddForward(port int, remoteAddr string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return errTunnelClosed
+	}
+	if _, ok := t.forwards[port]; ok {
+		return nil
+	}
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return fmt.Errorf("listen 127.0.0.1:%d: %w", port, ErrLocalPortBusy)
+		}
+		return fmt.Errorf("listen 127.0.0.1:%d: %w", port, err)
+	}
+	t.forwards[port] = listener
+	go t.acceptLoop(listener, remoteAddr)
+	return nil
+}
+
+// RemoveForward 拆除指定端口转发并关闭其监听器;端口不存在时为 no-op。
+//
+// 返回：
+//   - 实际移除了转发返回 true;端口本不存在返回 false(供调用方决定是否打日志)
+func (t *Tunnel) RemoveForward(port int) bool {
+	t.mu.Lock()
+	listener, ok := t.forwards[port]
+	if ok {
+		delete(t.forwards, port)
+	}
+	t.mu.Unlock()
+	if !ok {
+		return false
+	}
+	_ = listener.Close()
+	return true
+}
+
+// ForwardPorts 返回当前活跃的转发端口列表(升序)。
+func (t *Tunnel) ForwardPorts() []int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	ports := make([]int, 0, len(t.forwards))
+	for port := range t.forwards {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+	return ports
+}
+
+// Close 关闭本地监听器、全部端口转发和 SSH 客户端,中断所有正在传输的连接。
+//
+// 注意:可以并发调用,重复调用为空操作。这是全部 forwards 的唯一兜底关闭点——
+// Disconnect/MarkFailed/host-key pin 变更失效都通过 Manager.Conn.Close 走到
+// 这里,不需要在每条失效路径上分别遍历 forwards。
 func (t *Tunnel) Close() {
 	t.mu.Lock()
 	if t.closed {
@@ -388,9 +478,14 @@ func (t *Tunnel) Close() {
 	}
 	t.closed = true
 	close(t.done)
+	forwards := t.forwards
+	t.forwards = map[int]net.Listener{}
 	t.mu.Unlock()
 	if t.listener != nil {
 		_ = t.listener.Close()
+	}
+	for _, ln := range forwards {
+		_ = ln.Close()
 	}
 	if t.client != nil {
 		_ = t.client.Close()

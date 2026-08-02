@@ -4,6 +4,9 @@
 //   - 维护 hostID → 隧道连接的映射,EnsureConnected 幂等
 //   - 隧道失败时标记 Failed,由调用方后续 EnsureConnected 重新触发建连
 //   - 提供状态变更订阅(Subscribe/Unsubscribe),通过 channel 推送
+//   - 代理 hostID 既有隧道上的多端口转发管理(EnsureForward/DropForward/
+//     ForwardPorts,端口镜像场景);所有 Disconnect/MarkFailed/pin 变更失效
+//     路径都会连带关闭该 host 上的全部转发,不留监听器或 goroutine
 //
 // 边界：
 //   - 不持久化本地端口的"复用"逻辑:Manager 不知道上次用了什么端口
@@ -43,6 +46,9 @@ type Conn struct {
 	port    int
 	close   func()
 	hostKey HostKeyEvidence
+	// tunnel 是生产连接的底层隧道，供 EnsureForward/DropForward/ForwardPorts
+	// 代理转发操作；fake conn（测试用）不设置，保持 nil。
+	tunnel *Tunnel
 }
 
 // NewFakeConn 仅测试使用。
@@ -390,6 +396,66 @@ func (m *Manager) HostKeyEvidenceOf(hostID string) HostKeyEvidence {
 	return m.hostKeys[hostID]
 }
 
+// EnsureForward 在 hostID 既有隧道的 SSH 连接上建立 127.0.0.1:port → 远端 127.0.0.1:port 的转发。
+// 前置：EnsureConnected 已成功（无连接时返回错误）。幂等：已存在同端口转发时直接返回 nil。
+// 本机端口被占时返回 wrap 了 ErrLocalPortBusy 的错误。
+func (m *Manager) EnsureForward(hostID string, port int) error {
+	m.mu.Lock()
+	conn, ok := m.conns[hostID]
+	m.mu.Unlock()
+	if !ok || conn.tunnel == nil {
+		return fmt.Errorf("host %s: 隧道未连接，无法建立转发", hostID)
+	}
+
+	remoteAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	err := conn.tunnel.AddForward(port, remoteAddr)
+	if err != nil {
+		if errors.Is(err, ErrLocalPortBusy) {
+			// 端口占用是 portmirror 的正常业务分支（冲突态），不在这里打日志；
+			// 调用方拿到这个结构化错误后自行决定如何呈现和是否重试/换端口。
+			return err
+		}
+		logger.GetLogger().WithEntryName("SSHTunnelManager").WithFields(map[string]any{
+			"host_id": hostID,
+			"port":    port,
+		}).WithErr(err).Error("SSH tunnel 转发建立失败")
+		return err
+	}
+	logger.GetLogger().WithEntryName("SSHTunnelManager").WithFields(map[string]any{
+		"host_id": hostID,
+		"port":    port,
+	}).Infof("host %s 转发已建立 127.0.0.1:%d", hostID, port)
+	return nil
+}
+
+// DropForward 拆除指定转发;不存在时为 no-op。不关闭 SSH 连接本身。
+func (m *Manager) DropForward(hostID string, port int) {
+	m.mu.Lock()
+	conn, ok := m.conns[hostID]
+	m.mu.Unlock()
+	if !ok || conn.tunnel == nil {
+		return
+	}
+	if !conn.tunnel.RemoveForward(port) {
+		return
+	}
+	logger.GetLogger().WithEntryName("SSHTunnelManager").WithFields(map[string]any{
+		"host_id": hostID,
+		"port":    port,
+	}).Infof("host %s 转发已拆除 127.0.0.1:%d", hostID, port)
+}
+
+// ForwardPorts 返回 hostID 上当前活跃的转发端口列表（升序）。
+func (m *Manager) ForwardPorts(hostID string) []int {
+	m.mu.Lock()
+	conn, ok := m.conns[hostID]
+	m.mu.Unlock()
+	if !ok || conn.tunnel == nil {
+		return nil
+	}
+	return conn.tunnel.ForwardPorts()
+}
+
 // Subscribe 注册状态订阅;返回事件 channel(缓冲 64)。
 func (m *Manager) Subscribe(id string) <-chan Event {
 	m.mu.Lock()
@@ -496,5 +562,5 @@ func (d *SSHDialer) Dial(target Target) (*Conn, error) {
 		tun.Close()
 		return nil, ErrHostKeyMismatch
 	}
-	return &Conn{port: actualPort, close: tun.Close, hostKey: evidence}, nil
+	return &Conn{port: actualPort, close: tun.Close, hostKey: evidence, tunnel: tun}, nil
 }
