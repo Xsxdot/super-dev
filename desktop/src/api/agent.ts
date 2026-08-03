@@ -1488,6 +1488,17 @@ export interface HostCreatePayload {
 
 export type HostUpdatePayload = Partial<HostCreatePayload>
 
+/**
+ * HostUpdateResponse 是 PUT /api/hosts/{id} 的响应体：标准 Host 视图 + 可选 homed_projects。
+ *
+ * 注意：
+ *   - homed_projects 仅当本次更新把 dev_machine_mode 由 true 改为 false，且该 Host
+ *     当前仍是若干项目的归属时才非空（后端 hostUpdateResponseDTO 语义）
+ */
+export interface HostUpdateResponse extends Host {
+  homed_projects?: string[]
+}
+
 /** ScanHostKeyResult 是主机 SSH host key 采集接口的成功响应。 */
 export interface ScanHostKeyResult {
   fingerprint: string
@@ -1531,6 +1542,58 @@ export interface MirrorStatus {
   /** 仅 conflict 且占用者识别成功时存在。 */
   occupier?: MirrorOccupier
   updated_at: string
+}
+
+// ===== 项目归属转移（project home transfer） =====
+
+/**
+ * TransferCheckItem 是预检响应 / 结束后资产报告中的单条检查结果。
+ *
+ * code 是稳定码，供前端按类型分支处理（如 uncommitted/unpushed/running_dev/
+ * no_upstream/not_a_git_repo/no_git_binary/checkout_reuse/checkout_clone/
+ * remote_url_mismatch），detail 是可展示的中文说明。
+ */
+export interface TransferCheckItem {
+  code: string
+  detail: string
+}
+
+/** TransferPreflightResponse 是转移预检（只读探测，不执行任何写操作）的结果。 */
+export interface TransferPreflightResponse {
+  /** 必须先处理的阻塞项，任一存在则不可执行转移。 */
+  blockers: TransferCheckItem[]
+  /** 就绪确认项（含需人审的检出复用提示）。 */
+  ready: TransferCheckItem[]
+  /** 回显实际生效的目标目录：target_dir 留空时由后端按默认规则计算。 */
+  target_dir: string
+  /** 本机当前分支；执行转移时目标机检出同一分支。 */
+  branch: string
+}
+
+export type TransferStepState = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+
+/** TransferStep 是转移执行过程中单个步骤的状态。 */
+export interface TransferStep {
+  code: string
+  state: TransferStepState
+  detail?: string
+}
+
+export type TransferRunState = 'running' | 'succeeded' | 'failed'
+
+/**
+ * TransferStatusResponse 是一次转移执行的状态快照。
+ *
+ * 注意：
+ *   - POST 转移/迁回接口的 202 响应体与 GET status 接口共用同一形状
+ *   - asset_report 仅在转移结束（非 running）后可能非空
+ */
+export interface TransferStatusResponse {
+  state: TransferRunState
+  steps: TransferStep[]
+  /** 需在新家启动的服务 + env 文件缺失 + 疑似密钥键名等提示；仅结束后可能非空。 */
+  asset_report?: TransferCheckItem[]
+  error?: string
 }
 
 export const api = {
@@ -1830,11 +1893,89 @@ export const api = {
   createHost: (payload: HostCreatePayload) =>
     request<Host>('/api/hosts', { method: 'POST', body: JSON.stringify(payload) }),
   updateHost: (id: string, payload: HostUpdatePayload) =>
-    request<Host>(`/api/hosts/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+    request<HostUpdateResponse>(`/api/hosts/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  /**
+   * deleteHost 删除一个 Host。
+   *
+   * 注意：
+   *   - 该 Host 仍是若干项目的归属时返回 409，错误体带稳定码 project_home
+   *     （经 request() 统一解析后体现为 AgentAPIError.code === 'project_home'，
+   *     data 携带 { host_id, projects: string[] }），调用方（Task 12）据此渲染
+   *     "先在项目概览迁回"引导弹窗，不提供强制删除选项
+   */
   deleteHost: (id: string) =>
     request<void>(`/api/hosts/${id}`, { method: 'DELETE' }),
   getHostManagedDeploymentStatus: (id: string) =>
     request<HostManagedDeploymentStatus>(`/api/hosts/${id}/managed-deployments/status`),
+
+  // 项目归属转移（project home transfer）
+  /**
+   * transferPreflight 只读预检项目转移到目标 host 是否可执行。
+   *
+   * 参数：
+   *   - projectId: 项目 ID
+   *   - hostId: 转移目标 host ID
+   *   - targetDir: 目标机项目路径；留空时后端按 "~/workspace/<项目目录名>" 计算默认值
+   *
+   * 端点：POST /api/projects/{projectId}/transfer/preflight
+   */
+  transferPreflight: (projectId: string, hostId: string, targetDir?: string) =>
+    request<TransferPreflightResponse>(`/api/projects/${encodeURIComponent(projectId)}/transfer/preflight`, {
+      method: 'POST',
+      body: JSON.stringify({ host_id: hostId, target_dir: targetDir ?? '' }),
+    }),
+  /**
+   * startTransfer 异步启动一次正向转移（本机 → 目标 host）。
+   *
+   * 参数：同 transferPreflight
+   *
+   * 返回：
+   *   - 202 + 转移的初始状态快照（与 transferStatus 同形状），调用方随后轮询
+   *     transferStatus 跟踪进度
+   *
+   * 注意：
+   *   - 同项目已有进行中的转移会以 409 拒绝（AgentAPIError.status === 409）
+   *
+   * 端点：POST /api/projects/{projectId}/transfer
+   */
+  startTransfer: (projectId: string, hostId: string, targetDir?: string) =>
+    request<TransferStatusResponse>(`/api/projects/${encodeURIComponent(projectId)}/transfer`, {
+      method: 'POST',
+      body: JSON.stringify({ host_id: hostId, target_dir: targetDir ?? '' }),
+    }),
+  /**
+   * transferStatus 查询项目当前/最近一次转移的执行状态。
+   *
+   * 参数：
+   *   - projectId: 项目 ID
+   *
+   * 注意：
+   *   - 404（AgentAPIError.status === 404）表示该项目从未发起过转移，或 agent
+   *     进程重启后内存态已丢失——调用方应据此判断"当前无进行中的转移"，
+   *     而不是当作请求失败处理
+   *
+   * 端点：GET /api/projects/{projectId}/transfer/status
+   */
+  transferStatus: (projectId: string) =>
+    request<TransferStatusResponse>(`/api/projects/${encodeURIComponent(projectId)}/transfer/status`),
+  /**
+   * transferBack 异步启动一次迁回（归属机 → 本机）。
+   *
+   * 参数：
+   *   - projectId: 项目 ID
+   *
+   * 注意：
+   *   - 目标 host 由后端按项目当前归属反查得到，不由调用方指定
+   *   - 项目已归属本机时返回 400
+   *
+   * 返回：202 + 转移的初始状态快照（与 transferStatus 同形状）
+   *
+   * 端点：POST /api/projects/{projectId}/transfer-back
+   */
+  transferBack: (projectId: string) =>
+    request<TransferStatusResponse>(`/api/projects/${encodeURIComponent(projectId)}/transfer-back`, {
+      method: 'POST',
+    }),
 
   // 远程监听：SSH config 导入
   listSshConfigHosts: () => request<SshConfigEntry[]>('/api/ssh-config/hosts'),
