@@ -126,9 +126,19 @@ func (a *App) withSecurity(next http.Handler) http.Handler {
 	})
 }
 
+// securityBypassPath 判定路径是否豁免 Bearer 校验。
+//
+// 新增的两条纳管路径（Task 7）与 /api/security/provision 同理：接入方此刻
+// 手上没有任何凭据（既没有 bootstrap token，也没有长期 token），若不 bypass
+// 就无法发起接入请求，也无法轮询审批结果——真正的门不在这两个端点本身，而在
+// FindOrCreatePending 落的那条审批单：只有既有控制面点击批准，adoption token
+// 才会生成，Exchange 才可能兑换出长期凭据。exchange 端点同样 bypass：它的
+// 准入凭证就是一次性 adoption token 本身（POST body 校验），不是 Bearer 头。
 func securityBypassPath(path string) bool {
 	return path == "/api/security/health" ||
 		path == "/api/security/provision" ||
+		path == "/api/security/adoption-requests" ||
+		strings.HasPrefix(path, "/api/security/adoption-requests/") ||
 		path == "/api/agents/install.sh" ||
 		path == "/api/agents/install-binary"
 }

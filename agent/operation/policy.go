@@ -630,6 +630,51 @@ func PlanPipelineRun(project model.Project, pipelineID, envName string, isRollba
 	return plan, nil
 }
 
+// PlanAgentAdopt 为无凭据接入请求生成安全预检计划。
+//
+// 参数：
+//   - requestID: security.AdoptionManager 生成的接入请求 ID
+//   - name: 接入方（新控制面）自报的展示名，空则显示为「控制面」
+//
+// 返回：
+//   - 恒为 RiskHigh 且必须审批的 agent.adopt plan
+//   - requestID 为空时返回 ErrInvalidOperation
+//
+// 注意：
+//   - Fingerprint 直接取 requestID，而非常规的 stableFingerprint 哈希——
+//     纳管场景下 approve/reject 是通过 approval.Plan.Fingerprint 反查
+//     AdoptionManager 中同一个请求的驱动键，用请求 ID 本身最直接、无需
+//     额外维护一张 fingerprint→请求 ID 的映射表
+//   - 本函数只规划安全策略，不接触 security.Store，也不生成任何 token
+func PlanAgentAdopt(requestID, name string) (Plan, error) {
+	requestID = trim(requestID)
+	if requestID == "" {
+		return Plan{}, ErrInvalidOperation
+	}
+	name = trim(name)
+	if name == "" {
+		name = "控制面"
+	}
+	now := time.Now().UTC()
+	plan := Plan{
+		ID:               newID("op"),
+		Kind:             KindAgentAdopt,
+		TargetSummary:    fmt.Sprintf("adopt request from %s", name),
+		RiskLevel:        RiskHigh,
+		RequiresApproval: true,
+		ExpectedEffects: []string{
+			fmt.Sprintf("issue independent long-term credential to control plane %s", name),
+		},
+		Checks: []Check{
+			{Name: "adoption_request_pending", Status: "passed", Message: "adoption request awaiting approval"},
+		},
+		CreatedAt: now,
+		ExpiresAt: now.Add(DefaultPlanTTL),
+	}
+	plan.Fingerprint = requestID
+	return plan, nil
+}
+
 func findEnvironment(project model.Project, envName string) (model.Environment, bool) {
 	for _, env := range project.Environments {
 		if env.Name == envName {

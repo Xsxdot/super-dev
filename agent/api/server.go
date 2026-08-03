@@ -95,6 +95,9 @@ type AppConfig struct {
 	TLSKeyFile string
 	// RemoteObservationOverride 注入安全远程观察模块，仅用于测试。
 	RemoteObservationOverride remoteobservation.Observer
+	// AdoptionNowOverride 仅用于测试注入 security.AdoptionManager 的时钟，控制
+	// 接入请求 10 分钟有效期窗口的推进；生产环境为 nil 时使用 time.Now。
+	AdoptionNowOverride func() time.Time
 }
 
 // HostAgentInstaller 安装、卸载、重启或原地更新远端 SuperDev agent。
@@ -220,6 +223,10 @@ type App struct {
 	browserControl browsercontrol.Controller
 	// securityStore 持久化 agent 安全自举与长期 token 状态。
 	securityStore *security.Store
+	// adoptions 是无凭据接入请求的进程内存态通道：接入方 Create → 既有控制面
+	// 审批 → 接入方凭一次性 adoption token Exchange 出独立长期凭据。重启即
+	// 丢失全部接入请求，接入方重发即可，不做持久化。
+	adoptions *security.AdoptionManager
 	// nodeTransport 统一承载按 hostID 访问远端 agent 的请求和流。
 	nodeTransport nodetransport.NodeTransport
 	// nodeTransportProviders 按 transport type 保存具体 provider，供 per-entry probe/provision 精确选路。
@@ -330,6 +337,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, fmt.Errorf("rotate local access token: %w", err)
 	}
 	securityStore.SetLocalToken(localToken)
+	// adoptions 依赖 securityStore 完成初始化后才能创建：Exchange 成功后需要
+	// 调用 securityStore.AppendTokenRecord 追加接入方的长期凭据记录。
+	adoptions := security.NewAdoptionManager(securityStore, security.AdoptionManagerOptions{Now: cfg.AdoptionNowOverride})
 
 	seqWatermarks, err := s.SeqWatermarks()
 	if err != nil {
@@ -554,6 +564,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		debugBrowserCandidates:      cfg.DebugBrowserCandidates,
 		browserControl:              browserControl,
 		securityStore:               securityStore,
+		adoptions:                   adoptions,
 		nodeTransport:               nodeTransport,
 		nodeTransportProviders:      appNodeTransportProviders,
 		nodeRegistry:                nodeRegistry,
@@ -915,6 +926,12 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exec/health", a.execHealth)
 	mux.HandleFunc("GET /api/security/health", a.securityHealth)
 	mux.HandleFunc("POST /api/security/provision", a.provisionSecurity)
+	// 纳管既有 agent（Task 7）：接入方此刻没有任何凭据，Create/Get 与
+	// provision 同理必须进 bypass 白名单；Exchange 校验一次性 adoption token
+	// 本身即准入凭证，也进白名单，见 security_handler.go securityBypassPath。
+	mux.HandleFunc("POST /api/security/adoption-requests", a.createAdoptionRequest)
+	mux.HandleFunc("GET /api/security/adoption-requests/{id}", a.getAdoptionRequest)
+	mux.HandleFunc("POST /api/security/adoption-requests/{id}/exchange", a.exchangeAdoptionRequest)
 	mux.HandleFunc("POST /api/transfer", a.transferFile)
 
 	// Collector 控制(远端 agent 接收本机隧道请求)

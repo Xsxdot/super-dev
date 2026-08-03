@@ -76,6 +76,17 @@ const (
 	//     靠这条审计链追溯，prepared 事件即失败恢复的 outbox
 	//   - 审计 Data 只承载步骤码/项目/host/结果，绝不携带任何秘密值或 git 凭据
 	KindProjectTransfer = "project.transfer"
+	// KindAgentAdopt 表示无凭据接入请求——已被其他控制面管理的 agent 收到新控制面的
+	// 纳管申请，经既有控制面审批后为接入方换发独立的长期凭据。
+	//
+	// 注意：
+	//   - 该 kind 恒为 RiskHigh 且必须审批，由 PlanAgentAdopt 直接置位，不放进
+	//     operation/policy.go 的 applyApprovalPolicy 覆盖表——发放的是能完全
+	//     控制这台 agent 的长期凭据，不能被 settings 审批开关意外调到自动放行档
+	//   - Plan.Fingerprint 固定取 security.AdoptionManager 生成的接入请求 ID
+	//     （不走 stableFingerprint 哈希），供 approve/reject 钩子从
+	//     approval.Plan.Fingerprint 直接反查对应的 AdoptionRequest
+	KindAgentAdopt = "agent.adopt"
 
 	// RiskLow 表示仅影响开发环境本机目标的低风险操作。
 	RiskLow = "low"

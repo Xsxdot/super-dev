@@ -153,6 +153,13 @@ func (a *App) approveOperationApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[SuperDev] approval 裁决 id=%s action=approve by=%s(%s)", approval.ID, decidedByName, principalType)
+	// 纳管联动（Task 7）：agent.adopt 的 approval.Plan.Fingerprint 就是
+	// AdoptionManager 里对应的接入请求 ID（PlanAgentAdopt 直接以请求 ID 作为
+	// fingerprint，见 operation/policy.go 注释），批准后驱动它生成一次性
+	// adoption token。失败只记日志不影响本次 approve 请求本身——最典型的失败
+	// 场景是 agent 在批准前重启过（AdoptionManager 进程内存态已丢失该请求），
+	// 此时接入方轮询 GET 也会拿到 404，会自然引导它重新发起 Create。
+	a.hookAgentAdoptDecision(approval, "approve")
 	// 广播给所有在线控制面：这条单在其余订阅方眼里应该立刻从 pending 变成灰化的
 	// 「已由 X 处理」（decided 段），不必等它们各自的下一次轮询。
 	a.signalApprovalsPublishers()
@@ -208,6 +215,8 @@ func (a *App) rejectOperationApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[SuperDev] approval 裁决 id=%s action=reject by=%s(%s)", approval.ID, decidedByName, principalType)
+	// 纳管联动（Task 7），语义同 approve 分支，见其注释。
+	a.hookAgentAdoptDecision(approval, "reject")
 	// 广播给所有在线控制面，语义同 approve 分支。
 	a.signalApprovalsPublishers()
 	a.appendOperationAudit(r.Context(), operation.AuditEvent{
@@ -219,6 +228,34 @@ func (a *App) rejectOperationApproval(w http.ResponseWriter, r *http.Request) {
 		Data:       map[string]any{"decided_by": approval.DecidedBy, "principal_type": principalType, "principal_id": principalID},
 	})
 	jsonOK(w, sanitizeOperationApproval(approval))
+}
+
+// hookAgentAdoptDecision 在 KindAgentAdopt 的 approval 被裁决时驱动
+// security.AdoptionManager 的状态机（Task 7 的审批联动钩子）。
+//
+// 参数：
+//   - approval: 已完成裁决（approve 或 reject）的 operation approval
+//   - action: "approve" 或 "reject"，仅用于日志区分
+//
+// 注意：
+//   - 非 KindAgentAdopt 的 approval 直接跳过，不影响其余 kind 的裁决路径
+//   - 钩子失败只记日志，不会让 approve/reject 这个已经成功落盘的裁决本身失败——
+//     operation approval 是通用子系统，不能因为纳管这一个消费者的联动失败而回滚
+func (a *App) hookAgentAdoptDecision(approval operation.Approval, action string) {
+	if approval.Plan.Kind != operation.KindAgentAdopt || a.adoptions == nil {
+		return
+	}
+	requestID := approval.Plan.Fingerprint
+	var err error
+	switch action {
+	case "approve":
+		_, err = a.adoptions.Approve(requestID)
+	case "reject":
+		err = a.adoptions.Reject(requestID)
+	}
+	if err != nil {
+		log.Printf("[SuperDev] adoption 审批联动失败 approval_id=%s action=%s err=%v", approval.ID, action, err)
+	}
 }
 
 // principalFromRequest 从已验证凭据推导裁决方展示名/类型/ID。
