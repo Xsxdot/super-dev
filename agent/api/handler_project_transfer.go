@@ -262,7 +262,15 @@ func (a *App) startProjectTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run := newTransferRun(projectID, host.ID, host.Name, targetDir, local.Branch, local.RemoteURL)
+	// 摘除 origin URL 上内嵌的凭据：目标机用它自己的 git 访问权限 clone，控制面的
+	// 凭据绝不能随 clone URL 搬到目标机（详见 stripURLCredentials 的红线说明）。
+	cleanRepoURL := stripURLCredentials(local.RemoteURL)
+	if cleanRepoURL != local.RemoteURL {
+		// 只提示发生了摘除，绝不打印任何凭据值。
+		log.Printf("[SuperDev] transfer execute: 已从 origin URL 摘除内嵌凭据 project=%s", projectID)
+	}
+
+	run := newTransferRun(projectID, host.ID, host.Name, targetDir, local.Branch, cleanRepoURL)
 	if !a.beginTransfer(projectID, run) {
 		jsonError(w, http.StatusConflict, "该项目已有进行中的转移")
 		return

@@ -34,6 +34,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"path"
 	"regexp"
@@ -383,7 +384,7 @@ func (a *App) transferMCPSetup(ctx context.Context, run *transferRun, deps *tran
 	if err != nil {
 		run.addAsset(transferCheckItem{
 			Code:   "mcp_setup_failed",
-			Detail: "目标机 superdev-mcp 配置调用失败：" + err.Error() + "，请在目标机手动运行 claude-code mcp-setup",
+			Detail: "目标机 superdev-mcp 配置调用失败：" + redactCreds(err.Error()) + "，请在目标机手动运行 claude-code mcp-setup",
 		})
 		return "MCP 配置失败，已降级为资产提示，不阻断转移", err
 	}
@@ -744,8 +745,34 @@ var urlCredRe = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://)[^/\s:@]+:[^/\s
 
 // redactCreds 把 URL 里内嵌的 user:pass 段替换为 ***:***，用于一切要落库/落日志/
 // 落审计的字符串。这是转移引擎自身输出的红线兜底，不替代 gitinfo 侧的处理。
+//
+// 注意：只能命中带冒号的 user:pass@ 形式，命不中裸 token（https://ghp_x@host）——
+// 裸 token 的根治在 stripURLCredentials（在源头把 userinfo 从 clone URL 摘掉），
+// redactCreds 只是输出路径上的第二道防线，不承担唯一防线的职责。
 func redactCreds(s string) string {
 	return urlCredRe.ReplaceAllString(s, "${1}***:***@")
+}
+
+// stripURLCredentials 从 remote URL 上摘除内嵌的 userinfo（user:pass@ 或裸
+// token@），返回不含任何凭据的 clone 源地址。
+//
+// 这是「不搬运 git 凭据」的根因修复：转移的模型是「目标机用它自己的 git 访问权限
+// 检出，clone 失败即目标机自身的权限问题、如实上报供人工处理」，因此传给目标机
+// 的 clone URL 绝不能夹带控制面用户的凭据。摘除后：
+//   - 凭据不会作为 `git clone <url>` 参数抵达目标机（关闭「搬运凭据」通路）；
+//   - clone 失败时 gitinfo 在 Task 5 下一层原样回显的 URL 里也不含凭据
+//     （关闭那条 Task 5 无法在返回错误里拦截的日志泄漏）；
+//   - 裸 token 形式（redactCreds 命不中）也一并被摘除。
+//
+// URL 无法解析时（scp-like `git@host:path` 等边界形态）保持原样返回：这类形态
+// url.Parse 不产生 userinfo（u.User==nil），本就无凭据可摘，不冒重排/丢字符的风险。
+func stripURLCredentials(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.User == nil {
+		return rawURL
+	}
+	u.User = nil
+	return u.String()
 }
 
 // readNodeBody 读取并关闭 NodeResponse.Body，返回响应体与状态码。

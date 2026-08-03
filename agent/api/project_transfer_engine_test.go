@@ -8,8 +8,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -317,6 +321,119 @@ func TestTransferEngine_RedactsEmbeddedCredsInCheckoutError(t *testing.T) {
 	require.NoError(t, err)
 	for _, e := range events {
 		assert.NotContains(t, e.Summary, secret, "审计 summary 不得包含明文 token")
+	}
+}
+
+// TestStripURLCredentials 单元验证根因修复：user:pass@ 与裸 token@ 两种形式的
+// 内嵌凭据都被摘除；无凭据 URL 与 scp-like SSH 地址原样返回。
+func TestStripURLCredentials(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"userpass", "https://user:ghp_TOKENVALUE@github.com/a/b.git", "https://github.com/a/b.git"},
+		{"baretoken", "https://ghp_TOKENVALUE@github.com/a/b.git", "https://github.com/a/b.git"},
+		{"nocreds", "https://github.com/a/b.git", "https://github.com/a/b.git"},
+		{"ssh_scp", "git@github.com:a/b.git", "git@github.com:a/b.git"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stripURLCredentials(tc.in)
+			assert.Equal(t, tc.want, got)
+			assert.NotContains(t, got, "ghp_TOKENVALUE", "摘除后不得残留 token")
+		})
+	}
+}
+
+// TestTransferEngine_StripsEmbeddedCredsFromCloneURL 秘密红线根因验证（走真实
+// HTTP capture→strip→clone 路径）：origin URL 内嵌凭据（两种形式）时，目标机
+// 收到的 git clone 命令绝不携带凭据，且状态 Error/Detail/AssetReport 与审计
+// summary/Data 里都不出现凭据值。
+func TestTransferEngine_StripsEmbeddedCredsFromCloneURL(t *testing.T) {
+	cases := []struct {
+		name   string
+		origin string
+		secret string
+	}{
+		{"userpass", "https://user:ghp_USERPASSSECRET123@github.com/acme/widget.git", "ghp_USERPASSSECRET123"},
+		{"baretoken", "https://ghp_BARETOKENSECRET456@github.com/acme/widget.git", "ghp_BARETOKENSECRET456"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newTestAppForPackage(t)
+			srv := newHTTPServerForPackage(t, app)
+
+			dir := initTransferTestRepo(t)
+			runTransferGit(t, dir, "remote", "add", "origin", tc.origin)
+			project := addTransferTestProject(t, srv, dir)
+
+			_, err := app.remoteStore.AddHost(model.Host{ID: "host-strip", Name: "Strip Host", DevMachineMode: true})
+			require.NoError(t, err)
+
+			const absDir = "/remote/workspace/strip"
+			var mu sync.Mutex
+			var capturedClone string
+			setTransferRemoteRunner(t, func(cmd string) (string, int, error) {
+				if strings.Contains(cmd, "git clone") {
+					mu.Lock()
+					capturedClone = cmd
+					mu.Unlock()
+				}
+				return transferSuccessRunner(absDir)(context.Background(), cmd, "")
+			})
+			setTransferNodeDo(t, transferDo(project.ID, true))
+
+			body := `{"host_id":"host-strip","target_dir":"` + absDir + `"}`
+			resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer", "application/json", strings.NewReader(body))
+			require.NoError(t, err)
+			require.Equal(t, http.StatusAccepted, resp.StatusCode)
+			resp.Body.Close()
+
+			var status transferStatusResponse
+			require.Eventually(t, func() bool {
+				r, err := http.Get(srv.URL + "/api/projects/" + project.ID + "/transfer/status")
+				if err != nil {
+					return false
+				}
+				defer r.Body.Close()
+				if r.StatusCode != http.StatusOK {
+					return false
+				}
+				status = transferStatusResponse{}
+				if err := json.NewDecoder(r.Body).Decode(&status); err != nil {
+					return false
+				}
+				return status.State != transferStateRunning
+			}, 5e9, 2e7)
+
+			require.Equal(t, transferStateSucceeded, status.State, "转移应成功，err=%s", status.Error)
+
+			mu.Lock()
+			clone := capturedClone
+			mu.Unlock()
+			require.NotEmpty(t, clone, "应捕获到 git clone 命令")
+			assert.NotContains(t, clone, tc.secret, "clone 命令不得携带凭据值")
+			assert.NotContains(t, clone, "@github.com", "摘除 userinfo 后 clone URL 不应再有 user@host")
+			assert.Contains(t, clone, "github.com/acme/widget.git", "clone 仍应指向同一仓库")
+
+			// 状态输出与审计均不得出现凭据值
+			assert.NotContains(t, status.Error, tc.secret)
+			for _, s := range status.Steps {
+				assert.NotContains(t, s.Detail, tc.secret, "步骤 %s Detail 不得含凭据", s.Code)
+			}
+			for _, item := range status.AssetReport {
+				assert.NotContains(t, item.Detail, tc.secret)
+			}
+			events, err := app.operationAudit.List(context.Background(), operation.AuditFilter{Kind: operation.KindProjectTransfer, ProjectID: project.ID})
+			require.NoError(t, err)
+			for _, e := range events {
+				assert.NotContains(t, e.Summary, tc.secret, "审计 summary 不得含凭据")
+				for _, v := range e.Data {
+					assert.NotContains(t, fmt.Sprintf("%v", v), tc.secret, "审计 Data 不得含凭据")
+				}
+			}
+		})
 	}
 }
 
