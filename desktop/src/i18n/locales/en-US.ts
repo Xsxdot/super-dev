@@ -1605,6 +1605,7 @@ export default {
     emptyDescription: 'Add remote hosts in Settings to see node health and remote services here.',
     degraded: 'degraded',
     devMachine: 'dev machine',
+    desktopOnline: 'Desktop online',
     mirror: {
       title: 'Port mirroring (local ⇄ {host})',
       active: 'Mirrored',

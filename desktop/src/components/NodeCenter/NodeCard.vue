@@ -110,6 +110,11 @@ function openLogs(deploymentId: string, nodeId: string) {
           <div class="node-title-row">
             <h2>{{ node.name }}</h2>
             <span v-if="routeSummary()" class="node-route-badge" data-test="node-route-badge">{{ routeSummary() }}</span>
+            <span
+              v-if="node.desktopOnline"
+              class="node-route-badge desktop-online"
+              data-test="node-desktop-online-badge"
+            >{{ t('nodeCenter.desktopOnline') }}</span>
           </div>
           <p>{{ agentSummary() }}</p>
         </div>
@@ -257,6 +262,13 @@ function openLogs(deploymentId: string, nodeId: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 桌面端在线徽标（Task 10）：复用 .node-route-badge 胶囊外观，配色沿用原型
+   shared/styles.css 的 .node-route-badge.desktop-online（绿色系，语义同
+   --status-running），不引入新的裸 hex 值。 */
+.node-route-badge.desktop-online {
+  border-color: rgba(63, 185, 80, 0.4);
+  color: var(--status-running);
 }
 .node-title-text p {
   margin: 3px 0 0;

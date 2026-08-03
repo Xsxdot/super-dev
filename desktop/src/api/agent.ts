@@ -1226,6 +1226,12 @@ export interface NodeStatus {
   managed?: ManagedDeploymentStatus
   system?: NodeSystemFacts
   route?: RouteStatus
+  /**
+   * 该 agent 本机是否有活跃 /ws/nodes 订阅——即该机器上是否也开着桌面端在场。
+   * 用 /ws/nodes 订阅数当信号：桌面主界面常驻这条订阅，且它自带 5s 心跳帧，
+   * 因此免费获得 ≤5s 时效（见 agent/nodetransport/transport.go NodeStatus 字段注释）。
+   */
+  desktop_online?: boolean
   updated_at: string
   error?: string
 }

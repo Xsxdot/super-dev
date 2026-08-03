@@ -1605,6 +1605,7 @@ export default {
     emptyDescription: '在设置中添加远端主机后，可以在这里查看节点健康与远端服务状态。',
     degraded: '已降级',
     devMachine: '开发机',
+    desktopOnline: '桌面端在线',
     mirror: {
       title: '端口镜像（本机 ⇄ {host}）',
       active: '已镜像',

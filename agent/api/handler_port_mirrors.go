@@ -73,7 +73,8 @@ func (a *App) wsPortMirrors(w http.ResponseWriter, r *http.Request) {
 	// 读 pump：镜像快照流是稀疏的（可能数小时零帧），没有写失败可借以发现断连；
 	// WS 升级（hijack）后 r.Context() 也不会因客户端断开而 Done。必须主动读连接，
 	// 读出错即退出主循环，及时回收断开客户端占用的 goroutine/fd/订阅项。
-	// （wsNodes 无此问题：它的流是 ≤5s 心跳级高频，写失败很快暴露。）
+	// （wsNodes 在没有远端节点、Registry 长期零广播时同样会零帧，Task 10 起
+	// wsNodes 也补了同款读 pump——见 handler_node_status.go 头注释。）
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)

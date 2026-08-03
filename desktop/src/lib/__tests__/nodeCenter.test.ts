@@ -380,4 +380,57 @@ describe('nodeCenter view model', () => {
       expect(nodes[0].devMachine).toBe(true)
     })
   })
+
+  describe('desktopOnline 徽标数据链（Task 10）', () => {
+    it('已配置 host 透传 node.desktop_online', () => {
+      const nodes = buildNodeCenterNodes(
+        [host({ id: 'host-1' })],
+        [node({ host_id: 'host-1', desktop_online: true })],
+        [],
+      )
+
+      expect(nodes[0].desktopOnline).toBe(true)
+    })
+
+    it('node.desktop_online 为 false 时透传 false', () => {
+      const nodes = buildNodeCenterNodes(
+        [host({ id: 'host-1' })],
+        [node({ host_id: 'host-1', desktop_online: false })],
+        [],
+      )
+
+      expect(nodes[0].desktopOnline).toBe(false)
+    })
+
+    it('尚无 node 快照（muted 占位态）时 desktopOnline 恒为 false', () => {
+      const nodes = buildNodeCenterNodes([host({ id: 'host-1' })], [], [])
+
+      expect(nodes[0].desktopOnline).toBe(false)
+    })
+
+    it('snapshot-only 节点同样透传 desktop_online', () => {
+      const nodes = buildNodeCenterNodes(
+        [host({ id: 'host-1' })],
+        [node({
+          host_id: 'host-2',
+          name: 'tokyo-01',
+          desktop_online: true,
+          deployments: [instance({ node_id: 'host-2', node_name: 'tokyo-01' })],
+        })],
+        [],
+      )
+
+      expect(nodes.find(item => item.hostId === 'host-2')!.desktopOnline).toBe(true)
+    })
+
+    it('host_id 为 local 的本机快照不会产出节点卡，desktopOnline 无从渲染——桌面端在场徽标只服务远程节点（既有 host_id !== \'local\' 过滤，未在此改动）', () => {
+      const nodes = buildNodeCenterNodes(
+        [],
+        [node({ host_id: 'local', desktop_online: true })],
+        [],
+      )
+
+      expect(nodes).toHaveLength(0)
+    })
+  })
 })

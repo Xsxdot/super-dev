@@ -188,6 +188,13 @@ type App struct {
 	// nodeStatusPublishers 保存当前 /ws/node-status 连接，供 managed 状态变化即时推送。
 	nodeStatusPublisherMu sync.Mutex
 	nodeStatusPublishers  map[*nodeStatusPublisher]struct{}
+	// localWSClientsMu 保护 localWSClients 计数的并发读写。
+	localWSClientsMu sync.Mutex
+	// localWSClients 是当前本机 /ws/nodes 活跃连接数——桌面主界面常驻这条订阅，
+	// 故计数 >0 即视为本机有桌面端在场（DesktopOnline 信号源，见
+	// handler_node_status.go nodeStatusSnapshot）。wsNodes handler 进入 +1、
+	// 退出（含异常路径，defer 保证）-1，永远成对出现。
+	localWSClients int
 	// approvalsPublishers 保存当前 /ws/operation-approvals 连接，供审批创建/裁决即时推送。
 	approvalsPublisherMu sync.Mutex
 	approvalsPublishers  map[*approvalsPublisher]struct{}

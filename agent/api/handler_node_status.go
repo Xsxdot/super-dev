@@ -13,6 +13,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"time"
 
@@ -48,6 +49,10 @@ func (a *App) listNodes(w http.ResponseWriter, r *http.Request) {
 //
 // 注意：
 //   - 每次 Registry 变化都发送全量快照，前端只需要按 host_id 覆盖缓存
+//   - 本连接数还驱动 DesktopOnline 信号（见 incLocalWSClients），因此断连检测
+//     不能只靠"下次广播时 WriteJSON 失败"——若本机没有配置任何远端节点，
+//     Registry 可能长期零广播，写失败永远不会发生。必须像 wsOperationApprovals/
+//     wsPortMirrors 一样起读 pump 主动探测断连（同一教训，见那两处头注释）。
 func (a *App) wsNodes(w http.ResponseWriter, r *http.Request) {
 	if a.nodeRegistry == nil {
 		jsonError(w, http.StatusServiceUnavailable, "node registry unavailable")
@@ -58,6 +63,21 @@ func (a *App) wsNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+
+	// 计数进入/退出必须成对：defer 保证连接以任何方式退出（含下方读 pump 探测到
+	// 的网络级断连）时计数依然会被减回，否则 DesktopOnline 会永久卡在 true。
+	a.incLocalWSClients()
+	defer a.decLocalWSClients()
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
 
 	ch, unsubscribe := a.nodeRegistry.Subscribe()
 	defer unsubscribe()
@@ -70,10 +90,42 @@ func (a *App) wsNodes(w http.ResponseWriter, r *http.Request) {
 			if err := conn.WriteJSON(snapshot); err != nil {
 				return
 			}
+		case <-readDone:
+			return
 		case <-r.Context().Done():
 			return
 		}
 	}
+}
+
+// incLocalWSClients 增加本机 /ws/nodes 活跃连接计数，在 wsNodes handler
+// 建立连接后调用；与 decLocalWSClients 成对出现，供 nodeStatusSnapshot
+// 派生 DesktopOnline 信号。
+func (a *App) incLocalWSClients() {
+	a.localWSClientsMu.Lock()
+	a.localWSClients++
+	a.localWSClientsMu.Unlock()
+}
+
+// decLocalWSClients 减少本机 /ws/nodes 活跃连接计数，由 wsNodes handler 的
+// defer 调用，保证连接以任何方式退出（正常关闭/异常断开/handler panic 前的
+// defer 链）都会执行。计数出现负数说明 inc/dec 未成对，属于编程错误——不静默
+// 吞掉，打 warn 暴露问题，同时把计数钳制回 0 避免污染后续判定。
+func (a *App) decLocalWSClients() {
+	a.localWSClientsMu.Lock()
+	a.localWSClients--
+	if a.localWSClients < 0 {
+		log.Printf("[SuperDev] warn: localWSClients 计数为负 count=%d，钳制为 0（inc/dec 未成对，请检查 wsNodes 生命周期）", a.localWSClients)
+		a.localWSClients = 0
+	}
+	a.localWSClientsMu.Unlock()
+}
+
+// localDesktopOnline 返回本机当前是否有活跃 /ws/nodes 订阅——即桌面端在场信号。
+func (a *App) localDesktopOnline() bool {
+	a.localWSClientsMu.Lock()
+	defer a.localWSClientsMu.Unlock()
+	return a.localWSClients > 0
 }
 
 // wsNodeStatus 处理 GET /ws/node-status，供远端 agent 周期上报自身状态。
@@ -135,7 +187,9 @@ func (a *App) nodeStatusSnapshot(ctx context.Context, hostID, hostName string) n
 		Deployments: a.managedRuntimeInstances(ctx, hostID, hostName),
 		Managed:     a.managedDeploymentStatusSnapshot(),
 		System:      systemFacts,
-		UpdatedAt:   now,
+		// DesktopOnline 反映本机是否也开着桌面端（见 nodetransport.NodeStatus 字段注释）。
+		DesktopOnline: a.localDesktopOnline(),
+		UpdatedAt:     now,
 	}
 }
 
