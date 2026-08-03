@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
 // initTransferTestRepo 在临时目录初始化一个真实 git 仓库并提交一次初始文件，
@@ -252,10 +254,17 @@ func TestTransferPreflight_NoLocalOrigin_ReadyExcludesCheckoutClone(t *testing.T
 //     不会往 ready 追加 checkout_clone——这是唯一能让 blockers 和 ready
 //     同时保持字面为空的组合，其余分支都必然至少往其中一个追加一项
 //   - 无 dev 环境/无运行中部署，跳过 running_dev blocker
+//   - 目标机 agent 版本核对（Task 13）也必须"真通过"（同主版本），否则会带出
+//     agent_version_unverified 这个知会项，同样污染本用例要构造的全绿场景——
+//     用 fakeAgentHealthServer 让目标机报与本机相同的主版本号
 func TestTransferPreflight_AllClear_WireFormatUsesEmptyArraysNotNull(t *testing.T) {
 	app := newTestAppForPackage(t)
 	srv := newHTTPServerForPackage(t, app)
 	setTransferRemoteRunner(t, dirAbsentRunner)
+
+	const hostID = "host-dev-all-clear"
+	healthSrv := fakeAgentHealthServer(t, agentAPIVersion)
+	app.nodeTransport = testNodeTransport{table: map[string]string{hostID: healthSrv.URL}}
 
 	dir := initTransferTestRepo(t)
 	project := addTransferTestProject(t, srv, dir)
@@ -273,10 +282,10 @@ func TestTransferPreflight_AllClear_WireFormatUsesEmptyArraysNotNull(t *testing.
 	runTransferGit(t, dir, "branch", "upstream-shadow")
 	runTransferGit(t, dir, "branch", "--set-upstream-to=upstream-shadow")
 
-	_, err := app.remoteStore.AddHost(model.Host{ID: "host-dev-all-clear", Name: "Dev Machine", DevMachineMode: true})
+	_, err := app.remoteStore.AddHost(model.Host{ID: hostID, Name: "Dev Machine", DevMachineMode: true})
 	require.NoError(t, err)
 
-	reqBody := `{"host_id": "host-dev-all-clear"}`
+	reqBody := `{"host_id": "` + hostID + `"}`
 	resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer/preflight", "application/json", strings.NewReader(reqBody))
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -445,4 +454,138 @@ func readAndDecode(t *testing.T, resp *http.Response, out any) []byte {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(body, out))
 	return body
+}
+
+// fakeAgentHealthServer 起一个假的目标机 /api/security/health 端点，
+// 恒定返回给定 version（provision_state 留空，本检查不关心自举态）。
+func fakeAgentHealthServer(t *testing.T, version string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, nodetransport.SecurityHealthPath, r.URL.Path)
+		jsonOK(w, nodetransport.SecurityHealthResponse{Version: version})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// localAgentMajor 从本机 agentAPIVersion 解析出主版本号，供构造"同主版本"/
+// "不同主版本"的目标机版本号，不硬编码假设本机版本恰好等于某个字面量——
+// buildinfo.Version 会随发布推进变化，测试不应对它的具体值做假设。
+func localAgentMajor(t *testing.T) int {
+	t.Helper()
+	major, ok := parseMajorVersion(agentAPIVersion)
+	require.True(t, ok, "本机 agentAPIVersion=%q 应该能解析出主版本号", agentAPIVersion)
+	return major
+}
+
+// TestTransferPreflight_AgentVersionMajorMismatch_BlockersContainAgentVersionMismatch
+// 验证目标机 agent 主版本号与本机不一致时，预检 blockers 包含
+// agent_version_mismatch——register/mcp-setup/日志协议按大版本号保证兼容，
+// 主版本跨越可能破坏这些协议，必须先阻断转移。
+func TestTransferPreflight_AgentVersionMajorMismatch_BlockersContainAgentVersionMismatch(t *testing.T) {
+	app := newTestAppForPackage(t)
+	srv := newHTTPServerForPackage(t, app)
+	setTransferRemoteRunner(t, dirAbsentRunner)
+
+	remoteMajor := localAgentMajor(t) + 1
+	healthSrv := fakeAgentHealthServer(t, strconv.Itoa(remoteMajor)+".0.0")
+
+	const hostID = "host-dev-agentver-mismatch"
+	app.nodeTransport = testNodeTransport{table: map[string]string{hostID: healthSrv.URL}}
+
+	dir := initTransferTestRepo(t)
+	project := addTransferTestProject(t, srv, dir)
+	_, err := app.remoteStore.AddHost(model.Host{ID: hostID, Name: "Dev Machine", DevMachineMode: true})
+	require.NoError(t, err)
+
+	reqBody := `{"host_id": "` + hostID + `"}`
+	resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer/preflight", "application/json", strings.NewReader(reqBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result transferPreflightResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+
+	var codes []string
+	for _, b := range result.Blockers {
+		codes = append(codes, b.Code)
+	}
+	assert.Contains(t, codes, "agent_version_mismatch", "目标机主版本不一致应触发 agent_version_mismatch，实际 blockers=%v", codes)
+}
+
+// TestTransferPreflight_AgentVersionSameMajor_NoMismatchBlocker 验证目标机
+// agent 与本机主版本号一致（即便次/修订号不同）时，不应报 agent_version_mismatch——
+// minor/patch 差异通常向后兼容，只有主版本跨越才代表协议可能不兼容。
+func TestTransferPreflight_AgentVersionSameMajor_NoMismatchBlocker(t *testing.T) {
+	app := newTestAppForPackage(t)
+	srv := newHTTPServerForPackage(t, app)
+	setTransferRemoteRunner(t, dirAbsentRunner)
+
+	sameMajor := localAgentMajor(t)
+	// 故意让 minor/patch 与本机不同，证明比较的是"主版本"而非整串相等。
+	healthSrv := fakeAgentHealthServer(t, "v"+strconv.Itoa(sameMajor)+".99.99")
+
+	const hostID = "host-dev-agentver-samemajor"
+	app.nodeTransport = testNodeTransport{table: map[string]string{hostID: healthSrv.URL}}
+
+	dir := initTransferTestRepo(t)
+	project := addTransferTestProject(t, srv, dir)
+	_, err := app.remoteStore.AddHost(model.Host{ID: hostID, Name: "Dev Machine", DevMachineMode: true})
+	require.NoError(t, err)
+
+	reqBody := `{"host_id": "` + hostID + `"}`
+	resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer/preflight", "application/json", strings.NewReader(reqBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result transferPreflightResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+
+	var codes []string
+	for _, b := range result.Blockers {
+		codes = append(codes, b.Code)
+	}
+	assert.NotContains(t, codes, "agent_version_mismatch", "主版本一致不应触发 agent_version_mismatch，实际 blockers=%v", codes)
+}
+
+// TestTransferPreflight_AgentVersionHealthUnreachable_ReadyContainsUnverified 验证
+// 目标机 health 端点探测失败（这里用 nodeTransport 直接返回传输层 error 模拟隧道不通）
+// 时，预检不应把它当成阻断项——目标机可达性已经由 checkout 探测独立覆盖，version
+// 端点本身探测失败不代表真的不兼容；预检整体仍应正常 200 返回，只在 ready 里追加
+// agent_version_unverified 知会用户自行确认。
+func TestTransferPreflight_AgentVersionHealthUnreachable_ReadyContainsUnverified(t *testing.T) {
+	app := newTestAppForPackage(t)
+	srv := newHTTPServerForPackage(t, app)
+	setTransferRemoteRunner(t, dirAbsentRunner)
+
+	const hostID = "host-dev-agentver-unreachable"
+	// table 里没有 hostID 这一条目：testNodeTransport.Do 会返回 nodetransport.ErrHostUnreachable，
+	// 模拟隧道不通/版本探测请求失败。
+	app.nodeTransport = testNodeTransport{table: map[string]string{}}
+
+	dir := initTransferTestRepo(t)
+	project := addTransferTestProject(t, srv, dir)
+	_, err := app.remoteStore.AddHost(model.Host{ID: hostID, Name: "Dev Machine", DevMachineMode: true})
+	require.NoError(t, err)
+
+	reqBody := `{"host_id": "` + hostID + `"}`
+	resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer/preflight", "application/json", strings.NewReader(reqBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "版本核对失败不应影响预检整体返回 200")
+
+	var result transferPreflightResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+
+	var blockerCodes, readyCodes []string
+	for _, b := range result.Blockers {
+		blockerCodes = append(blockerCodes, b.Code)
+	}
+	for _, r := range result.Ready {
+		readyCodes = append(readyCodes, r.Code)
+	}
+	assert.NotContains(t, blockerCodes, "agent_version_mismatch", "无法核对时不应误判为主版本不一致，实际 blockers=%v", blockerCodes)
+	assert.Contains(t, readyCodes, "agent_version_unverified", "无法核对目标机版本时应提示 agent_version_unverified，实际 ready=%v", readyCodes)
 }

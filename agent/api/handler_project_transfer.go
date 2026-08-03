@@ -23,11 +23,13 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/gitinfo"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/pipeline"
 	"github.com/xsxdot/super-dev/agent/process"
 )
@@ -192,6 +194,16 @@ func (a *App) transferPreflight(w http.ResponseWriter, r *http.Request) {
 			Code:   "remote_url_mismatch",
 			Detail: fmt.Sprintf("目标目录已存在但不是本机仓库的同源检出（目标远端=%q，本机远端=%q）", stripURLCredentials(remoteProbe.RemoteURL), stripURLCredentials(local.RemoteURL)),
 		})
+	}
+
+	// 目标机 agent 版本核对（Task 13）：register/mcp-setup/日志流协议按主版本号
+	// 保证兼容，主版本跨越可能直接破坏这条通路，因此单独判定，不与 checkout 探测
+	// 结果混在一起——checkout 探测的是"这个目录是不是同源仓库"，与"这台机器的
+	// agent 是否兼容"是两个独立问题。
+	if versionBlocker, versionReady := a.checkAgentVersionCompat(ctx, host.ID); versionBlocker != nil {
+		blockers = append(blockers, *versionBlocker)
+	} else if versionReady != nil {
+		ready = append(ready, *versionReady)
 	}
 
 	// 只打一条摘要日志（数量 + host），不逐项打——预检结果本身已经通过 HTTP 响应体
@@ -572,4 +584,109 @@ func (a *App) buildTransferRemoteRunner(target pipeline.Target) gitinfo.Runner {
 		}
 		return stdout, 0, runErr
 	}
+}
+
+// checkAgentVersionCompat 核对目标机 agent 与本机 agent 的主版本号是否一致
+// （Task 13：agent_version_mismatch）。经 nodetransport Do 直达目标机
+// /api/security/health——与 register/mcp_setup 复用同一条短 HTTP 请求通路
+// （见文件顶部 project_transfer_engine.go 的说明：这类请求 30s 内应有响应，
+// 不需要 /ws/exec 的长命令 Runner），resolveTransferNodeDo 优先走测试注入
+// seam，生产路径回落 a.nodeTransport.Do。
+//
+// 参数：
+//   - ctx: 复用预检请求已有的超时 ctx，不额外叠加超时——版本核对与本机/目标机
+//     git 探测共享同一个"预检整体不能太慢"的时间预算，慢/连不通时应尽快降级
+//     为"无法核对"而不是单独拖长整个预检响应
+//   - hostID: 已确认开启 DevMachineMode 的目标 host ID
+//
+// 返回：
+//   - blocker 非 nil：主版本不一致，调用方应把它并入 blockers（阻断转移）
+//   - ready 非 nil：无法核对（网络失败/非 2xx/响应体无法解析/版本号无法解析），
+//     调用方应把它并入 ready 作为知会项，不阻断转移
+//   - 两者都为 nil：主版本一致，安静地不追加任何检查项（避免"一切正常"时
+//     ready 列表被无意义的确认项刷屏）
+//
+// 注意：
+//   - 为什么 major 不一致才阻断：register/mcp-setup/日志流协议按主版本号提供
+//     兼容性保证，minor/patch 差异通常向后兼容；用完整版本号做相等比较会把
+//     正常的滚动升级（如本机 2.4.1、目标机 2.3.0）误判成不兼容，逼用户在
+//     日常场景里反复面对无意义的阻断。
+//   - 为什么核对失败只提示、不阻断：目标机的整体可达性已经由 checkout 探测
+//     （gitinfo.InspectRemote）独立覆盖；version 端点这一附加信号本身探测
+//     失败（隧道抖动/字段缺失/版本号格式异常）不代表目标机真的不兼容，贸然
+//     把它升级成 blocker 会让一个其它信号全绿的转移被误伤，因此降级为
+//     ready 里的知会项，把最终判断权交还给人工。
+func (a *App) checkAgentVersionCompat(ctx context.Context, hostID string) (blocker *transferCheckItem, ready *transferCheckItem) {
+	unverified := func(reason string) *transferCheckItem {
+		return &transferCheckItem{
+			Code:   "agent_version_unverified",
+			Detail: fmt.Sprintf("无法核对目标机 agent 版本（%s），请自行确认兼容性", reason),
+		}
+	}
+
+	resp, err := a.resolveTransferNodeDo()(ctx, hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   nodetransport.SecurityHealthPath,
+	})
+	if err != nil {
+		log.Printf("[SuperDev] transfer preflight: 目标机 agent 版本核对请求失败 host=%s err=%v", hostID, err)
+		return nil, unverified("请求失败")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		log.Printf("[SuperDev] transfer preflight: 目标机 agent 版本核对返回非 2xx host=%s status=%d", hostID, resp.StatusCode)
+		return nil, unverified(fmt.Sprintf("health 返回状态码 %d", resp.StatusCode))
+	}
+
+	var body nodetransport.SecurityHealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		log.Printf("[SuperDev] transfer preflight: 目标机 agent health 响应解析失败 host=%s err=%v", hostID, err)
+		return nil, unverified("响应格式异常")
+	}
+
+	remoteMajor, ok := parseMajorVersion(body.Version)
+	if !ok {
+		log.Printf("[SuperDev] transfer preflight: 目标机 agent 版本号无法解析 host=%s raw=%q", hostID, body.Version)
+		return nil, unverified(fmt.Sprintf("版本号 %q 无法解析", body.Version))
+	}
+	localMajor, ok := parseMajorVersion(agentAPIVersion)
+	if !ok {
+		// 本机版本号由构建流程写入 buildinfo.Version，理论上不该出现异常格式；
+		// 即便如此也不能直接 panic 或误报兼容，同样降级为知会项。
+		log.Printf("[SuperDev] transfer preflight: 本机 agent 版本号无法解析 raw=%q", agentAPIVersion)
+		return nil, unverified(fmt.Sprintf("本机版本号 %q 无法解析", agentAPIVersion))
+	}
+
+	if remoteMajor != localMajor {
+		return &transferCheckItem{
+			Code:   "agent_version_mismatch",
+			Detail: fmt.Sprintf("目标机 agent 版本 %s 与本机 %s 主版本不一致，转移通路可能不兼容", body.Version, agentAPIVersion),
+		}, nil
+	}
+	log.Printf("[SuperDev] transfer preflight: 目标机 agent 版本核对通过 host=%s remote=%s local=%s major=%d", hostID, body.Version, agentAPIVersion, localMajor)
+	return nil, nil
+}
+
+// parseMajorVersion 从形如 "v2.3.1" / "2.3.1" / "2" 的版本号中解析出主版本号
+// （第一个 "." 之前的前导整数，容忍开头的 "v"/"V"）。
+//
+// 只要求"前导整数"这一最基本形状，不做完整 semver 校验——这是一次尽力而为
+// 的兼容性核对，过严的格式校验只会把本可比较的版本号误判成"无法解析"，
+// 反而扩大 agent_version_unverified 的命中面，与"核对失败不阻断"的初衷相悖。
+func parseMajorVersion(v string) (int, bool) {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "V")
+	if v == "" {
+		return 0, false
+	}
+	major := v
+	if idx := strings.IndexByte(v, '.'); idx >= 0 {
+		major = v[:idx]
+	}
+	n, err := strconv.Atoi(major)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
