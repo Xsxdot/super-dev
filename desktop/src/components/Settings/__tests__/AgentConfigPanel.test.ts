@@ -814,6 +814,7 @@ describe('AgentConfigPanel', () => {
 
       const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({
         id: 'req-1',
+        pairing_code: 'K7QM4X',
         state: 'pending',
         expires_at: '2099-01-01T00:00:00Z',
       })
@@ -847,9 +848,23 @@ describe('AgentConfigPanel', () => {
       expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).toContain('active')
     })
 
+    // 配对码必须在「等待对方批准」态可见：目标机的审批列表里可能同时躺着多条
+    // 自报同名的接入请求，发起人要能把码念给批准人核对。
+    it('shows the pairing code while waiting for approval', async () => {
+      const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="agent-adopt-pairing-code"]').text()).toContain('K7QM4X')
+      expect(wrapper.find('[data-test="agent-adopt-pairing-hint"]').exists()).toBe(true)
+    })
+
     it('shows a clear, non-silent failure when the adoption request is rejected', async () => {
       const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
-      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
       vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'rejected' })
 
       await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
@@ -862,7 +877,7 @@ describe('AgentConfigPanel', () => {
 
     it('shows a clear, non-silent failure when the adoption request expires', async () => {
       const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
-      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
       vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'expired' })
 
       await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
@@ -875,7 +890,7 @@ describe('AgentConfigPanel', () => {
     it('stops polling when the user cancels adoption (termination condition)', async () => {
       vi.useFakeTimers()
       const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
-      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
       const getAdoptionStatus = vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
 
       await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
@@ -893,7 +908,7 @@ describe('AgentConfigPanel', () => {
     it('stops polling when the panel is closed (termination condition)', async () => {
       vi.useFakeTimers()
       const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
-      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
       const getAdoptionStatus = vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
 
       await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
@@ -947,7 +962,7 @@ describe('AgentConfigPanel', () => {
       await wrapper.find('[data-test="agent-install-push"]').trigger('click')
       await flushPromises()
 
-      const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
       vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
 
       await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
@@ -977,7 +992,7 @@ describe('AgentConfigPanel', () => {
       await wrapper.find('[data-test="agent-install-push"]').trigger('click')
       await flushPromises()
 
-      const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
       vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
 
       await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')

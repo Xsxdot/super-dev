@@ -44,10 +44,30 @@ type AuditStore interface {
 	List(context.Context, AuditFilter) ([]AuditEvent, error)
 }
 
+const (
+	// defaultApprovalRetention 是 approvals JSON 文件保留的审批记录条数预算。
+	//
+	// 为什么必须有：POST /api/security/adoption-requests 在 bypass 白名单里
+	// （调用方无需任何凭据），每次成功调用都会经 FindOrCreatePending 往这个文件
+	// 追加一条永久记录。在本上限出现之前，本 Store 从不删除任何记录——只翻转
+	// Status——因此任何能连到 agent 端口的人都能让它无界增长（磁盘耗尽 + 每次
+	// 审批操作 O(n) 退化）。对照物是 AuditFileStore 的 trimAuditEvents。
+	defaultApprovalRetention = 1000
+	// approvalTerminalRetentionFloor 是终态审批尾巴的最低保留条数。
+	//
+	// 为什么单独设下限：/ws/operation-approvals 的 decided 段要展示「最近 24h、
+	// 最多 approvalsDecidedLimit(50) 条」已裁决记录。若「承载中」记录很多，
+	// 预算减去它们之后剩给终态尾巴的名额可能小于 50，WS 视图就会丢掉它本该
+	// 显示的行。这个下限（远大于 50）保证这种情况不会发生。
+	approvalTerminalRetentionFloor = 200
+)
+
 // ApprovalFileStore 将审批状态保存到本机 JSON 文件。
 type ApprovalFileStore struct {
 	path string
-	mu   sync.Mutex
+	// limit 是保留的审批记录条数预算，见 trimApprovals。
+	limit int
+	mu    sync.Mutex
 }
 
 // AuditFileStore 将审计事件保存到本机 JSON 文件。
@@ -72,8 +92,13 @@ type auditState struct {
 //
 // 返回：
 //   - 基于本机文件的审批 Store
+//
+// 注意：
+//   - 保留上限固定为 defaultApprovalRetention；仍在承载中的审批（pending、
+//     以及已批准但一次性 token 尚未被消费的）永不参与裁剪，因此极端情况下
+//     总数可暂时超过该预算，语义同 NewAuditFileStore 对 prepared 事件的处理
 func NewApprovalFileStore(path string) *ApprovalFileStore {
-	return &ApprovalFileStore{path: path}
+	return &ApprovalFileStore{path: path, limit: defaultApprovalRetention}
 }
 
 // NewAuditFileStore 创建审计 JSON Store。
@@ -155,6 +180,9 @@ func (s *ApprovalFileStore) FindOrCreatePending(ctx context.Context, plan Plan, 
 		ExpiresAt:      now.Add(DefaultApprovalTTL),
 	}
 	st.Approvals = append(st.Approvals, approval)
+	// 追加是本 Store 唯一的增长入口（其余方法都只原地翻状态），所以保留上限只在
+	// 这里施加一次，形态对齐 AuditFileStore.Append 里的 trimAuditEvents。
+	st.Approvals = trimApprovals(st.Approvals, s.limit, now)
 	if err := s.save(st); err != nil {
 		return Approval{}, err
 	}
@@ -680,6 +708,79 @@ func trimAuditEvents(events []AuditEvent, limit int) []AuditEvent {
 		trimmable = trimmable[len(trimmable)-remaining:]
 	}
 	kept := append(pending, trimmable...)
+	sort.SliceStable(kept, func(i, j int) bool {
+		return kept[i].CreatedAt.Before(kept[j].CreatedAt)
+	})
+	return kept
+}
+
+// approvalIsLoadBearing 判断一条审批是否仍在「承载中」——即它还可能被裁决或被
+// 兑现，因此绝不允许被保留上限淘汰。
+//
+// 承载中的两类：
+//   - pending：还等着被裁决。淘汰它等于让所有控制面的待审批列表凭空少一行，
+//     发起方永远等不到结果，且没有任何痕迹解释它去哪了。
+//   - approved：一次性 token 已发出但尚未被 ConsumeToken 消费（消费后状态会翻成
+//     used）。淘汰它等于静默作废一次已经被人批准、执行方随时可能拿 token 回来
+//     兑现的操作——in-flight 的授权操作会以「token 无效」告败。
+//
+// 两类都附带同一条过期判定，口径与 expireApprovals 完全一致：一旦过了 ExpiresAt，
+// 它既不能再被裁决（ensureApprovalDecisionAllowed 返回 ErrApprovalExpired）也不能
+// 再被兑现（ConsumeToken 的过期分支），就不再承载任何东西，可以进可淘汰集合。
+func approvalIsLoadBearing(approval Approval, now time.Time) bool {
+	if approval.Status != ApprovalPending && approval.Status != ApprovalApproved {
+		return false
+	}
+	return approval.ExpiresAt.IsZero() || !now.After(approval.ExpiresAt)
+}
+
+// trimApprovals 把审批记录裁剪到保留预算，只淘汰真正的终态尾巴。
+//
+// 参数：
+//   - approvals: 当前全部审批记录
+//   - limit: 保留预算；非正数表示不裁剪
+//   - now: 判定过期的当前时间
+//
+// 返回：
+//   - 裁剪后的记录（按 CreatedAt 升序，与入库顺序一致）
+//
+// 保留策略：
+//   - approvalIsLoadBearing 为真的记录**无条件全部保留**，不计入淘汰候选
+//   - 其余（rejected / used / expired，以及已过 ExpiresAt 的 pending/approved）
+//     按 UpdatedAt 保留最近的若干条；名额 = max(limit-承载中条数,
+//     min(limit, approvalTerminalRetentionFloor))，下限保证 WS decided 段
+//     （最近 24h、最多 50 条，按 UpdatedAt 降序）要显示的行必定还在文件里
+func trimApprovals(approvals []Approval, limit int, now time.Time) []Approval {
+	if limit <= 0 || len(approvals) <= limit {
+		return approvals
+	}
+
+	sorted := append([]Approval(nil), approvals...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].UpdatedAt.Before(sorted[j].UpdatedAt)
+	})
+	loadBearing := make([]Approval, 0)
+	trimmable := make([]Approval, 0, len(sorted))
+	for _, approval := range sorted {
+		if approvalIsLoadBearing(approval, now) {
+			loadBearing = append(loadBearing, approval)
+			continue
+		}
+		trimmable = append(trimmable, approval)
+	}
+
+	floor := approvalTerminalRetentionFloor
+	if floor > limit {
+		floor = limit
+	}
+	remaining := limit - len(loadBearing)
+	if remaining < floor {
+		remaining = floor
+	}
+	if len(trimmable) > remaining {
+		trimmable = trimmable[len(trimmable)-remaining:]
+	}
+	kept := append(loadBearing, trimmable...)
 	sort.SliceStable(kept, func(i, j int) bool {
 		return kept[i].CreatedAt.Before(kept[j].CreatedAt)
 	})

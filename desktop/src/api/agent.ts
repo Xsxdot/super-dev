@@ -923,6 +923,20 @@ export interface OperationTarget {
   template_digest?: string
   pipeline_id?: string
   artifact_version?: string
+  /**
+   * 服务器侧推导的请求来源（目前只有 agent.adopt 使用）。
+   *
+   * 注意：这是审批行上唯一不可被请求方伪造的身份信息（agent 从连接对端地址取，
+   * 不读任何请求头），展示时必须与「接入方自报的名字」明确区分。
+   */
+  request_origin?: string
+  /**
+   * 由请求 ID 派生的短配对码（目前只有 agent.adopt 使用），供发起方与批准方
+   * 口头核对是不是同一次请求。
+   *
+   * 注意：它不是秘密、也不是鉴权因子，只是匹配辅助——绝不能拿它当准入校验。
+   */
+  pairing_code?: string
 }
 
 export interface OperationCheck {
@@ -1689,6 +1703,8 @@ export type AdoptionState = 'pending' | 'approved' | 'rejected' | 'expired'
 /** AdoptionCreateResponse 是 POST .../adoption-requests 的成功响应。 */
 export interface AdoptionCreateResponse {
   id: string
+  /** 目标机派生的配对码，需展示给发起纳管的人，让他念给按下批准的人核对。 */
+  pairing_code: string
   state: AdoptionState
   expires_at: string
 }

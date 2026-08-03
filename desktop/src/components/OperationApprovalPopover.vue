@@ -4,6 +4,8 @@
 职责：
   - 展示 pending operation approvals 的紧凑列表
   - 提供批准、拒绝、刷新和查看全部入口
+  - 对带 request_origin/pairing_code 的审批（纳管请求）同样展示服务器侧推导的
+    来源与配对码——本浮层也能直接批准，防伪要素不能只在设置页出现
 
 边界：
   - 不计算审批策略
@@ -83,6 +85,17 @@ async function approveApproval(approval: OperationApproval) {
             <span>{{ t('settings.approvals.risk') }} {{ approval.plan.risk_level }}</span>
           </div>
           <p>{{ targetSummary(approval) }}</p>
+          <!--
+            浮层同样能直接批准，所以纳管审批的防伪要素（服务器侧推导的来源 +
+            配对码）必须在这里也出现——只在设置页展示等于给「从浮层批错行」
+            留了后门。
+          -->
+          <p v-if="approval.plan.target.request_origin" class="approval-row-origin" :data-test="`approval-popover-origin-${approval.id}`">
+            {{ t('settings.approvals.requestOrigin', { origin: approval.plan.target.request_origin }) }}
+          </p>
+          <p v-if="approval.plan.target.pairing_code" class="approval-row-pairing" :data-test="`approval-popover-pairing-code-${approval.id}`">
+            {{ t('settings.approvals.pairingCode', { code: approval.plan.target.pairing_code }) }}
+          </p>
           <ul v-if="shortItems(approval.plan.reasons).length || shortItems(approval.plan.expected_effects).length">
             <li v-for="reason in shortItems(approval.plan.reasons)" :key="`reason-${approval.id}-${reason}`">
               {{ reason }}
@@ -259,6 +272,12 @@ async function approveApproval(approval: OperationApproval) {
   display: grid;
   gap: 5px;
   min-width: 0;
+}
+.approval-row-main p.approval-row-pairing {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
 }
 
 .approval-row-title {

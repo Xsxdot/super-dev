@@ -10,6 +10,8 @@ AgentConfigPanel：统一管理单台 Host Agent 的监听、安全、安装、�
     （显式确认后果）之间选择，纳管请求直连目标机地址，不经本机 agent 转发；
     目标地址优先取 409 响应里安装守卫探测到的权威地址，没有时才退化为本机
     已知的 Host IP 信息拼标准端口做尽力而为的猜测（见 adoptionTargetURL）
+  - 「等待对方批准」态展示目标机返回的配对码，供发起人念给批准人核对——
+    目标机审批列表里可能同时存在多条自报同名的接入请求
 
 边界：
   - 不创建或编辑 Host 身份信息
@@ -106,6 +108,11 @@ const forceReinstallConfirmed = ref(false)
 // （checkConnectedAgent 等），不重复造一套连接确认 UI。
 const adoptPhase = ref<'idle' | 'requesting' | 'waiting' | 'exchanging'>('idle')
 const adoptFailureMessage = ref('')
+// adoptPairingCode 是目标机为本次接入请求派生的配对码：必须展示给发起纳管的人，
+// 让他念给对方，对方在审批行上核对同一个码后再批准。
+// 它不是秘密（由公开的请求 ID 派生）、也不是鉴权因子，只是防止「同名请求鱼目
+// 混珠、批错行」的匹配辅助——真正的准入始终是对方那次人工审批。
+const adoptPairingCode = ref('')
 const ADOPTION_POLL_INTERVAL_MS = 2000
 // 与 requestHeaders() 里桌面端上报给本机 agent 的展示名保持一致的语义：
 // 纳管请求同样是「这台桌面在向目标机自报身份」，用同一个可读名称。
@@ -715,10 +722,12 @@ async function startAdoption() {
   }
   const runID = panelRunID
   adoptFailureMessage.value = ''
+  adoptPairingCode.value = ''
   adoptPhase.value = 'requesting'
   try {
     const created = await agentsStore.requestAdoption(adoptionTargetURL.value, ADOPTION_REQUESTER_NAME)
     if (!isPanelRunActive(runID)) return
+    adoptPairingCode.value = created.pairing_code ?? ''
     adoptPhase.value = 'waiting'
     await pollAdoptionStatus(agent.host_id, created.id, created.expires_at, runID)
   } catch (err) {
@@ -790,6 +799,7 @@ async function completeAdoption(hostId: string, requestId: string, adoptionToken
     existingAgentDetected.value = false
     adoptPhase.value = 'idle'
     adoptFailureMessage.value = ''
+    adoptPairingCode.value = ''
     installStartStatus.value = 'success'
     installStartMessage.value = t('settings.agents.installStarted')
     installSecurityStatus.value = 'running'
@@ -822,6 +832,7 @@ function cancelAdoption() {
   invalidatePanelRun()
   adoptPhase.value = 'idle'
   adoptFailureMessage.value = ''
+  adoptPairingCode.value = ''
 }
 
 async function probeAll() {
@@ -1028,6 +1039,12 @@ onBeforeUnmount(() => {
                     <p class="step-note" data-test="agent-adopt-waiting">
                       {{ adoptPhase === 'exchanging' ? t('agentInstall.adoptExchanging') : adoptPhase === 'requesting' ? t('agentInstall.adoptRequesting') : t('agentInstall.adoptWaiting') }}
                     </p>
+                    <template v-if="adoptPairingCode">
+                      <p class="adopt-pairing-code" data-test="agent-adopt-pairing-code">
+                        {{ t('agentInstall.adoptPairingCode', { code: adoptPairingCode }) }}
+                      </p>
+                      <p class="step-note" data-test="agent-adopt-pairing-hint">{{ t('agentInstall.adoptPairingCodeHint') }}</p>
+                    </template>
                     <div class="step-actions step-actions-left">
                       <button class="settings-btn settings-btn-secondary" type="button" data-test="agent-adopt-cancel" @click="cancelAdoption">
                         {{ t('agentInstall.adoptCancel') }}
@@ -1290,6 +1307,14 @@ onBeforeUnmount(() => {
   min-height: 120px;
   font-family: var(--font-mono, monospace);
   resize: vertical;
+}
+.adopt-pairing-code {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
 }
 .force-reinstall-block {
   display: grid;

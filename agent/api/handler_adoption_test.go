@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/security"
 )
 
 // adoptionClock 是 handler_adoption_test.go 专用的可控时钟，注入
@@ -287,4 +289,96 @@ func TestAdoptionAPI_BypassPathsRemainOpen(t *testing.T) {
 	exchangeRec := httptestDoWithHeader(t, app, http.MethodPost, "/api/security/adoption-requests/"+requestID+"/exchange",
 		bytes.NewBufferString(`{"adoption_token":"garbage"}`), map[string]string{"Authorization": ""})
 	assert.NotContains(t, exchangeRec.Body.String(), "agent token required")
+}
+
+// TestAdoptionAPI_RejectsOversizedBody 覆盖 Finding 1(1)：两个匿名 adoption
+// 端点的请求体都必须过 http.MaxBytesReader；否则任何能连到 agent 端口的人都能
+// 用一个超大 body 把服务端内存/磁盘拖下水。
+func TestAdoptionAPI_RejectsOversizedBody(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	huge := strings.Repeat("A", maxAdoptionRequestBytes+1024)
+
+	createRec := httptestDoWithHeader(t, app, http.MethodPost, "/api/security/adoption-requests",
+		bytes.NewBufferString(`{"name":"`+huge+`"}`), map[string]string{"Authorization": ""})
+	assert.Equal(t, http.StatusBadRequest, createRec.Code, createRec.Body.String())
+
+	exchangeRec := httptestDoWithHeader(t, app, http.MethodPost, "/api/security/adoption-requests/whatever/exchange",
+		bytes.NewBufferString(`{"adoption_token":"`+huge+`"}`), map[string]string{"Authorization": ""})
+	assert.Equal(t, http.StatusBadRequest, exchangeRec.Code, exchangeRec.Body.String())
+}
+
+// TestAdoptionAPI_PendingApprovalCapRejectsFlood 覆盖 Finding 1(3)：
+// AdoptionManager 的 30s 窗口限流拦不住「低频但持续」的刷单，落盘的
+// pending agent.adopt 审批总数必须另有硬上限。
+func TestAdoptionAPI_PendingApprovalCapRejectsFlood(t *testing.T) {
+	clock := &adoptionClock{now: time.Now().UTC()}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), AdoptionNowOverride: clock.Now})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	post := func() int {
+		rec := httptestDoWithHeader(t, app, http.MethodPost, "/api/security/adoption-requests",
+			bytes.NewBufferString(`{"name":"CP-Flood"}`), map[string]string{"Authorization": ""})
+		return rec.Code
+	}
+
+	// 每批 3 条打满窗口限流，随后推进时钟越过 30s 窗口——窗口限流放行，
+	// 但落盘的 pending 审批一直累积。
+	accepted := 0
+	for batch := 0; batch < 4; batch++ {
+		for i := 0; i < 3; i++ {
+			if post() == http.StatusCreated {
+				accepted++
+			}
+		}
+		clock.Advance(security.AdoptionRateLimitWindow + time.Second)
+	}
+
+	assert.Equal(t, maxPendingAdoptApprovals, accepted,
+		"跨窗口持续刷单时，能落盘的 pending agent.adopt 审批数必须被硬上限卡住")
+	assert.Equal(t, http.StatusTooManyRequests, post())
+}
+
+// TestAdoptionAPI_ApprovalCarriesServerDerivedOrigin 覆盖 Finding 2：审批行上
+// 必须带服务器侧推导的来源和配对码，自报名只能是次要上下文——否则攻击者把
+// 自报名填成真实桌面用的那个字符串，操作员无从分辨该批哪一行。
+func TestAdoptionAPI_ApprovalCarriesServerDerivedOrigin(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	// 攻击者自报成真实桌面用的展示名。
+	created := createAdoptionRequestForTest(t, app, "SuperDev Desktop")
+	requestID := created["id"].(string)
+	pairingCode, _ := created["pairing_code"].(string)
+	require.Len(t, pairingCode, security.AdoptionPairingCodeLength, "Create 响应必须把配对码回给接入方")
+	assert.Equal(t, security.PairingCode(requestID), pairingCode)
+
+	approval := findPendingAdoptApproval(t, app, requestID)
+	// httptest.NewRequest 的默认 RemoteAddr 是 192.0.2.1:1234。
+	assert.Equal(t, "192.0.2.1", approval.Plan.Target.RequestOrigin, "来源必须来自连接对端地址")
+	assert.Equal(t, pairingCode, approval.Plan.Target.PairingCode)
+	assert.Equal(t, "192.0.2.1", approval.RequestedBy, "requested_by 必须是服务器侧事实，不是自报名")
+	assert.Equal(t, "SuperDev Desktop", approval.RequesterLabel, "自报名保留为上下文")
+	assert.Contains(t, approval.Plan.TargetSummary, "192.0.2.1")
+	assert.Contains(t, approval.Plan.TargetSummary, pairingCode)
+	assert.Contains(t, approval.Plan.TargetSummary, "self-reported", "自报名必须被显式标注为自报")
+}
+
+// TestAdoptionAPI_ApprovalClampsSelfReportedName 验证攻击者可控的超长自报名
+// 不会被原样带进落盘的审批记录。
+func TestAdoptionAPI_ApprovalClampsSelfReportedName(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	created := createAdoptionRequestForTest(t, app, strings.Repeat("X", 3000))
+	requestID := created["id"].(string)
+
+	approval := findPendingAdoptApproval(t, app, requestID)
+	assert.LessOrEqual(t, len([]rune(approval.RequesterLabel)), security.AdoptionNameMaxRunes)
+	assert.NotContains(t, approval.Plan.TargetSummary, strings.Repeat("X", security.AdoptionNameMaxRunes+1))
 }

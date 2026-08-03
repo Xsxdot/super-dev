@@ -59,15 +59,21 @@ export interface ConflictNotice {
 //   - kind: operation 类型
 //   - target_summary: 用户可识别的目标摘要
 //   - project_id: 关联项目 ID，存在时可开启项目级免审窗口
+//   - request_origin: 服务器侧推导的请求来源（目前只有 agent.adopt 有值）
+//   - pairing_code: 由请求 ID 派生的配对码（目前只有 agent.adopt 有值）
 //   - approved: 审批已通过但续跑尚未成功
 //
 // 注意：
 //   - notice 不包含 approval token；approved 只表示用户决策已成功，原操作可能仍需重试
+//   - request_origin / pairing_code 是纳管审批的防伪要素：自报名可以被伪造成
+//     真实桌面用的那个字符串，用户必须靠这两项才能确认弹出的是不是自己发起的那条
 export interface OperationApprovalNotice {
   approval_id: string
   kind: string
   target_summary: string
   project_id?: string
+  request_origin?: string
+  pairing_code?: string
   approved?: boolean
 }
 
@@ -103,6 +109,8 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
       kind: approval.plan.kind,
       target_summary: approval.plan.target_summary || approval.plan.target.deployment_id || approval.plan.target.template_path || '',
       project_id: approval.plan.target.project_id,
+      request_origin: approval.plan.target.request_origin,
+      pairing_code: approval.plan.target.pairing_code,
     }
   }
 

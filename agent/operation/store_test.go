@@ -11,7 +11,11 @@ package operation
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -206,4 +210,79 @@ func storePlan(kind string, fp string) Plan {
 		RiskLevel:   RiskHigh,
 		Fingerprint: fp,
 	}
+}
+
+// TestTrimApprovalsKeepsPendingAndUnconsumedApproved 是 Finding 1 保留谓词的
+// 核心断言：一次能淘汰终态记录的裁剪，绝不能顺手带走仍在承载中的两类记录——
+// 待裁决的 pending，以及已批准但一次性 token 尚未被消费的 approved。
+func TestTrimApprovalsKeepsPendingAndUnconsumedApproved(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	future := now.Add(10 * time.Minute)
+
+	approvals := []Approval{
+		{ID: "pending-live", Status: ApprovalPending, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour), ExpiresAt: future},
+		{ID: "approved-unconsumed", Status: ApprovalApproved, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour), ExpiresAt: future},
+	}
+	// 6 条终态尾巴：预算 3，其中最旧的必须被淘汰。
+	for i := 0; i < 6; i++ {
+		stamp := now.Add(time.Duration(i) * time.Minute)
+		approvals = append(approvals, Approval{
+			ID: "terminal-" + strconv.Itoa(i), Status: ApprovalUsed,
+			CreatedAt: stamp, UpdatedAt: stamp, ExpiresAt: future,
+		})
+	}
+
+	kept := trimApprovals(approvals, 3, now)
+
+	ids := map[string]bool{}
+	for _, approval := range kept {
+		ids[approval.ID] = true
+	}
+	assert.True(t, ids["pending-live"], "pending 绝不能被保留上限淘汰")
+	assert.True(t, ids["approved-unconsumed"], "已批准但 token 未消费的单绝不能被淘汰")
+	assert.False(t, ids["terminal-0"], "最旧的终态记录应当被淘汰")
+	assert.True(t, ids["terminal-5"], "最新的终态记录必须保留")
+	assert.Len(t, kept, 5, "2 条承载中 + 名额内的 3 条终态尾巴")
+}
+
+// TestTrimApprovalsDropsExpiredPendingAndApproved 锁定另一半语义：过了 ExpiresAt
+// 的 pending/approved 既不能再被裁决也不能再被兑现，不算承载中，允许被淘汰。
+func TestTrimApprovalsDropsExpiredPendingAndApproved(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Minute)
+
+	approvals := []Approval{
+		{ID: "pending-expired", Status: ApprovalPending, CreatedAt: past, UpdatedAt: past, ExpiresAt: past},
+		{ID: "approved-expired", Status: ApprovalApproved, CreatedAt: past, UpdatedAt: past, ExpiresAt: past},
+		{ID: "terminal-new", Status: ApprovalRejected, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Hour)},
+	}
+
+	kept := trimApprovals(approvals, 1, now)
+	require.Len(t, kept, 1)
+	assert.Equal(t, "terminal-new", kept[0].ID)
+}
+
+// TestApprovalStoreBoundsGrowthOnRepeatedCreate 覆盖 Finding 1 的真实攻击面：
+// 匿名调用方反复触发 FindOrCreatePending（每次一个新 fingerprint）时，落盘记录
+// 必须被保留上限约束住，而不是无界增长。
+func TestApprovalStoreBoundsGrowthOnRepeatedCreate(t *testing.T) {
+	path := t.TempDir() + "/operation-approvals.json"
+	// 直接构造以注入小预算：默认 defaultApprovalRetention=1000，测试里没必要真的写一千条。
+	store := &ApprovalFileStore{path: path, limit: 4}
+
+	for i := 0; i < 40; i++ {
+		plan := storePlan("runtime.restart", "fp-"+strconv.Itoa(i))
+		approval, err := store.FindOrCreatePending(context.Background(), plan, "anon", "anon")
+		require.NoError(t, err)
+		// 立刻拒绝，把它变成终态尾巴，模拟「审批被处理掉之后记录仍永久堆积」。
+		_, err = store.Reject(context.Background(), approval.ID, "user", "")
+		require.NoError(t, err)
+	}
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var st approvalState
+	require.NoError(t, json.Unmarshal(raw, &st))
+	assert.LessOrEqual(t, len(st.Approvals), 5, "保留上限必须约束住落盘记录数（预算 4 + 当次新建的 1 条）")
+	assert.NotEmpty(t, st.Approvals)
 }

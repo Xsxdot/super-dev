@@ -59,6 +59,17 @@ async function rejectNotice() {
       </header>
       <section class="notice-section notice-body" data-test="operation-approval-section-body">
         <p>{{ store.notice.target_summary || store.notice.kind }}</p>
+        <!--
+          纳管审批的防伪要素：来源由 agent 从连接对端地址推导（不可伪造），配对码
+          由请求 ID 派生。自报名可以被填成真实桌面用的字符串，用户只能靠这两项
+          确认「弹出来的是不是我刚发起的那一条」。
+        -->
+        <p v-if="store.notice.request_origin" class="notice-origin" data-test="operation-approval-origin">
+          {{ t('settings.approvals.requestOrigin', { origin: store.notice.request_origin }) }}
+        </p>
+        <p v-if="store.notice.pairing_code" class="notice-pairing" data-test="operation-approval-pairing-code">
+          {{ t('settings.approvals.pairingCode', { code: store.notice.pairing_code }) }}
+        </p>
         <p v-if="isConflict" class="notice-conflict" data-test="operation-approval-conflict">
           {{ store.conflictNotice!.decidedBy
             ? t('settings.approvals.decidedBy', { name: store.conflictNotice!.decidedBy })
@@ -228,6 +239,20 @@ async function rejectNotice() {
   margin: 0;
   color: var(--text-tertiary);
   font-size: 12px;
+  line-height: 1.4;
+}
+.notice-origin {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.notice-pairing {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   line-height: 1.4;
 }
 @media (max-width: 560px) {

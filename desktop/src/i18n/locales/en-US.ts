@@ -246,6 +246,9 @@ export default {
       decidedTitle: 'Recently Decided',
       decidedBy: 'Handled by {name}',
       decidedUnnamed: 'Already handled',
+      requestOrigin: 'From {origin}',
+      pairingCode: 'Pairing code {code}',
+      selfReportedName: 'Self-reported name {name} (untrusted)',
     },
     debugBrowser: {
       title: 'Debug browser',
@@ -1688,6 +1691,8 @@ export default {
     adoptExpired: 'The adoption request expired (over 10 minutes unresolved); you can send a new one.',
     adoptTokenLost: 'Could not claim the one-time credential (it may already have been claimed elsewhere). Please start adoption again.',
     adoptTargetUnknown: 'No reachable target address (a public IP, private IP, or SSH address is required); cannot start adoption.',
+    adoptPairingCode: 'Pairing code: {code}',
+    adoptPairingCodeHint: 'Read this code to the approver and have them match it on the approval row before approving — there may be more than one adoption request with the same name.',
     forceReinstall: 'Force reinstall',
     forceReinstallConfirm: 'I understand: force reinstall immediately stops the Agent process running under the other control plane and overwrites its install configuration; its existing credential will stop working. This cannot be undone.',
     forceReinstallWarning: 'Force reinstall immediately stops the Agent process currently running under the other control plane and overwrites the current install configuration; the credential held by the other control plane will stop working and cannot be recovered.',

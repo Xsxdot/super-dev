@@ -166,6 +166,18 @@ type Target struct {
 	PipelineID      string `json:"pipeline_id,omitempty"`
 	ArtifactVersion string `json:"artifact_version,omitempty"`
 	DebugSessionID  string `json:"debug_session_id,omitempty"`
+	// RequestOrigin 是服务器侧推导的请求来源（当前只有 agent.adopt 使用）。
+	//
+	// 为什么单列一个字段而不是塞进 TargetSummary：它是这条审批里唯一不可被
+	// 请求方伪造的事实（来自 net/http 的对端地址，不读任何请求头），前端必须
+	// 能把它和「接入方自报的名字」在视觉上区分开，否则操作员无从判断哪一行是
+	// 自己人发起的。
+	RequestOrigin string `json:"request_origin,omitempty"`
+	// PairingCode 是由请求 ID 确定性派生的短配对码（当前只有 agent.adopt 使用），
+	// 供发起方与批准方口头核对是不是同一次请求。
+	//
+	// 注意：它不是秘密、不是鉴权因子，只是匹配辅助（见 security.PairingCode）。
+	PairingCode string `json:"pairing_code,omitempty"`
 }
 
 // Check 描述预检中的一个可解释检查项。

@@ -2,6 +2,7 @@
 package security_test
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -286,4 +287,50 @@ func TestAdoptionManager_EvictsExpiredRecordsOnNextCreate(t *testing.T) {
 
 	_, _, err = mgr.Get(stale.ID)
 	require.ErrorIs(t, err, security.ErrAdoptionNotFound, "过期记录必须被清扫出内部 map，而不是无限期保留")
+}
+
+// TestAdoptionManager_ClampsSelfReportedName 覆盖 Finding 1(2)：自报名是匿名
+// bypass 端点上的攻击者可控输入，必须在唯一的创建入口就截断到
+// AdoptionNameMaxRunes，且不能因为截断多字节字符而产生半个 rune。
+func TestAdoptionManager_ClampsSelfReportedName(t *testing.T) {
+	store := newTestStore(t)
+	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{})
+
+	long := strings.Repeat("控", 5000)
+	req := mustTryCreate(t, mgr, long)
+
+	assert.Equal(t, security.AdoptionNameMaxRunes, len([]rune(req.Name)))
+	assert.Equal(t, strings.Repeat("控", security.AdoptionNameMaxRunes), req.Name)
+}
+
+// TestAdoptionManager_StripsControlCharsFromName 锁定日志注入防线：自报名会进
+// 一行式 [SuperDev] 日志，含换行的名字能伪造出看似独立的日志行。
+func TestAdoptionManager_StripsControlCharsFromName(t *testing.T) {
+	store := newTestStore(t)
+	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{})
+
+	req := mustTryCreate(t, mgr, "CP-A\n[SuperDev] security: 伪造的一行\r\t")
+
+	assert.NotContains(t, req.Name, "\n")
+	assert.NotContains(t, req.Name, "\r")
+	assert.NotContains(t, req.Name, "\t")
+	assert.Contains(t, req.Name, "CP-A")
+}
+
+// TestAdoptionManager_PairingCodeIsDeterministicAndBound 覆盖 Finding 2(2)：
+// 配对码必须由请求 ID 确定性派生（发起方与批准方各自算出同一个码），长度固定，
+// 且不同请求几乎不撞码。
+func TestAdoptionManager_PairingCodeIsDeterministicAndBound(t *testing.T) {
+	store := newTestStore(t)
+	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{})
+
+	first := mustTryCreate(t, mgr, "CP-A")
+	second := mustTryCreate(t, mgr, "CP-A")
+
+	require.Len(t, first.PairingCode, security.AdoptionPairingCodeLength)
+	assert.Equal(t, security.PairingCode(first.ID), first.PairingCode, "配对码必须可由请求 ID 重新推导")
+	assert.NotEqual(t, first.PairingCode, second.PairingCode, "同名的两条请求必须拿到不同的码")
+	for _, r := range first.PairingCode {
+		assert.NotContains(t, "IO01", string(r), "配对码字母表刻意排除口头易混字符")
+	}
 }

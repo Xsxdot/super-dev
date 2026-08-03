@@ -489,6 +489,37 @@ describe('operationApproval store', () => {
       expect(store.decided).toEqual([decidedApproval])
     })
 
+    // notice 是纳管审批弹到用户面前的唯一载体：服务器侧推导的来源与配对码必须
+    // 一路带到 notice 上，否则弹窗里只剩一个可被伪造的自报名，用户无从分辨。
+    it('carries the server-derived origin and pairing code into the notice', async () => {
+      const store = useOperationApprovalStore()
+      const adoptApproval = {
+        id: 'opa_adopt',
+        status: 'pending',
+        requested_by: '203.0.113.9',
+        requester_label: 'SuperDev Desktop',
+        plan: {
+          id: 'op_adopt',
+          kind: 'agent.adopt',
+          target: { request_origin: '203.0.113.9', pairing_code: 'K7QM4X' },
+          target_summary: 'adopt request from 203.0.113.9',
+          risk_level: 'high',
+          requires_approval: true,
+          denied: false,
+          fingerprint: 'req-1',
+        },
+      } as any
+
+      // 第一帧建立通知基线，第二帧才会把新出现的单认成「新审批」。
+      store.applySnapshot({ pending: [], decided: [] })
+      await flushMicrotasks()
+      store.applySnapshot({ pending: [adoptApproval], decided: [] })
+      await flushMicrotasks()
+
+      expect(store.notice?.request_origin).toBe('203.0.113.9')
+      expect(store.notice?.pairing_code).toBe('K7QM4X')
+    })
+
     it('replaces decided/pending wholesale on each snapshot instead of merging', () => {
       const store = useOperationApprovalStore()
       store.applySnapshot({ pending: [pendingApproval('opa_1')], decided: [{ id: 'opa_old', status: 'used' } as any] })

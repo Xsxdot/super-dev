@@ -634,7 +634,9 @@ func PlanPipelineRun(project model.Project, pipelineID, envName string, isRollba
 //
 // 参数：
 //   - requestID: security.AdoptionManager 生成的接入请求 ID
-//   - name: 接入方（新控制面）自报的展示名，空则显示为「控制面」
+//   - name: 接入方（新控制面）**自报**的展示名，空则显示为「控制面」
+//   - origin: 服务器侧推导的请求来源（调用方从 http.Request.RemoteAddr 取），空则显示为 unknown
+//   - pairingCode: 由 requestID 派生的配对码（security.PairingCode）
 //
 // 返回：
 //   - 恒为 RiskHigh 且必须审批的 agent.adopt plan
@@ -645,8 +647,12 @@ func PlanPipelineRun(project model.Project, pipelineID, envName string, isRollba
 //     纳管场景下 approve/reject 是通过 approval.Plan.Fingerprint 反查
 //     AdoptionManager 中同一个请求的驱动键，用请求 ID 本身最直接、无需
 //     额外维护一张 fingerprint→请求 ID 的映射表
+//   - **摘要里 origin/配对码在前、自报名在后且显式标注 self-reported**：自报名
+//     完全由请求方控制，攻击者可以原样填成真实桌面用的那个名字，把自己的请求
+//     伪装成操作员正在等的那一条。操作员真正该核对的是服务器侧推导的来源和
+//     发起方念出来的配对码，自报名只是补充上下文
 //   - 本函数只规划安全策略，不接触 security.Store，也不生成任何 token
-func PlanAgentAdopt(requestID, name string) (Plan, error) {
+func PlanAgentAdopt(requestID, name, origin, pairingCode string) (Plan, error) {
 	requestID = trim(requestID)
 	if requestID == "" {
 		return Plan{}, ErrInvalidOperation
@@ -655,15 +661,24 @@ func PlanAgentAdopt(requestID, name string) (Plan, error) {
 	if name == "" {
 		name = "控制面"
 	}
+	origin = trim(origin)
+	if origin == "" {
+		origin = "unknown"
+	}
+	pairingCode = trim(pairingCode)
 	now := time.Now().UTC()
 	plan := Plan{
-		ID:               newID("op"),
-		Kind:             KindAgentAdopt,
-		TargetSummary:    fmt.Sprintf("adopt request from %s", name),
+		ID:   newID("op"),
+		Kind: KindAgentAdopt,
+		Target: Target{
+			RequestOrigin: origin,
+			PairingCode:   pairingCode,
+		},
+		TargetSummary:    fmt.Sprintf("adopt request from %s (pairing code %s, self-reported name: %s)", origin, pairingCode, name),
 		RiskLevel:        RiskHigh,
 		RequiresApproval: true,
 		ExpectedEffects: []string{
-			fmt.Sprintf("issue independent long-term credential to control plane %s", name),
+			fmt.Sprintf("issue independent long-term credential to control plane at %s (self-reported name: %s)", origin, name),
 		},
 		Checks: []Check{
 			{Name: "adoption_request_pending", Status: "passed", Message: "adoption request awaiting approval"},

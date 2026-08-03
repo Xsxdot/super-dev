@@ -246,6 +246,9 @@ export default {
       decidedTitle: '最近已裁决',
       decidedBy: '已由 {name} 处理',
       decidedUnnamed: '已处理',
+      requestOrigin: '来源 {origin}',
+      pairingCode: '配对码 {code}',
+      selfReportedName: '自报名称 {name}（不可信）',
     },
     debugBrowser: {
       title: '调试浏览器',
@@ -1688,6 +1691,8 @@ export default {
     adoptExpired: '纳管请求已过期（超过 10 分钟未处理），可重新发起。',
     adoptTokenLost: '未能取到一次性凭据（可能已在别处被领取），请重新发起纳管。',
     adoptTargetUnknown: '缺少可直连的目标地址（需要公网 IP / 内网 IP / SSH 地址之一），无法发起纳管。',
+    adoptPairingCode: '配对码：{code}',
+    adoptPairingCodeHint: '请把这个码念给对方，让对方在审批列表里核对同一个码后再批准——同名的纳管请求可能不止一条。',
     forceReinstall: '强制重装',
     forceReinstallConfirm: '我已了解：强制重装会立即停止对方控制面正在运行的 Agent 并覆盖其安装配置，对方现有凭据将失效，此操作不可撤销。',
     forceReinstallWarning: '强制重装会立即停止对方正在运行的 Agent 进程、覆盖当前安装配置；对方控制面持有的凭据将失效且无法恢复。',

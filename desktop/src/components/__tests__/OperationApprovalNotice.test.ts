@@ -217,4 +217,24 @@ describe('OperationApprovalNotice', () => {
     expect(wrapper.text()).toContain('继续执行失败')
     expect(wrapper.find('[data-test="operation-approval-approve"]').text()).toBe('重试')
   })
+
+  // 纳管审批弹窗必须展示服务器侧推导的来源与配对码：自报名可以被伪造成真实桌面
+  // 用的字符串，用户只能靠这两项确认弹出的是不是自己刚发起的那一条。
+  it('shows the server-derived origin and pairing code for an adoption notice', () => {
+    const store = useOperationApprovalStore()
+    store.notice = {
+      approval_id: 'opa_adopt',
+      kind: 'agent.adopt',
+      target_summary: 'adopt request from 203.0.113.9',
+      request_origin: '203.0.113.9',
+      pairing_code: 'K7QM4X',
+    }
+
+    const wrapper = mount(OperationApprovalNotice, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect(wrapper.find('[data-test="operation-approval-origin"]').text()).toContain('203.0.113.9')
+    expect(wrapper.find('[data-test="operation-approval-pairing-code"]').text()).toContain('K7QM4X')
+  })
 })

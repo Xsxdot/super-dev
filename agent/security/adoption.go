@@ -19,6 +19,7 @@
 package security
 
 import (
+	"crypto/sha256"
 	"errors"
 	"log"
 	"strings"
@@ -47,6 +48,21 @@ const (
 	AdoptionRateLimitWindow = 30 * time.Second
 	// AdoptionRateLimitMax 是 AdoptionRateLimitWindow 窗口内允许存在的最大 pending 接入请求数。
 	AdoptionRateLimitMax = 3
+
+	// AdoptionNameMaxRunes 是接入方自报展示名的最大字符数。
+	//
+	// 为什么必须有上限：Create 端点在 bypass 白名单里（调用方此刻没有任何凭据），
+	// 自报名会被原样带进 operation plan 的 TargetSummary/ExpectedEffects 并落盘到
+	// operation-approvals.json，同时进日志。没有上限就等于给匿名调用方一条
+	// 「往本机磁盘写任意长度字符串」的通道。截断只影响展示，不影响任何判定逻辑。
+	AdoptionNameMaxRunes = 64
+
+	// AdoptionPairingCodeLength 是配对码的字符数：短到能口头念出来，
+	// 长到（32^6 ≈ 10 亿）足以让并发的几条接入请求不会撞码。
+	AdoptionPairingCodeLength = 6
+
+	// adoptionPairingCodeAlphabet 是配对码字母表：刻意去掉 I/O/0/1 等口头易混字符。
+	adoptionPairingCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 )
 
 var (
@@ -65,12 +81,71 @@ var (
 )
 
 // AdoptionRequest 是一条无凭据接入请求的可对外展示状态。
+//
+// 注意：
+//   - Name 是接入方**自报**的展示名，不可信；真正可信的是服务器侧推导的来源
+//     （见 api.requestOriginLabel）与 PairingCode
 type AdoptionRequest struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	State     string    `json:"state"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// PairingCode 由 ID 确定性派生（见 PairingCode），供发起方与批准方口头核对
+	// 「是不是同一次请求」。它不是秘密、更不是鉴权因子。
+	PairingCode string    `json:"pairing_code"`
+	State       string    `json:"state"`
+	CreatedAt   time.Time `json:"created_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+// PairingCode 由接入请求 ID 确定性派生一个短配对码。
+//
+// 参数：
+//   - requestID: 接入请求 ID（uuid）
+//
+// 返回：
+//   - AdoptionPairingCodeLength 个字符的配对码；同一个 ID 恒得同一个码
+//
+// 注意：
+//   - **配对码不是秘密，也绝不是鉴权因子**：它由请求 ID 单向派生，而请求 ID
+//     本身就会明文返回给接入方并展示在审批行上，任何拿到 ID 的人都能算出同一
+//     个码。它唯一的作用是让「发起纳管的人」和「按下批准的人」能口头核对是不是
+//     同一次请求——堵住「攻击者伪造成 SuperDev Desktop 同名请求鱼目混珠、
+//     操作员批错行」的确认代理（confused deputy）漏洞。任何时候都不能拿它做
+//     准入校验，也不能用它替代审批本身
+func PairingCode(requestID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(requestID)))
+	out := make([]byte, 0, AdoptionPairingCodeLength)
+	for i := 0; i < AdoptionPairingCodeLength; i++ {
+		out = append(out, adoptionPairingCodeAlphabet[int(sum[i])%len(adoptionPairingCodeAlphabet)])
+	}
+	return string(out)
+}
+
+// sanitizeAdoptionName 把接入方自报的展示名收敛成一个可安全展示与落盘的短字符串。
+//
+// 注意：
+//   - 先剥控制字符再截断：自报名会进 log.Printf 的一行式日志，含换行/回车的
+//     名字可以伪造出看似独立的日志行（日志注入）；这里统一换成空格
+//   - 截断按 rune 而非 byte，避免把多字节字符切成半个导致落盘的 JSON 里出现
+//     替换字符
+func sanitizeAdoptionName(name string) string {
+	replaced := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, name)
+	trimmed := strings.TrimSpace(replaced)
+	if trimmed == "" {
+		return defaultTokenRecordName
+	}
+	runes := []rune(trimmed)
+	if len(runes) > AdoptionNameMaxRunes {
+		trimmed = strings.TrimSpace(string(runes[:AdoptionNameMaxRunes]))
+	}
+	if trimmed == "" {
+		return defaultTokenRecordName
+	}
+	return trimmed
 }
 
 // adoptionRecord 是接入请求的内部记录，额外持有一次性 adoption token 的相关状态。
@@ -125,7 +200,8 @@ func NewAdoptionManager(store *Store, opts AdoptionManagerOptions) *AdoptionMana
 // TryCreate 原子地判断限流上限并创建一条新的待审批接入请求。
 //
 // 参数：
-//   - name: 接入方（新控制面）自报的展示名，空则默认为「控制面」
+//   - name: 接入方（新控制面）自报的展示名，空则默认为「控制面」；
+//     统一经 sanitizeAdoptionName 剥控制字符 + 截断到 AdoptionNameMaxRunes
 //
 // 返回：
 //   - 新创建的 pending AdoptionRequest；被限流时为零值
@@ -142,11 +218,10 @@ func NewAdoptionManager(store *Store, opts AdoptionManagerOptions) *AdoptionMana
 //     自行组合别的判断+插入两步调用
 //   - 顺带惰性清扫已过期的接入请求（见 evictExpiredLocked），把内存增长
 //     限制在「窗口内活跃请求数」量级，而不是无界累积
+//   - 自报名的收敛（剥控制字符 + 长度上限）放在这里而不是 HTTP handler 里，
+//     是为了让**所有**入口都被覆盖：这是唯一的创建通道，收敛在此即无死角
 func (m *AdoptionManager) TryCreate(name string) (AdoptionRequest, bool) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = defaultTokenRecordName
-	}
+	name = sanitizeAdoptionName(name)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now().UTC()
@@ -154,15 +229,17 @@ func (m *AdoptionManager) TryCreate(name string) (AdoptionRequest, bool) {
 	if m.pendingCountWithinWindowLocked(now) >= AdoptionRateLimitMax {
 		return AdoptionRequest{}, false
 	}
+	id := uuid.NewString()
 	req := AdoptionRequest{
-		ID:        uuid.NewString(),
-		Name:      name,
-		State:     AdoptionStatePending,
-		CreatedAt: now,
-		ExpiresAt: now.Add(AdoptionRequestTTL),
+		ID:          id,
+		Name:        name,
+		PairingCode: PairingCode(id),
+		State:       AdoptionStatePending,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(AdoptionRequestTTL),
 	}
 	m.requests[req.ID] = &adoptionRecord{request: req}
-	log.Printf("[SuperDev] security: adoption 接入请求已创建 id=%s name=%s", req.ID, req.Name)
+	log.Printf("[SuperDev] security: adoption 接入请求已创建 id=%s code=%s name=%s", req.ID, req.PairingCode, req.Name)
 	return req, true
 }
 
