@@ -4,6 +4,7 @@ package security_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -179,4 +180,95 @@ func TestStoreWithoutBootstrapTokenKeepsExistingState(t *testing.T) {
 func sha256Hex(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+// newTestStore 创建一个已完成 open→pending-bootstrap 初始化的临时 Store，
+// 供多凭据模型相关测试复用。
+func newTestStore(t *testing.T) *security.Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "security.json")
+	store, err := security.NewStore(path, security.Options{BootstrapToken: "bootstrap", RequireAuth: true})
+	require.NoError(t, err)
+	return store
+}
+
+// provisionWithName 走既有 bootstrap→Provision 流程签发一条具名长期凭据，返回 token 明文。
+func provisionWithName(t *testing.T, s *security.Store, name string) string {
+	t.Helper()
+	token, err := security.GenerateToken()
+	require.NoError(t, err)
+	_, err = s.Provision("bootstrap", security.ProvisionRequest{Token: token, TLSMode: security.TLSModeOff, Name: name})
+	require.NoError(t, err)
+	return token
+}
+
+// appendRecordForTest 绕开 bootstrap 单次兑换限制，直接追加第二条具名凭据记录，
+// 模拟第二个控制面接入（对应后续任务的 adoption 兑换路径，此处只验证导出层数据模型）。
+func appendRecordForTest(t *testing.T, s *security.Store, name string) string {
+	t.Helper()
+	token, err := security.GenerateToken()
+	require.NoError(t, err)
+	_, err = s.AppendTokenRecord(name, token)
+	require.NoError(t, err)
+	return token
+}
+
+func TestTokenRecordsMultiCredential(t *testing.T) {
+	s := newTestStore(t)
+	// 第一控制面走既有 bootstrap provision 流程。
+	tokA := provisionWithName(t, s, "CP-A")
+	// 直接追加第二条记录，模拟第二个控制面接入。
+	tokB := appendRecordForTest(t, s, "CP-B")
+
+	recA, ok := s.VerifyTokenPrincipal(tokA)
+	require.True(t, ok)
+	assert.Equal(t, "CP-A", recA.Name)
+
+	recB, ok := s.VerifyTokenPrincipal(tokB)
+	require.True(t, ok)
+	assert.Equal(t, "CP-B", recB.Name)
+
+	// B 的接入绝不能吊销 A（对比现状 Provision 覆盖唯一 TokenHash）。
+	_, ok = s.VerifyTokenPrincipal(tokA)
+	assert.True(t, ok)
+
+	// 兼容旧调用点：VerifyToken 对两条记录都应放行。
+	assert.True(t, s.VerifyToken(tokA))
+	assert.True(t, s.VerifyToken(tokB))
+}
+
+// 旧版本只写 token_hash 单字段；NewStore 加载时必须迁移为一条 Name="控制面" 的
+// TokenRecord，且迁移后再次落盘的文件必须是新格式（token_records 非空、token_hash 清空）。
+func TestLegacyTokenHashMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "security.json")
+	legacy := `{
+  "require_auth": true,
+  "provision_state": "provisioned",
+  "token_hash": "` + sha256Hex("legacy-long-token") + `"
+}`
+	require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+
+	store, err := security.NewStore(path, security.Options{})
+	require.NoError(t, err)
+
+	rec, ok := store.VerifyTokenPrincipal("legacy-long-token")
+	require.True(t, ok)
+	assert.Equal(t, "控制面", rec.Name)
+	assert.Equal(t, "legacy", rec.ID)
+
+	// 兼容调用点。
+	assert.True(t, store.VerifyToken("legacy-long-token"))
+
+	// load 已经把迁移结果落盘（沿用 adoptBootstrapTokenLocked 的落盘惯例）。
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(raw, &onDisk))
+	records, ok := onDisk["token_records"].([]any)
+	require.True(t, ok, "token_records missing from persisted file: %s", string(raw))
+	assert.Len(t, records, 1)
+	tokenHash, hasTokenHash := onDisk["token_hash"]
+	if hasTokenHash {
+		assert.Empty(t, tokenHash, "legacy token_hash must be cleared after migration")
+	}
 }
