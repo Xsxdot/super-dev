@@ -228,6 +228,7 @@ function dismiss() {
         </template>
 
         <template v-else-if="phase === 'applying'">
+          <h3 class="transfer-subtitle" data-test="transfer-applying-title">{{ t('projectTransfer.applyingTitle') }}</h3>
           <ul class="transfer-step-list" data-test="transfer-applying">
             <li v-for="step in steps" :key="step.code" class="transfer-step-row" :data-test="`transfer-step-${step.code}`">
               <span class="step-icon" :class="step.state" :aria-label="step.state">{{ stepSymbol(step.state) }}</span>

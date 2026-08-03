@@ -224,6 +224,10 @@ describe('ProjectTransferDialog 迁回模式（无 hostId）', () => {
     vi.clearAllMocks()
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('跳过只读预检直接进入 preview，执行时调用 transferBack', async () => {
     const { api } = await import('@/api/agent')
     vi.mocked(api.transferBack).mockResolvedValue(statusSnapshot({ steps: [] }))
@@ -237,5 +241,46 @@ describe('ProjectTransferDialog 迁回模式（无 hostId）', () => {
     await wrapper.find('[data-test="transfer-execute"]').trigger('click')
 
     await vi.waitFor(() => expect(api.transferBack).toHaveBeenCalledWith('p1'))
+  })
+
+  // 回归覆盖：迁回方向后端用的是一套跟正向转移不同的步骤 code 集合
+  // （agent/api/project_transfer_engine.go 的 executeProjectTransferBack 发出
+  // probe_home/pull_local/switch_home，而不是正向的 stop_dev/checkout/...），
+  // 之前 projectTransfer.steps.* 字典只覆盖了正向的 6 个 code，迁回方向的
+  // applying 态从未被真实挂载测试过，导致 probe_home/pull_local 缺失的翻译键
+  // 在 zh/en 两份 locale 里都漏了整整一轮 review 才被发现——这条测试把
+  // applying 阶段真正驱动到「迁回」方向，断言渲染出的是翻译后的文案而不是
+  // vue-i18n 缺 key 时兜底吐出来的原始 key 路径字符串。
+  it('applying 阶段渲染迁回方向专属的 probe_home/pull_local 步骤翻译文案（而非原始 key 路径）', async () => {
+    const { api } = await import('@/api/agent')
+    vi.mocked(api.transferBack).mockResolvedValue(statusSnapshot({ steps: [] }))
+    vi.mocked(api.transferStatus).mockResolvedValue(statusSnapshot({
+      steps: [
+        { code: 'probe_home', state: 'running' },
+        { code: 'pull_local', state: 'pending' },
+        { code: 'switch_home', state: 'pending' },
+      ],
+    }))
+
+    const wrapper = mountDialog({ hostId: undefined, hostName: undefined })
+    await vi.waitFor(() => expect(wrapper.find('[data-test="transfer-blockers-empty"]').exists()).toBe(true))
+
+    vi.useFakeTimers()
+    await wrapper.find('[data-test="transfer-execute"]').trigger('click')
+    expect(api.transferBack).toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    const probeRow = wrapper.find('[data-test="transfer-step-probe_home"]')
+    const pullRow = wrapper.find('[data-test="transfer-step-pull_local"]')
+    expect(probeRow.exists()).toBe(true)
+    expect(pullRow.exists()).toBe(true)
+
+    // 断言的是「翻译后的具体文案」，不是「非空字符串」——防止把「兜底吐出 key
+    // 路径」这种坏结果误判为通过（key 路径本身也是个非空字符串）。
+    expect(probeRow.find('.step-label').text()).toBe('探测归属机状态')
+    expect(pullRow.find('.step-label').text()).toBe('拉取到本机')
+    expect(probeRow.text()).not.toContain('projectTransfer.steps')
+    expect(pullRow.text()).not.toContain('projectTransfer.steps')
   })
 })

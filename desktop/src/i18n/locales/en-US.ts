@@ -1658,6 +1658,8 @@ export default {
       mcp_setup: 'Set up MCP access',
       asset_audit: 'Audit assets',
       switch_home: 'Switch home',
+      probe_home: 'Probe home host state',
+      pull_local: 'Pull to local',
     },
     stepState: {
       pending: 'Pending',

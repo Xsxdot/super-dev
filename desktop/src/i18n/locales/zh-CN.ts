@@ -1658,6 +1658,8 @@ export default {
       mcp_setup: '配置 MCP 接入',
       asset_audit: '资产审计',
       switch_home: '切换归属',
+      probe_home: '探测归属机状态',
+      pull_local: '拉取到本机',
     },
     stepState: {
       pending: '等待中',
