@@ -84,6 +84,11 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// 更新前先读旧值，只用来判定 DevMachineMode 是否发生 true→false 翻转；
+	// host 不存在时 wasDevMachine 保持零值，下面 UpdateHost 会返回 404，
+	// 这里的读取失败/未命中不需要单独处理。
+	before, hadBefore, _ := a.remoteHostByID(id)
+
 	updated, err := a.remoteNodeMutations.UpdateHost(r.Context(), id, dto)
 	if err != nil {
 		if writeRemoteNodeMutationPartialError(w, err) {
@@ -105,7 +110,35 @@ func (a *App) updateHost(w http.ResponseWriter, r *http.Request) {
 		// 让开关生效不必等下一帧节点状态到来。
 		a.mirrorManager.ReconcileNow()
 	}
-	jsonOK(w, a.hostView(updated))
+
+	resp := hostUpdateResponseDTO{hostViewDTO: a.hostView(updated)}
+	// 为什么关闭不阻断只提示：spec 裁定"关闭开发机模式开关不动项目归属"——
+	// 归属是一次独立的显式迁移动作（转移弹窗），开关只是端口镜像的本地
+	// 消费开关。所以这里绝不能因为该 Host 仍有项目归属就拒绝这次更新
+	// （那会让用户被卡在"关不掉开关"的死角）；只在 true→false 这个唯一会
+	// 让端口镜像停摆的方向上，把"仍有 N 个项目归属于此"的事实透出给前端，
+	// 由前端在保存成功后追加一条不阻断的警示（Task 12）。false→true 方向
+	// 没有"停止镜像"的后果，不需要这条提示。
+	if hadBefore && before.DevMachineMode && !updated.DevMachineMode {
+		if names := a.projectNamesHomedOn(id); len(names) > 0 {
+			resp.HomedProjects = names
+		}
+	}
+	jsonOK(w, resp)
+}
+
+// hostUpdateResponseDTO 是 PUT /api/hosts/{id} 的响应体：在标准 Host 安全
+// 视图之外，附带一个仅在特定条件下出现的 homed_projects 字段。
+//
+// 注意：
+//   - 嵌入 hostViewDTO 而不是新增一层嵌套字段，保持响应体形状与其余
+//     Host 接口（GET/POST）一致，前端可以直接把它当 hostViewDTO 解析，
+//     homed_projects 是纯粹的可选追加信息
+//   - HomedProjects 只在 DevMachineMode true→false 且该 Host 当前仍有项目
+//     归属时才非空；omitempty 让其余情况下响应体里完全不出现这个字段
+type hostUpdateResponseDTO struct {
+	hostViewDTO
+	HomedProjects []string `json:"homed_projects,omitempty"`
 }
 
 // deleteHost 处理 DELETE /api/hosts/{id}。
@@ -122,6 +155,14 @@ func (a *App) deleteHost(w http.ResponseWriter, r *http.Request) {
 		case hostDeleteCodeAgentConfigured:
 			jsonErrorCode(w, http.StatusConflict, deleteErr.Code, "uninstall or detach the Agent before deleting the Host", map[string]string{
 				"host_id": hostID,
+			})
+		case hostDeleteCodeProjectHome:
+			// 与上面的 agent_configured 分支同构：稳定码 + 409 + data 携带
+			// 定位信息，唯一差异是 data 多了一份项目名清单——前端（Task 12）
+			// 据此渲染"先在项目概览迁回"引导弹窗，不提供"强制删除"选项。
+			jsonErrorCode(w, http.StatusConflict, deleteErr.Code, "该主机仍是以下项目的归属，请先在项目概览把归属迁回本机或其他主机后再删除", map[string]any{
+				"host_id":  hostID,
+				"projects": deleteErr.ProjectNames,
 			})
 		default:
 			// Host 配置已删除但 tunnel 失效审计未完成时，按部分失败语义返回 503。
