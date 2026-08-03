@@ -10,9 +10,13 @@
 //     2. 项目配置读写（get/preview/apply）：不区分 env，整份 project.yaml
 //     归属节点持有
 //   - 在白名单接入点（handler_deployments.go 的 controlDeploymentRuntime、
-//     handler_projects.go 的 startEnvSelected、handler_config_changes.go 的
+//     handler_projects.go 的 startEnvSelected/putEnvSelected、
+//     handler_config_changes.go 的
 //     getProjectConfig/previewConfigChange/applyConfigChange）逐个显式调用
-//     上述判定，在本机 authorizeOperation 之前短路转发
+//     上述判定，在本机 authorizeOperation 之前短路转发。putEnvSelected 与
+//     startEnvSelected 成对接入：前者写"选中了哪些服务"，后者读它来决定
+//     启动谁，两者必须转发到同一台机器，否则会出现"这台机器上选的是
+//     A/B，归属机上实际起的却是 C"的错配
 //
 // 边界：
 //   - 不做任何通配中间件转发。为什么白名单逐个接不做通配：路由是安全敏感

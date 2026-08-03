@@ -101,12 +101,17 @@ func (t *recordingNodeTransport) callCount() int {
 }
 
 // homeRouteTestProject 构造一个同时带 dev/prod 两个环境、各一个本地部署的
-// 项目，供归属路由用例复用。
-func homeRouteTestProject() model.Project {
+// 项目，供归属路由用例复用。RootPath 固定为 t.TempDir()——部分用例（如
+// prod env 不转发）会真正落到本机既有的写路径（如 putEnvSelected 的
+// config.Loader.Save），RootPath 留空会让那些写操作把 .superdev/project.yaml
+// 落到进程当前工作目录，污染仓库；这里必须给一个真实可写的临时目录。
+func homeRouteTestProject(t *testing.T) model.Project {
+	t.Helper()
 	const projectID = "proj-home-route"
 	return model.Project{
-		ID:   projectID,
-		Name: "home-route-demo",
+		ID:       projectID,
+		Name:     "home-route-demo",
+		RootPath: t.TempDir(),
 		Environments: []model.Environment{
 			{ID: "env-dev", Name: "dev", IsDev: true, Order: 0},
 			{ID: "env-prod", Name: "prod", IsDev: false, Order: 1},
@@ -131,7 +136,7 @@ func setupHomeRoutedApp(t *testing.T) (*App, string, *recordingNodeTransport) {
 	app := newTestAppForPackage(t)
 	transport := &recordingNodeTransport{}
 	app.nodeTransport = transport
-	project := homeRouteTestProject()
+	project := homeRouteTestProject(t)
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
@@ -203,7 +208,7 @@ func TestControlDeploymentRuntime_NoHomeRunsLocally(t *testing.T) {
 	app := newTestAppForPackage(t)
 	transport := &recordingNodeTransport{}
 	app.nodeTransport = transport
-	project := homeRouteTestProject()
+	project := homeRouteTestProject(t)
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
@@ -237,6 +242,45 @@ func TestStartEnvSelected_ProdEnvNotForwarded(t *testing.T) {
 	assert.Equal(t, 0, transport.callCount(), "prod env 的 start-selected 不应被转发")
 }
 
+// ---- putEnvSelected（与 startEnvSelected 成对接入） ----
+
+func TestPutEnvSelected_ForwardsDevEnvToHome(t *testing.T) {
+	_, baseURL, transport := setupHomeRoutedApp(t)
+
+	req, err := http.NewRequest(http.MethodPut, baseURL+"/api/projects/proj-home-route/env-selected",
+		bytes.NewReader([]byte(`{"env_name":"dev","names":["web"]}`)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.Equal(t, 1, transport.callCount())
+	call := transport.lastCall()
+	assert.Equal(t, homeRouteTestHost, call.hostID)
+	assert.Equal(t, http.MethodPut, call.method)
+	assert.Equal(t, "/api/projects/proj-home-route/env-selected", call.path)
+
+	var echoed map[string]any
+	require.NoError(t, json.Unmarshal(call.body, &echoed))
+	assert.Equal(t, "dev", echoed["env_name"])
+}
+
+func TestPutEnvSelected_ProdEnvNotForwarded(t *testing.T) {
+	_, baseURL, transport := setupHomeRoutedApp(t)
+
+	req, err := http.NewRequest(http.MethodPut, baseURL+"/api/projects/proj-home-route/env-selected",
+		bytes.NewReader([]byte(`{"env_name":"prod","names":["web"]}`)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, 0, transport.callCount(), "prod env 的 env-selected 写入不应被转发")
+}
+
 // ---- 项目配置读写端点（get/preview/apply） ----
 
 func TestGetProjectConfig_ForwardsToHome(t *testing.T) {
@@ -258,7 +302,7 @@ func TestGetProjectConfig_NoHomeRunsLocally(t *testing.T) {
 	app := newTestAppForPackage(t)
 	transport := &recordingNodeTransport{}
 	app.nodeTransport = transport
-	project := homeRouteTestProject()
+	project := homeRouteTestProject(t)
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()

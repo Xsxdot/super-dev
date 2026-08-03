@@ -387,7 +387,9 @@ func (a *App) putEnvSelected(w http.ResponseWriter, r *http.Request) {
 		EnvName string   `json:"env_name"`
 		Names   []string `json:"names"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// decodeJSONPreserveBody（而非直接 json.NewDecoder(r.Body).Decode）：下面
+	// 归属路由判定为空时，forwardToHome 需要把 r.Body 原文再转发一次。
+	if err := decodeJSONPreserveBody(r, &req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -405,6 +407,15 @@ func (a *App) putEnvSelected(w http.ResponseWriter, r *http.Request) {
 	a.mu.RUnlock()
 	if !found {
 		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	// 归属路由：dev 环境已归属另一台节点时原样转发。env-selected 决定
+	// startEnvSelected 会启动哪些服务，若只转发 start-selected 而不转发
+	// 这份选择状态本身，归属机会用它自己那份可能过期/不同的选择去启动，
+	// 造成"用户在这台机器上选的是 A/B，实际起的却是归属机上的 C"这种错配；
+	// 两个端点必须共享同一份权威状态，见 project_home_routing.go 文件头。
+	if home := a.homeRouteTargetForDeployment(p, req.EnvName); home != "" {
+		a.forwardToHome(w, r, home)
 		return
 	}
 
