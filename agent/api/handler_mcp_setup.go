@@ -144,6 +144,10 @@ func mergeMCPSetupEntry(doc map[string]any) {
 	servers[mcpSetupServerName] = map[string]any{
 		"command": "superdev-mcp",
 		"env": map[string]string{
+			// 注意：此处用 DefaultAgentListenPort 是刻意为之——运行中的 agent 未把自身 --addr
+			// 端口存入 AppConfig（全代码库共享 57017 假设：superdev-mcp 自身兜底、agent_install_command 亦然）。
+			// 若目标机以自定义 --addr 运行，这里写入的 SUPERDEV_AGENT_URL 端口会不对（200 但内容错），
+			// 用户需手工修正 ~/.claude.json。根因修复=给 AppConfig 增 ListenPort 并从 main.go 透传，属本切面范围外。
 			"SUPERDEV_AGENT_URL": fmt.Sprintf("http://127.0.0.1:%d", model.DefaultAgentListenPort),
 		},
 	}
