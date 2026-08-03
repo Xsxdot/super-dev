@@ -657,4 +657,35 @@ describe('HostFormModal', () => {
       dev_machine_mode: true,
     }))
   })
+
+  // 关闭开发机模式提示（Task 12）：本组件只负责按 prop 渲染横幅，是否展示由父组件
+  // 依据保存响应的 homed_projects 决定——这里只验证纯呈现，不驱动真实保存流程
+  // （那部分由 HostManagerTab.test.ts 覆盖完整的「保存后才提示」时机）。
+  it('renders the dev-machine-mode-off warning banner when homedProjectsNotice is non-empty', () => {
+    const wrapper = mount(HostFormModal, {
+      props: {
+        visible: true,
+        homedProjectsNotice: ['api-service', 'web-app'],
+      },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    const notice = wrapper.get('[data-test="host-form-dev-machine-off-notice"]')
+    expect(notice.classes()).toContain('settings-alert-warning')
+    expect(notice.text()).toContain('2')
+  })
+
+  it('does not render the dev-machine-mode-off banner when homedProjectsNotice is absent or empty', () => {
+    const withoutProp = mount(HostFormModal, {
+      props: { visible: true },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    expect(withoutProp.find('[data-test="host-form-dev-machine-off-notice"]').exists()).toBe(false)
+
+    const withEmptyArray = mount(HostFormModal, {
+      props: { visible: true, homedProjectsNotice: [] },
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+    expect(withEmptyArray.find('[data-test="host-form-dev-machine-off-notice"]').exists()).toBe(false)
+  })
 })

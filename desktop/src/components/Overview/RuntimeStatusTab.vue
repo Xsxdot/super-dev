@@ -6,6 +6,8 @@ RuntimeStatusTab：项目概览页的运行状态视图。
   - 对本地 deployment 保留 runtime-status 显式刷新 fallback
   - 按用户选择的一级/二级维度透视分组渲染实例卡
   - 网络抖动时显示更新失败角标但保留旧数据
+  - 把 project.home_host_name 透传给 ServiceMatrixTable，供其标注归属远端
+    开发机的 dev 节点点位（Task 12，纯呈现，不在本组件做任何判断）
 
 边界：
   - 不保存指标历史
@@ -171,6 +173,7 @@ function unknownInstance(service: Service, deployment: Deployment, envName: stri
       <ServiceMatrixTable
         :matrix="matrix"
         :selected-service-id="selectedServiceId"
+        :home-host-name="project.home_host_name"
         @select-service="selectService"
       />
       <ServiceDetailPane

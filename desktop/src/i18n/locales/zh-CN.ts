@@ -377,6 +377,9 @@ export default {
       agentConfiguredUnknown: '已配置',
       fingerprintMissing: '未采集指纹',
       devMachineBadge: '开发机',
+      deleteGuardTitle: '无法删除主机',
+      deleteGuardIntro: '"{name}" 仍是以下 {count} 个项目的归属，无法直接删除：',
+      deleteGuardHint: '请先在项目概览页把这些项目迁回本机或其他主机，再重试删除。',
     },
     agents: {
       title: 'Agent',
@@ -605,6 +608,7 @@ export default {
       keyStoredHint: '已保存导入的私钥；无需重新选择文件。',
       connectSuccess: '连接成功（{latency}ms）',
       importCount: '导入 {count} 项',
+      devMachineOffNotice: '该主机仍是 {count} 个项目的归属，端口镜像已停止；归属不变。',
       role: {
         title: '角色',
         devMachineMode: '开发机模式',

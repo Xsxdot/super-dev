@@ -377,6 +377,9 @@ export default {
       agentConfiguredUnknown: 'Configured',
       fingerprintMissing: 'No fingerprint',
       devMachineBadge: 'Dev machine',
+      deleteGuardTitle: 'Cannot delete host',
+      deleteGuardIntro: '"{name}" is still the home of {count} project(s) and cannot be deleted directly:',
+      deleteGuardHint: 'Migrate these projects back to this machine or another host from the project overview first, then retry the delete.',
     },
     agents: {
       title: 'Agents',
@@ -605,6 +608,7 @@ export default {
       keyStoredHint: 'An imported private key is saved. No need to choose the file again.',
       connectSuccess: 'Connected ({latency}ms)',
       importCount: 'Import {count}',
+      devMachineOffNotice: 'This host is still the home of {count} project(s); port mirroring has stopped. Ownership is unchanged.',
       role: {
         title: 'Role',
         devMachineMode: 'Dev machine mode',

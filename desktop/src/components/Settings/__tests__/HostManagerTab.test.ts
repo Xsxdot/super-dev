@@ -4,6 +4,7 @@
  * 职责：
  *   - 验证空态、新建入口和 Host SSH 连接信息 payload
  *   - 验证 Host 行不展示或操作 Agent 配置
+ *   - 验证删除守卫弹窗（409 project_home）和保存后的关闭开发机模式提示（Task 12）
  *
  * 边界：
  *   - 不访问真实 agent HTTP 或 WebSocket 接口
@@ -323,5 +324,119 @@ describe('HostManagerTab', () => {
     const badges = wrapper.findAll('[data-test="host-dev-machine-badge"]')
     expect(badges).toHaveLength(1)
     expect(badges[0].text()).toBe('开发机')
+  })
+
+  // 删除守卫（Task 12）：主机仍是项目归属时，deleteHost 返回 409 project_home，
+  // 必须展示自建守卫弹窗列出受影响项目，且不再走「强制删除」的第二次原生 confirm——
+  // 迁回是唯一路径，force-delete 按钮根本不存在。
+  it('shows the project-home delete guard modal on a 409 project_home response and never asks to force-delete via confirm', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [host({ id: 'h1', name: 'dev-box' })]
+    const confirmSpy = vi.fn().mockReturnValue(true)
+    vi.stubGlobal('confirm', confirmSpy)
+    mockedApi.deleteHost.mockRejectedValue(new AgentAPIError(
+      'host is still the home of some projects',
+      409,
+      { code: 'project_home', data: { host_id: 'h1', projects: ['api-service', 'web-app'] } },
+    ))
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('[data-test="host-delete"]').trigger('click')
+    await flushPromises()
+
+    // 唯一一次 confirm 调用来自点击删除按钮时的「确认删除」——收到 409 后绝不会
+    // 再弹出第二次原生 confirm 去问「是否强制删除」。
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-test="host-delete-guard"]').exists()).toBe(true)
+    const projectList = wrapper.find('[data-test="host-delete-guard-projects"]').text()
+    expect(projectList).toContain('api-service')
+    expect(projectList).toContain('web-app')
+    // 没有强制删除按钮：迁回是唯一路径。
+    expect(wrapper.find('[data-test="host-delete-guard-force"]').exists()).toBe(false)
+    // Host 仍在列表中，删除并未真正发生。
+    expect(store.hosts).toHaveLength(1)
+    expect(wrapper.find('[data-test="host-row"]').exists()).toBe(true)
+  })
+
+  it('closes the delete guard modal without deleting anything', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    store.hosts = [host({ id: 'h1', name: 'dev-box' })]
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true))
+    mockedApi.deleteHost.mockRejectedValue(new AgentAPIError(
+      'host is still the home of some projects',
+      409,
+      { code: 'project_home', data: { host_id: 'h1', projects: ['api-service'] } },
+    ))
+    await wrapper.vm.$nextTick()
+    await wrapper.find('[data-test="host-delete"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="host-delete-guard"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="host-delete-guard-close"]').trigger('click')
+
+    expect(wrapper.find('[data-test="host-delete-guard"]').exists()).toBe(false)
+    expect(store.hosts).toHaveLength(1)
+  })
+
+  // 关闭开发机模式提示（Task 12）：保存后响应携带非空 homed_projects 才展示提示，
+  // 且弹窗保持打开等待用户主动关闭——这条断言同时覆盖「提示时机=保存后」这一
+  // CRITICAL 约束（见 HostFormModal.vue buildPayload 附近注释）。
+  it('keeps the host form open and shows the dev-machine-mode-off banner after saving reports homed_projects', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    const existing = host({ id: 'h1', name: 'dev-box', dev_machine_mode: true })
+    store.hosts = [existing]
+    const updateHost = vi.spyOn(store, 'updateHost').mockResolvedValue({
+      ...existing,
+      dev_machine_mode: false,
+      homed_projects: ['api-service'],
+    })
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('[data-test="host-edit"]').trigger('click')
+    await wrapper.find('[data-test="host-form-dev-machine-mode"]').setValue(false)
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(updateHost).toHaveBeenCalled()
+    const notice = wrapper.find('[data-test="host-form-dev-machine-off-notice"]')
+    expect(notice.exists()).toBe(true)
+    expect(notice.text()).toContain('1')
+    // 弹窗必须仍然打开，等待用户主动关闭，而不是像常规保存那样自动收起。
+    expect(wrapper.find('[data-test="host-form-name"]').exists()).toBe(true)
+  })
+
+  it('does not show the dev-machine-mode-off banner merely from toggling the checkbox before saving', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    const existing = host({ id: 'h1', name: 'dev-box', dev_machine_mode: true })
+    store.hosts = [existing]
+    vi.spyOn(store, 'updateHost').mockResolvedValue({ ...existing, dev_machine_mode: false })
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('[data-test="host-edit"]').trigger('click')
+    await wrapper.find('[data-test="host-form-dev-machine-mode"]').setValue(false)
+
+    // 尚未点击保存：勾选态只是草稿，不应触发「误报」提示。
+    expect(wrapper.find('[data-test="host-form-dev-machine-off-notice"]').exists()).toBe(false)
+  })
+
+  it('closes the form normally after saving when the response has no homed_projects', async () => {
+    const wrapper = await mountHostManager()
+    const store = useRemoteStore()
+    const existing = host({ id: 'h1', name: 'dev-box', dev_machine_mode: true })
+    store.hosts = [existing]
+    vi.spyOn(store, 'updateHost').mockResolvedValue({ ...existing, dev_machine_mode: false })
+    await wrapper.vm.$nextTick()
+
+    await wrapper.find('[data-test="host-edit"]').trigger('click')
+    await wrapper.find('[data-test="host-form-dev-machine-mode"]').setValue(false)
+    await wrapper.find('[data-test="host-form-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="host-form-dev-machine-off-notice"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="host-form-name"]').exists()).toBe(false)
   })
 })

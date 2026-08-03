@@ -6,6 +6,9 @@ HostFormModal：单 Host 身份信息新建与编辑表单。
   - 在 Host 尚无 host key 指纹时，保存前自动采集并要求用户显式确认
   - 提供「从本机 ~/.ssh 一键导入私钥路径」入口，与手填私钥内容互斥归一
   - 收集「角色」分区的 dev_machine_mode 开关，新建默认关闭、编辑回显既有值（Task 12）
+  - 保存成功后，若父组件回填 homedProjectsNotice（来自 PUT 响应的 homed_projects），
+    在顶部展示「归属未变但端口镜像已停止」的告警横幅，并保持弹窗打开待用户主动关闭
+    （Task 12）
   - 将 Host payload 交由父组件保存
 
 边界：
@@ -13,6 +16,8 @@ HostFormModal：单 Host 身份信息新建与编辑表单。
   - 不做信任决策：采集只呈现事实，是否信任由用户点击确认
   - 不处理指纹变更后的重采（由 HostManagerTab 的重采流程负责）
   - 不负责 Agent 安装或连接测试
+  - 不判断「何时该展示」关闭开发机模式提示——那是父组件按保存响应决定的时机问题，
+    本组件只负责按 homedProjectsNotice 这个 prop 做纯呈现
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
@@ -25,6 +30,12 @@ const props = defineProps<{
   visible: boolean
   initial?: Host | null
   error?: string | null
+  /**
+   * homedProjectsNotice：上一次保存响应携带的 homed_projects（项目名数组）。
+   * 非空时展示「归属不变，端口镜像已停止」的横幅——由父组件在 store.updateHost()
+   * resolve 之后回填，本组件不感知也不驱动保存流程本身。
+   */
+  homedProjectsNotice?: string[] | null
 }>()
 
 const emit = defineEmits<{
@@ -298,6 +309,13 @@ function saveWithoutFingerprint() {
   emit('submit', buildPayload(''))
   resetScan()
 }
+
+// 为什么保存后才提示：dev_machine_mode 复选框只是用户正在编辑的草稿态，勾选/
+// 取消勾选那一刻并不代表已经落库——payload 要到点击保存、后端处理完成后才真正
+// 生效。若改成监听复选框变化就提示，用户刚勾掉开关、还没点保存时就会看到
+// 「端口镜像已停止」的误报（此时后端配置根本没变）。因此这里只暴露一个由父组件
+// 按保存响应回填的 prop（homedProjectsNotice），本组件不监听 form.dev_machine_mode。
+const hasHomedProjectsNotice = computed(() => (props.homedProjectsNotice?.length ?? 0) > 0)
 </script>
 
 <template>
@@ -308,6 +326,13 @@ function saveWithoutFingerprint() {
       </div>
 
       <div class="settings-modal-body host-form-body">
+        <div
+          v-if="hasHomedProjectsNotice"
+          class="settings-alert settings-alert-warning"
+          data-test="host-form-dev-machine-off-notice"
+        >
+          {{ t('settings.hostForm.devMachineOffNotice', { count: homedProjectsNotice!.length }) }}
+        </div>
         <div v-if="error" class="settings-alert settings-alert-danger" data-test="host-form-error">
           {{ error }}
         </div>
@@ -511,8 +536,21 @@ function saveWithoutFingerprint() {
       </div>
 
       <div class="settings-modal-footer">
-        <button type="button" class="settings-btn" data-test="host-form-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
-        <button type="button" class="settings-btn settings-btn-primary" data-test="host-form-submit" @click="submit">{{ t('common.save') }}</button>
+        <!-- 提示展示期间，Host 已经保存成功：footer 退化为单个「关闭」按钮，
+             不再让用户误以为还需要再点一次保存。 -->
+        <button
+          v-if="hasHomedProjectsNotice"
+          type="button"
+          class="settings-btn settings-btn-primary"
+          data-test="host-form-notice-close"
+          @click="emit('cancel')"
+        >
+          {{ t('common.close') }}
+        </button>
+        <template v-else>
+          <button type="button" class="settings-btn" data-test="host-form-cancel" @click="emit('cancel')">{{ t('common.cancel') }}</button>
+          <button type="button" class="settings-btn settings-btn-primary" data-test="host-form-submit" @click="submit">{{ t('common.save') }}</button>
+        </template>
       </div>
     </div>
   </div>
