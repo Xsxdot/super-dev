@@ -1,0 +1,237 @@
+// remote.go 提供目标机（远端 host）的 git 探测与检出能力。
+//
+// 职责：
+//   - InspectRemote：通过注入的 Runner 在目标机上探测 path 的 git 状态，
+//     复用 Snapshot 的字段语义，结果作为项目归属转移预检的远端事实来源
+//   - EnsureCheckout：让目标机 path 成为 repoURL 在 branch 分支上的最新检出
+//     （目录不存在则 clone，已是同源仓库则 fetch+checkout+pull）
+//
+// 边界：
+//   - 不搬运 git 凭据——clone/fetch/pull 失败即目标机自己没权限访问该仓库，
+//     错误原样透出给调用方，交给使用者自行在目标机配置凭据，本包不做任何兜底
+//   - 不比对 URL 是否同源：EnsureCheckout 假定调用方已在预检阶段确认 path 处
+//     的仓库与 repoURL 同源（含人工复核），这里只管把它开到目标分支的最新提交
+//   - 不解析 host 侧输出语义（如 fetch 的 diff 统计），只逐行透传给 onLine，
+//     本包自身只在日志里记录步骤边界
+package gitinfo
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strconv"
+	"strings"
+)
+
+// Runner 抽象「在目标机执行一条命令并收集输出」，由调用方注入。
+// 生产环境 = pipeline.RoutingRunner.RunRemote 的适配闭包（Task 4/5 负责接线）；
+// 测试 = 按 cmd 前缀返回 canned 输出的假件。
+//
+// 约定：err 非 nil 表示传输层故障（如 SSH 连接失败），命令本身有没有正常跑起来都不知道；
+// exitCode 非 0 表示命令确实在目标机上执行完毕但返回了非零退出码（如目录非仓库）。
+// 这个区分对 InspectRemote/EnsureCheckout 至关重要：前者必须整体失败上抛，
+// 后者是「探测到的确凿事实」，要按字段降级而不是报错。
+type Runner func(ctx context.Context, cmd, workDir string) (stdout string, exitCode int, err error)
+
+// RemoteProbe 是目标机 checkout 的探测结果。
+type RemoteProbe struct {
+	DirExists bool // path 是否存在；false 时 Snapshot 全零值，没有意义
+	Snapshot       // 复用 Task 1 的字段语义（IsRepo/Branch/RemoteURL/Dirty/Ahead）
+}
+
+// InspectRemote 探测目标机 path 的 git 状态。
+//
+// 参数：
+//   - ctx: 控制每条远端命令的超时/取消
+//   - run: 命令执行器，见 Runner 类型注释
+//   - path: 目标机上待探测的目录绝对路径
+//
+// 返回：
+//   - RemoteProbe: path 不存在或不是 git 仓库都是「确实如此」的正常结果，
+//     分别体现为 DirExists=false 或 IsRepo=false，不是错误
+//   - error: 仅当 Runner 报告传输层故障（err 非 nil）时非空，
+//     这类基础设施故障不能被误判成「目标机上没这个目录/不是仓库」
+//
+// 注意：
+//   - 字段级降级与 Inspect（本机版本）保持一致：分支/远端/脏状态/领先数
+//     任一子命令因 git 语义失败（无上游/无 origin/detached HEAD）单独降级，
+//     不让整个探测失败
+func InspectRemote(ctx context.Context, run Runner, path string) (RemoteProbe, error) {
+	exists, err := probeDirExists(ctx, run, path)
+	if err != nil {
+		return RemoteProbe{}, err
+	}
+	if !exists {
+		// 目录都不存在，后面的 git 探测无意义，直接返回全零 Snapshot。
+		return RemoteProbe{DirExists: false}, nil
+	}
+
+	probe := RemoteProbe{DirExists: true}
+
+	isWorkTree, exitCode, err := runRemoteGit(ctx, run, path, "rev-parse", "--is-inside-work-tree")
+	if err != nil {
+		return RemoteProbe{}, err
+	}
+	if exitCode != 0 || strings.TrimSpace(isWorkTree) != "true" {
+		// exitCode != 0：目录存在但不是 git 仓库；输出不是 "true"：bare 仓库
+		// （同 local.go 的 Inspect 契约——bare 仓库该命令 exit 0 但打印 "false"）。
+		// 两种情况都判定 IsRepo=false，其余字段无意义，保持零值。
+		return probe, nil
+	}
+	probe.IsRepo = true
+
+	if branch, code, err := runRemoteGit(ctx, run, path, "symbolic-ref", "--short", "HEAD"); err != nil {
+		return RemoteProbe{}, err
+	} else if code == 0 {
+		probe.Branch = strings.TrimSpace(branch)
+	}
+	// detached HEAD 时上面的命令 exitCode != 0，按字段级降级为空分支名，不算错误。
+
+	if remoteURL, code, err := runRemoteGit(ctx, run, path, "remote", "get-url", "origin"); err != nil {
+		return RemoteProbe{}, err
+	} else if code == 0 {
+		probe.RemoteURL = strings.TrimSpace(remoteURL)
+	}
+	// 无 origin 时上面的命令 exitCode != 0，按字段级降级为空 RemoteURL。
+
+	if status, code, err := runRemoteGit(ctx, run, path, "status", "--porcelain"); err != nil {
+		return RemoteProbe{}, err
+	} else if code == 0 {
+		probe.Dirty = strings.TrimSpace(status) != ""
+	}
+
+	if aheadOut, code, err := runRemoteGit(ctx, run, path, "rev-list", "--count", "@{upstream}..HEAD"); err != nil {
+		return RemoteProbe{}, err
+	} else if code == 0 {
+		if ahead, parseErr := strconv.Atoi(strings.TrimSpace(aheadOut)); parseErr == nil {
+			probe.Ahead = ahead
+		} else {
+			probe.Ahead = -1
+		}
+	} else {
+		// 无上游配置时该命令 exitCode != 0，降级为 -1（区分「已同步」与「没配上游」，
+		// 语义与 local.go 的 Snapshot.Ahead 完全一致）。
+		probe.Ahead = -1
+	}
+
+	return probe, nil
+}
+
+// EnsureCheckout 让目标机 path 成为 repoURL 在 branch 分支上的最新检出：
+//   - 目录不存在 → git clone --branch
+//   - 已是同源仓库 → fetch + checkout branch + pull --ff-only
+//
+// 前置（调用方已确认）：同源判定与人工复核在预检阶段完成，本函数不再比对 URL，
+// 只管把目标机上的仓库开到目标分支的最新提交。
+//
+// 参数：
+//   - onLine: 每条命令的 host 侧输出会按行回调，供上层写日志/审计；
+//     本函数自身只记录步骤边界（开始/结束），不重复记录 host 侧内容
+//
+// 返回：
+//   - 任一步骤非零退出即失败返回；错误信息包含 exitCode 与最后 5 行输出，
+//     便于在不重新连接目标机的情况下定位问题
+//   - clone/pull 因权限失败（目标机自己没有该仓库的访问权限）时错误原样透出，
+//     不做任何兜底或凭据代填——见文件头「不搬运 git 凭据」的边界说明
+func EnsureCheckout(ctx context.Context, run Runner, path, repoURL, branch string, onLine func(string)) error {
+	exists, err := probeDirExists(ctx, run, path)
+	if err != nil {
+		log.Printf("[SuperDev][gitinfo] EnsureCheckout 探测目标目录是否存在失败: %v", err)
+		return fmt.Errorf("探测目标目录是否存在失败: %w", err)
+	}
+
+	if !exists {
+		cmd := fmt.Sprintf("git clone --branch %s %s %s", shellQuote(branch), shellQuote(repoURL), shellQuote(path))
+		return runCheckoutStep(ctx, run, "clone", cmd, onLine)
+	}
+
+	if err := runCheckoutStep(ctx, run, "fetch", fmt.Sprintf("git -C %s fetch origin %s", shellQuote(path), shellQuote(branch)), onLine); err != nil {
+		return err
+	}
+	if err := runCheckoutStep(ctx, run, "checkout", fmt.Sprintf("git -C %s checkout %s", shellQuote(path), shellQuote(branch)), onLine); err != nil {
+		return err
+	}
+	return runCheckoutStep(ctx, run, "pull", fmt.Sprintf("git -C %s pull --ff-only origin %s", shellQuote(path), shellQuote(branch)), onLine)
+}
+
+// probeDirExists 探测目标机 path 是否存在（不区分文件/目录以外的其它情况，
+// 只用 test -d 语义：存在且是目录才算 true）。
+func probeDirExists(ctx context.Context, run Runner, path string) (bool, error) {
+	cmd := fmt.Sprintf("test -d %s && echo yes || echo no", shellQuote(path))
+	out, _, err := run(ctx, cmd, "")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "yes", nil
+}
+
+// runRemoteGit 在目标机上执行一条 `git -C path ...` 命令。只有 path 经 shellQuote
+// 转义——args 是本包硬编码的子命令/参数字面量（如 "rev-parse"、"--short"），
+// 不是外部输入，转义反而会把字面量的破折号参数拆坏；path 来自项目配置，
+// 可能含空格等特殊字符，必须转义。
+func runRemoteGit(ctx context.Context, run Runner, path string, args ...string) (string, int, error) {
+	cmd := "git -C " + shellQuote(path) + " " + strings.Join(args, " ")
+	return run(ctx, cmd, "")
+}
+
+// runCheckoutStep 执行 EnsureCheckout 的单个步骤：打日志记录开始/结束，
+// 把 host 侧输出逐行转发给 onLine，非零退出或传输失败时构造包含
+// exitCode 与最后 5 行输出的错误，便于定位。
+func runCheckoutStep(ctx context.Context, run Runner, step, cmd string, onLine func(string)) error {
+	log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤开始: %s", step)
+
+	stdout, exitCode, err := run(ctx, cmd, "")
+	lines := splitLines(stdout)
+	for _, line := range lines {
+		if onLine != nil {
+			onLine(line)
+		}
+	}
+
+	if err != nil {
+		log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤 %s 执行异常（传输层故障）: %v", step, err)
+		return fmt.Errorf("步骤 %s 执行异常: %w", step, err)
+	}
+	if exitCode != 0 {
+		tail := lastNLines(lines, 5)
+		log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤 %s 失败, exitCode=%d, 最后输出: %v", step, exitCode, tail)
+		return fmt.Errorf("步骤 %s 失败, exitCode=%d, 最后输出: %s", step, exitCode, strings.Join(tail, "\n"))
+	}
+
+	log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤结束: %s", step)
+	return nil
+}
+
+// splitLines 按换行切分命令输出，丢弃末尾的空行（TrimRight 掉结尾的 "\n" 后再切分），
+// 避免给 onLine 多回调一个空字符串。
+func splitLines(s string) []string {
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+// lastNLines 取切片最后 n 行，用于失败时的错误摘要（避免整段输出把日志刷屏）。
+func lastNLines(lines []string, n int) []string {
+	if len(lines) <= n {
+		return lines
+	}
+	return lines[len(lines)-n:]
+}
+
+// shellQuote 把字符串包装成单引号 shell 字面量，把内部的单引号替换成转义序列：
+//
+//	'\''
+//
+// 为什么需要它：本包所有远端命令都是拼接成字符串交给 Runner 执行的，
+// pipeline/ssh_executor.go:144 的 `cd %s && %s` 就是因为 workDir 未转义，
+// 一旦路径里带空格或特殊字符就会拼出错误的 shell 命令甚至命令注入。
+// 这里的 path/branch/URL 全部来自项目配置或用户输入，同样不可信，
+// 必须在每处拼接前统一转义。单引号转义是 POSIX shell 里唯一在所有场景下
+// 都安全的写法：单引号字面量内部不解释任何字符（包括 $、反引号、反斜杠），
+// 只有单引号自身需要用上面那个转义序列打断字面量、插入一个转义后的单引号、
+// 再重新进入字面量。
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
