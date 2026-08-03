@@ -559,6 +559,13 @@ func (a *App) authorizeOperation(w http.ResponseWriter, r *http.Request, plan op
 			writeApprovalTokenError(w, err, plan)
 			return false, nil
 		}
+		// approved → used 也是一次订阅方可见的状态变更：这条单从「已批准、等着被
+		// 执行」变成「已执行完毕」。它和 approve/reject 一样是急切写入且有天然
+		// 调用点，因此必须在这里 signal——否则所有控制面的 decided 段会一直显示
+		// approved，直到碰巧有别的审批事件把快照顶一次。
+		// （expire 没有 signal 点是另一回事：过期是读路径上的懒扫描，没有这样的
+		// 急切写入点，见 signalApprovalsPublishers 的说明。）
+		a.signalApprovalsPublishers()
 		a.appendOperationAudit(r.Context(), operation.AuditEvent{
 			Kind:       plan.Kind,
 			Action:     operation.AuditExecuted,

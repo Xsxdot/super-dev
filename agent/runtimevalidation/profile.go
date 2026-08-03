@@ -31,16 +31,32 @@ type FoundationMarker struct {
 	BaselinePolicy        string `json:"baseline_policy"`
 }
 
+// FoundationTokenRecordProjection 是 security.State.TokenRecords 的最小投影。
+//
+// 只投 ID/Name：本校验器唯一关心的是「这台机器上有没有已签发的长期控制面凭据」，
+// 也就是记录条数；hash 本身没有校验价值，不必读进来。
+type FoundationTokenRecordProjection struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // FoundationSecurityState 是 strict preflight 从 security.json 读取的最小安全投影。
+//
+// 注意：
+//   - TokenHash 是**已退役**的单凭据字段（security.Store 现在把凭据存在
+//     TokenRecords 里，load 时会把 legacy TokenHash 迁移过去并清空原字段）。
+//     它仍然保留在投影里，是为了挡住尚未被迁移过的历史 security.json；
+//     现役凭据必须看 TokenRecords
 type FoundationSecurityState struct {
-	RequireAuth        bool   `json:"require_auth"`
-	ProvisionState     string `json:"provision_state"`
-	BootstrapTokenHash string `json:"bootstrap_token_hash,omitempty"`
-	TokenHash          string `json:"token_hash,omitempty"`
-	TLSMode            string `json:"tls_mode,omitempty"`
-	CACert             string `json:"ca_cert,omitempty"`
-	ServerCert         string `json:"server_cert,omitempty"`
-	ServerKey          string `json:"server_key,omitempty"`
+	RequireAuth        bool                              `json:"require_auth"`
+	ProvisionState     string                            `json:"provision_state"`
+	BootstrapTokenHash string                            `json:"bootstrap_token_hash,omitempty"`
+	TokenHash          string                            `json:"token_hash,omitempty"`
+	TokenRecords       []FoundationTokenRecordProjection `json:"token_records,omitempty"`
+	TLSMode            string                            `json:"tls_mode,omitempty"`
+	CACert             string                            `json:"ca_cert,omitempty"`
+	ServerCert         string                            `json:"server_cert,omitempty"`
+	ServerKey          string                            `json:"server_key,omitempty"`
 }
 
 // FoundationRuntimeSettings 是 strict browser evaluate 需要的 foundation 最小设置投影。
@@ -124,7 +140,12 @@ func ValidateFoundation(root, expectedProfileID string) (CheckResult, error) {
 	// provisioned/pending-bootstrap 一起出现（见 security.Store.Provision /
 	// adoptBootstrapTokenLocked），理论上已被 notOpen 覆盖；但这里是 fail-closed
 	// 校验器，不信任「理应如此」——被篡改或历史遗留的 security.json 必须显式挡住。
-	if notOpen || security.TLSMode != "off" || security.BootstrapTokenHash != "" || security.TokenHash != "" || security.CACert != "" || security.ServerCert != "" || security.ServerKey != "" {
+	//
+	// TokenRecords 与 TokenHash 必须**两个都查**：多凭据改造后现役凭据落在
+	// token_records 里、token_hash 在 load 时被清空，只查 token_hash 的话，一份
+	// provision_state=open 但带着一堆 token_records 的 security.json 会从这道
+	// 显式检查底下直接溜过去——那正是这段防御要挡的「被篡改/历史遗留」情形。
+	if notOpen || security.TLSMode != "off" || security.BootstrapTokenHash != "" || security.TokenHash != "" || len(security.TokenRecords) != 0 || security.CACert != "" || security.ServerCert != "" || security.ServerKey != "" {
 		return blocked("foundation_security_incompatible", "foundation must use provision_state=open and tls_mode=off without token/certificate state (local access token auth is expected)")
 	}
 	var settings FoundationRuntimeSettings

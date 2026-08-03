@@ -79,9 +79,11 @@ func (a *App) registerApprovalsPublisher(pub *approvalsPublisher) func() {
 // signalApprovalsPublishers 通知全部在线订阅方重新拉取一帧快照。
 //
 // 调用点：handler_operations.go 的 FindOrCreatePending 新建成功、Approve 成功、
-// Reject 成功之后。expire 没有独立调用点——过期只在 store 读路径（List/Get/
-// FindOrCreatePending 内部）懒扫描发生，FindOrCreatePending 的调用点已经覆盖
-// 了「新建时顺带过期旧单」这条路径，不为此另建定时器或额外调用点。
+// Reject 成功、ConsumeToken 成功（approved → used）之后，以及 handler_adoption.go
+// 的纳管审批单新建成功之后。expire 没有独立调用点——过期只在 store 读路径
+// （List/Get/FindOrCreatePending 内部）懒扫描发生，没有对应的急切写入点，
+// FindOrCreatePending 的调用点已经覆盖了「新建时顺带过期旧单」这条路径，
+// 不为此另建定时器或额外调用点。
 func (a *App) signalApprovalsPublishers() {
 	a.approvalsPublisherMu.Lock()
 	publishers := make([]*approvalsPublisher, 0, len(a.approvalsPublishers))

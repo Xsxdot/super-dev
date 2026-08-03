@@ -265,3 +265,51 @@ func TestWsOperationApprovals_NoGoroutineLeakAfterDisconnect(t *testing.T) {
 		return runtime.NumGoroutine() <= baseline+2
 	}, 3*time.Second, 50*time.Millisecond, "goroutines spawned by wsOperationApprovals must not leak after disconnect")
 }
+
+// TestWsOperationApprovals_TokenConsumptionBroadcasts 覆盖 Finding 4：
+// approved → used 是每次「已批准操作真正被执行」时发生的急切状态写入，必须像
+// approve/reject 一样即时广播。没有这个 signal 点，所有订阅方的 decided 段会
+// 一直显示 approved，直到碰巧有别的审批事件把快照顶一次。
+func TestWsOperationApprovals_TokenConsumptionBroadcasts(t *testing.T) {
+	app := newTestAppForPackage(t)
+	app.mu.Lock()
+	app.appendProjectLocked(operationAPIProject(false, false))
+	app.mu.Unlock()
+	srv := newHTTPServerForPackage(t, app)
+
+	// 先把审批推进到 approved 并领到一次性 token，再建立 WS 连接——这样连接
+	// 建立后收到的第一帧基线就是 approved，之后收到的任何帧都只可能由本测试
+	// 触发的 token 消费引起，不会与创建/裁决的信号混淆。
+	required := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, http.StatusForbidden)
+	approvalID := required["approval"].(map[string]any)["id"].(string)
+	_ = postJSONForTest[operationApprovalDecisionResponse](t, srv.URL+"/api/operation-approvals/"+approvalID+"/approve", map[string]any{
+		"note": "approved for token consumption broadcast test",
+	}, http.StatusOK)
+	detail := getJSONForTest[operationApprovalDetailResponse](t, srv.URL+"/api/operation-approvals/"+approvalID, http.StatusOK)
+	require.NotEmpty(t, detail.ApprovalToken)
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/operation-approvals?access_token=" + app.LocalAccessToken()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	var baseline approvalsSnapshot
+	require.NoError(t, conn.ReadJSON(&baseline))
+	require.Len(t, baseline.Decided, 1)
+	require.Equal(t, operation.ApprovalApproved, baseline.Decided[0].Status)
+
+	// 带 token 执行被批准的操作：ConsumeToken 把该单从 approved 翻成 used。
+	ok := postJSONWithHeadersForTest[map[string]string](t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, map[string]string{
+		"X-SuperDev-Approval-Token": detail.ApprovalToken,
+	}, http.StatusOK)
+	require.Equal(t, "starting", ok["status"])
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	var afterConsume approvalsSnapshot
+	require.NoError(t, conn.ReadJSON(&afterConsume), "expected a snapshot frame within 1s of consuming the approval token")
+	require.Len(t, afterConsume.Decided, 1)
+	assert.Equal(t, approvalID, afterConsume.Decided[0].ID)
+	assert.Equal(t, operation.ApprovalUsed, afterConsume.Decided[0].Status)
+	assert.Empty(t, afterConsume.Decided[0].TokenHash, "快照必须脱敏 token 哈希")
+}
