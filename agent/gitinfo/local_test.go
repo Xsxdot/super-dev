@@ -11,6 +11,7 @@ package gitinfo
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,5 +137,40 @@ func TestInspect_AheadWithUpstream(t *testing.T) {
 	}
 	if snap.RemoteURL != bareDir {
 		t.Errorf("RemoteURL = %q, want %q", snap.RemoteURL, bareDir)
+	}
+}
+
+// TestInspect_BareRepo 是一个正确性缺陷的回归测试：`git rev-parse --is-inside-work-tree`
+// 在 bare 仓库（只有对象库、没有工作区）内同样 exit 0，但 stdout 打印的是 "false"。
+// 之前的实现只看 err==nil 就判定 IsRepo=true，会把 bare 仓库误报为普通仓库，
+// 导致后续字段（Branch/Dirty/Ahead）在一个根本没有工作区的目录上被强行探测，取值无意义。
+func TestInspect_BareRepo(t *testing.T) {
+	bareDir := t.TempDir()
+	runGit(t, bareDir, "init", "--bare")
+
+	snap, err := Inspect(context.Background(), bareDir)
+	if err != nil {
+		t.Fatalf("Inspect 对 bare 仓库不应返回 error: %v", err)
+	}
+	if snap.IsRepo {
+		t.Fatalf("bare 仓库没有工作区，应判定 IsRepo=false, got %+v", snap)
+	}
+}
+
+// TestInspect_ContextCancelled 验证 ctx 取消/超时是基础设施故障，必须能与「确实不是仓库」
+// 区分开——调用方（Task 3/4/5 的转移预检）拿 Snapshot 做转移决策，如果把 ctx 超时误判成
+// IsRepo=false，会当成「这里根本不是仓库」处理，结论完全错误。因此这种情况必须返回非 nil error，
+// 而不是像 git 语义降级（无上游/无 origin/detached HEAD）那样静默体现在字段上。
+func TestInspect_ContextCancelled(t *testing.T) {
+	dir := initTestRepo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := Inspect(ctx, dir)
+	if err == nil {
+		t.Fatalf("已取消的 context 应返回非 nil error，不能被静默降级为 IsRepo=false")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error 应可用 errors.Is 判定为 context.Canceled, got %v", err)
 	}
 }

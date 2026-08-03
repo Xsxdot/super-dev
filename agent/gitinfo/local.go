@@ -43,13 +43,22 @@ type Snapshot struct {
 //   - rootPath: 待探测的本地目录绝对路径
 //
 // 返回：
-//   - Snapshot: 探测结果；git 不存在或 rootPath 非 git 仓库时 IsRepo=false，不算错误
-//   - error: 仅在探测流程本身异常（当前实现始终返回 nil，预留给未来扩展）时非空
+//   - Snapshot: 探测结果；git 不存在、rootPath 非 git 仓库、或是 bare 仓库（无工作区）时
+//     IsRepo=false，这些都是「确实如此」的语义，不算错误
+//   - error: 仅当 ctx 被取消/超时时非空。这类基础设施故障必须能被调用方（Task 3/4/5 的转移预检）
+//     与「确实不是仓库/没配上游」区分开——否则超时会被误判成「不是仓库」，做出错误的转移决策
 //
 // 注意：
 //   - 本方法不打日志（预检高频路径，结果由调用方按需呈现），git 二进制缺失除外
-//   - 单条子命令失败按字段级降级，不让整个探测失败（如无上游时 Ahead=-1）
+//   - 子命令因 git 语义失败（无上游/无 origin/detached HEAD）按字段级降级，不让整个探测失败；
+//     但子命令因 ctx 取消/超时失败时立即中断并把 ctx 错误原样上抛，不静默降级
 func Inspect(ctx context.Context, rootPath string) (Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		// 调用方传入的 ctx 在探测开始前就已取消/超时：不做任何探测直接上抛，
+		// 避免被后面的逻辑误吞成 IsRepo=false（那是「确实不是仓库」的语义，含义完全不同）。
+		return Snapshot{}, err
+	}
+
 	if !gitAvailable(ctx) {
 		warnMissingGitOnce.Do(func() {
 			log.Printf("[SuperDev][gitinfo] 未找到 git 可执行文件，本机 git 状态探测将始终返回 IsRepo=false")
@@ -57,27 +66,44 @@ func Inspect(ctx context.Context, rootPath string) (Snapshot, error) {
 		return Snapshot{IsRepo: false}, nil
 	}
 
-	if _, err := runGitCommand(ctx, rootPath, "rev-parse", "--is-inside-work-tree"); err != nil {
+	isWorkTree, err := runGitCommand(ctx, rootPath, "rev-parse", "--is-inside-work-tree")
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// 子命令因 ctx 取消/超时而失败：这是基础设施故障，不是「非仓库」，必须上抛，
+			// 不能被下面一行的降级分支吞掉。
+			return Snapshot{}, ctxErr
+		}
 		// rootPath 不是 git 仓库（或不存在），按契约降级为 IsRepo=false，不报错。
+		return Snapshot{IsRepo: false}, nil
+	}
+	if isWorkTree != "true" {
+		// bare 仓库（只有对象库、没有工作区）该命令同样 exit 0，但 stdout 是 "false"。
+		// 只有真正处于工作区内才算 IsRepo=true，否则后续字段（分支/脏状态）无意义。
 		return Snapshot{IsRepo: false}, nil
 	}
 
 	snap := Snapshot{IsRepo: true}
 
-	// detached HEAD 时 symbolic-ref 会失败，按字段级降级为空分支名。
+	// detached HEAD 时 symbolic-ref 会失败，按字段级降级为空分支名（git 语义失败，非基础设施故障）。
 	if branch, err := runGitCommand(ctx, rootPath, "symbolic-ref", "--short", "HEAD"); err == nil {
 		snap.Branch = branch
+	} else if ctxErr := ctx.Err(); ctxErr != nil {
+		return Snapshot{}, ctxErr
 	}
 
 	// 无 origin 时命令失败，按字段级降级为空 RemoteURL。
 	if remoteURL, err := runGitCommand(ctx, rootPath, "remote", "get-url", "origin"); err == nil {
 		snap.RemoteURL = remoteURL
+	} else if ctxErr := ctx.Err(); ctxErr != nil {
+		return Snapshot{}, ctxErr
 	}
 
 	// status --porcelain 契约：非空输出即存在未提交变更（含未跟踪文件）。
 	// 只看 stdout 与退出码，stderr 丢弃不进错误。
 	if status, err := runGitCommand(ctx, rootPath, "status", "--porcelain"); err == nil {
 		snap.Dirty = status != ""
+	} else if ctxErr := ctx.Err(); ctxErr != nil {
+		return Snapshot{}, ctxErr
 	}
 
 	// 无上游配置时 rev-list 失败，按字段级降级为 -1（见 Ahead 字段注释）。
@@ -87,6 +113,8 @@ func Inspect(ctx context.Context, rootPath string) (Snapshot, error) {
 		} else {
 			snap.Ahead = -1
 		}
+	} else if ctxErr := ctx.Err(); ctxErr != nil {
+		return Snapshot{}, ctxErr
 	} else {
 		snap.Ahead = -1
 	}
