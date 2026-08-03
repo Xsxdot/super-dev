@@ -4,6 +4,8 @@
 职责：
   - 在 workspace tab 或独立路由中展示项目运行状态、流水线、入口配置和项目配置
   - 复用 RuntimeStatusTab、PipelinesTab、ProjectIngressTab、ProjectConfigSurface
+  - 头部下方嵌入 ProjectHomeCard（开发环境归属卡），compact 时该卡收敛为
+    只有徽标一行，避免挤占 workspace tab 头部空间
 
 边界：
   - 不读取路由参数
@@ -12,6 +14,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import OverviewTabs from '@/components/Overview/OverviewTabs.vue'
+import ProjectHomeCard from '@/components/Overview/ProjectHomeCard.vue'
 import RuntimeStatusTab from '@/components/Overview/RuntimeStatusTab.vue'
 import PipelinesTab from '@/components/Overview/PipelinesTab.vue'
 import ProjectIngressTab from '@/components/Overview/ProjectIngressTab.vue'
@@ -69,6 +72,7 @@ function openInstanceLogs(deploymentId: string) {
         <OverviewTabs v-model="activeTab" />
       </div>
     </header>
+    <ProjectHomeCard :project="project" :compact="compact" />
     <RuntimeStatusTab
       v-if="activeTab === 'runtime'"
       :project="project"
