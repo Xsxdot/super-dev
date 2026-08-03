@@ -243,6 +243,9 @@ export default {
       codeDebugOpen: 'Open code debug session',
       codeDebugEvaluate: 'Evaluate in code debug session',
       graceMinutes: 'Grace window (minutes)',
+      decidedTitle: 'Recently Decided',
+      decidedBy: 'Handled by {name}',
+      decidedUnnamed: 'Already handled',
     },
     debugBrowser: {
       title: 'Debug browser',

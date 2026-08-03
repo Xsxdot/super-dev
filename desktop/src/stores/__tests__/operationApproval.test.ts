@@ -4,12 +4,14 @@
  * 职责：
  *   - 验证 pending approvals 加载
  *   - 验证批准/拒绝后刷新
+ *   - 验证 /ws/operation-approvals 快照订阅（decided 段、连接态、断连回退轮询）
+ *   - 验证裁决冲突（409 approval_already_decided）写入 conflictNotice 而非 error
  *
  * 边界：
  *   - 不访问真实 agent API
  */
 import { setActivePinia, createPinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentAPIError, api } from '@/api/agent'
 import { useOperationApprovalStore } from '@/stores/operationApproval'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -19,6 +21,52 @@ const notifyOperationApprovalMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/operationApprovalNotification', () => ({
   notifyOperationApproval: notifyOperationApprovalMock,
 }))
+
+vi.mock('@/api/agent', async () => {
+  const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
+  return {
+    ...actual,
+    operationApprovalsWsUrl: vi.fn(() => Promise.resolve('ws://agent/ws/operation-approvals')),
+  }
+})
+
+// FakeWebSocket 模拟浏览器 WebSocket，供测试直接驱动 onopen/onmessage/onclose，
+// 抄自 portMirror store 测试的同款 fixture。
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = []
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onclose: (() => void) | null = null
+  onerror: (() => void) | null = null
+  closed = false
+  url: string
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+  }
+
+  close() {
+    this.closed = true
+    this.onclose?.()
+  }
+
+  emit(data: unknown) {
+    this.onmessage?.({ data: JSON.stringify(data) })
+  }
+
+  serverClose() {
+    this.onclose?.()
+  }
+}
+
+// flushMicrotasks 只让微任务队列跑完，不依赖 setTimeout——测试里部分用例开了
+// vi.useFakeTimers()，宏任务型的 setTimeout(resolve, 0) 在假时钟下不会自己触发。
+async function flushMicrotasks() {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
 
 function pendingApproval(id = 'opa_1') {
   return {
@@ -44,6 +92,13 @@ describe('operationApproval store', () => {
     setActivePinia(createPinia())
     vi.restoreAllMocks()
     notifyOperationApprovalMock.mockResolvedValue(undefined)
+    FakeWebSocket.instances = []
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
   })
 
   it('loads pending approvals', async () => {
@@ -417,5 +472,116 @@ describe('operationApproval store', () => {
 
     expect(handled).toBe(true)
     expect(notifyOperationApprovalMock).toHaveBeenCalledWith(captured)
+  })
+
+  describe('decided approvals snapshot', () => {
+    it('makes decided approvals queryable after applying a snapshot', () => {
+      const store = useOperationApprovalStore()
+      const decidedApproval = {
+        id: 'opa_done',
+        status: 'approved',
+        decided_by: '本机',
+        plan: { id: 'op_done', kind: 'runtime.restart', target: {}, risk_level: 'high', requires_approval: true, denied: false, fingerprint: 'fp_done' },
+      } as any
+
+      store.applySnapshot({ pending: [], decided: [decidedApproval] })
+
+      expect(store.decided).toEqual([decidedApproval])
+    })
+
+    it('replaces decided/pending wholesale on each snapshot instead of merging', () => {
+      const store = useOperationApprovalStore()
+      store.applySnapshot({ pending: [pendingApproval('opa_1')], decided: [{ id: 'opa_old', status: 'used' } as any] })
+
+      store.applySnapshot({ pending: [], decided: [{ id: 'opa_new', status: 'approved', decided_by: '本机' } as any] })
+
+      expect(store.decided).toEqual([{ id: 'opa_new', status: 'approved', decided_by: '本机' }])
+      expect(store.pendingCount).toBe(0)
+    })
+  })
+
+  describe('websocket subscription', () => {
+    it('opens /ws/operation-approvals when polling starts and applies snapshot frames', async () => {
+      vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+      const store = useOperationApprovalStore()
+
+      store.startPolling()
+      await flushMicrotasks()
+
+      expect(FakeWebSocket.instances).toHaveLength(1)
+      expect(FakeWebSocket.instances[0].url).toBe('ws://agent/ws/operation-approvals')
+
+      FakeWebSocket.instances[0].onopen?.()
+      expect(store.connected).toBe(true)
+
+      FakeWebSocket.instances[0].emit({
+        pending: [pendingApproval('opa_live')],
+        decided: [{ id: 'opa_done', status: 'approved', decided_by: '远程控制面 A' }],
+      })
+
+      expect(store.pendingCount).toBe(1)
+      expect(store.decided).toEqual([{ id: 'opa_done', status: 'approved', decided_by: '远程控制面 A' }])
+
+      store.stopPolling()
+    })
+
+    it('falls back to 2s polling to keep driving pendingCount after the websocket disconnects', async () => {
+      vi.useFakeTimers()
+      vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([pendingApproval('opa_fallback')])
+      const store = useOperationApprovalStore()
+
+      store.startPolling()
+      await flushMicrotasks()
+      FakeWebSocket.instances[0].onopen?.()
+      expect(store.connected).toBe(true)
+
+      // 连接期间轮询不应重复拉取——即便定时器触发，也应因 connected 为 true 而跳过。
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(api.listOperationApprovals).not.toHaveBeenCalled()
+
+      FakeWebSocket.instances[0].serverClose()
+      expect(store.connected).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(2000)
+
+      expect(api.listOperationApprovals).toHaveBeenCalled()
+      expect(store.pendingCount).toBe(1)
+
+      store.stopPolling()
+    })
+  })
+
+  describe('decision conflicts (409 approval_already_decided)', () => {
+    it('records conflictNotice without entering error state when approve loses the race', async () => {
+      const conflictErr = new AgentAPIError('already decided', 409, {
+        code: 'approval_already_decided',
+        error: 'already decided',
+        decided_by: '远程控制面 A',
+      })
+      vi.spyOn(api, 'approveOperationApproval').mockRejectedValue(conflictErr)
+      vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+      const store = useOperationApprovalStore()
+      await store.approve('opa_1', 'ok')
+
+      expect(store.conflictNotice).toEqual({ id: 'opa_1', decidedBy: '远程控制面 A' })
+      expect(store.error).toBe('')
+    })
+
+    it('records conflictNotice without entering error state when reject loses the race', async () => {
+      const conflictErr = new AgentAPIError('already decided', 409, {
+        code: 'approval_already_decided',
+        error: 'already decided',
+        decided_by: '本机',
+      })
+      vi.spyOn(api, 'rejectOperationApproval').mockRejectedValue(conflictErr)
+      vi.spyOn(api, 'listOperationApprovals').mockResolvedValue([])
+
+      const store = useOperationApprovalStore()
+      await store.reject('opa_2', 'no')
+
+      expect(store.conflictNotice).toEqual({ id: 'opa_2', decidedBy: '本机' })
+      expect(store.error).toBe('')
+    })
   })
 })

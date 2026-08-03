@@ -243,6 +243,9 @@ export default {
       codeDebugOpen: '打开代码调试会话',
       codeDebugEvaluate: '代码调试会话中求值',
       graceMinutes: '免审窗口（分钟）',
+      decidedTitle: '最近已裁决',
+      decidedBy: '已由 {name} 处理',
+      decidedUnnamed: '已处理',
     },
     debugBrowser: {
       title: '调试浏览器',

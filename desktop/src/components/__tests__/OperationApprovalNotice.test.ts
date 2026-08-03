@@ -146,6 +146,60 @@ describe('OperationApprovalNotice', () => {
     expect(wrapper.text()).toContain('approval failed')
   })
 
+  it('switches to a grayed-out conflict notice and hides approve/reject when conflictNotice matches the active notice', () => {
+    const store = useOperationApprovalStore()
+    store.notice = {
+      approval_id: 'opa_1',
+      kind: 'runtime.restart',
+      target_summary: 'prod / api',
+    }
+    store.conflictNotice = { id: 'opa_1', decidedBy: '远程控制面 A' }
+
+    const wrapper = mount(OperationApprovalNotice, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect(wrapper.find('[data-test="operation-approval-conflict"]').text()).toContain('已由 远程控制面 A 处理')
+    expect(wrapper.find('[data-test="operation-approval-section-actions"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="operation-approval-approve"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="operation-approval-reject"]').exists()).toBe(false)
+  })
+
+  it('shows an unnamed conflict message when the winning control plane has no display name', () => {
+    const store = useOperationApprovalStore()
+    store.notice = {
+      approval_id: 'opa_1',
+      kind: 'runtime.restart',
+      target_summary: 'prod / api',
+    }
+    store.conflictNotice = { id: 'opa_1', decidedBy: '' }
+
+    const wrapper = mount(OperationApprovalNotice, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    const conflict = wrapper.find('[data-test="operation-approval-conflict"]')
+    expect(conflict.text()).toContain('已处理')
+    expect(conflict.text()).not.toContain('已由')
+  })
+
+  it('does not show the conflict view when conflictNotice belongs to a different approval', () => {
+    const store = useOperationApprovalStore()
+    store.notice = {
+      approval_id: 'opa_1',
+      kind: 'runtime.restart',
+      target_summary: 'prod / api',
+    }
+    store.conflictNotice = { id: 'opa_other', decidedBy: '远程控制面 A' }
+
+    const wrapper = mount(OperationApprovalNotice, {
+      global: { plugins: [installTestI18n('zh-CN')] },
+    })
+
+    expect(wrapper.find('[data-test="operation-approval-conflict"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="operation-approval-section-actions"]').exists()).toBe(true)
+  })
+
   it('shows retry copy when approval already succeeded but execution failed', () => {
     const store = useOperationApprovalStore()
     store.notice = {

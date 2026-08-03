@@ -22,11 +22,12 @@ export function agentUninstallScriptURL(name: AgentUninstallScriptName): string 
 // AgentAPIErrorPayload 描述 agent 结构化错误响应。
 //
 // 参数：
-//   - code: 稳定错误码，例如 approval_required
+//   - code: 稳定错误码，例如 approval_required、approval_already_decided
 //   - error: 可展示错误信息
 //   - stage: 生命周期操作的稳定失败阶段
 //   - plan: operation 预检计划
 //   - approval: 待处理审批请求
+//   - decided_by: code 为 approval_already_decided 时，服务端从裁决方凭据推导的展示名
 //   - data: 错误码特有的结构化副作用或恢复上下文
 //
 // 注意：
@@ -37,6 +38,7 @@ export interface AgentAPIErrorPayload {
   stage?: string
   plan?: OperationPlan
   approval?: OperationApproval
+  decided_by?: string
   data?: unknown
 }
 
@@ -59,6 +61,7 @@ export class AgentAPIError extends Error {
   stage?: string
   plan?: OperationPlan
   approval?: OperationApproval
+  decided_by?: string
   data?: unknown
 
   constructor(message: string, status: number, payload?: AgentAPIErrorPayload) {
@@ -69,6 +72,7 @@ export class AgentAPIError extends Error {
     this.stage = payload?.stage
     this.plan = payload?.plan
     this.approval = payload?.approval
+    this.decided_by = payload?.decided_by
     this.data = payload?.data
   }
 }
@@ -85,6 +89,22 @@ export class AgentAPIError extends Error {
 //   - 调用方仍需通过审批页批准并取得一次性 token 后才能重试操作
 export function isApprovalRequiredError(error: unknown): error is AgentAPIError & { approval: OperationApproval } {
   return error instanceof AgentAPIError && error.code === 'approval_required' && !!error.approval
+}
+
+// isApprovalAlreadyDecidedError 判断错误是否为「该审批已被其他控制面裁决」的冲突响应（HTTP 409）。
+//
+// 参数：
+//   - error: 任意捕获到的异常值
+//
+// 返回：
+//   - true 表示 code 为 approval_already_decided，decided_by 携带获胜控制面的展示名
+//
+// 注意：
+//   - 这是双控制面并发裁决下的常态信息，不是错误——调用方不应据此进入 error 态
+//   - decided_by 由服务端从裁决方凭据推导，可能因裁决方展示名缺失而为空字符串，
+//     调用方渲染时需与「有名字」区分，不要拼出「已由  处理」这种空洞文案
+export function isApprovalAlreadyDecidedError(error: unknown): error is AgentAPIError & { decided_by?: string } {
+  return error instanceof AgentAPIError && error.code === 'approval_already_decided'
 }
 
 // requestHeaders 组装请求公共头并注入本机 agent token。
@@ -919,6 +939,23 @@ export interface OperationApprovalDecision {
   approval: OperationApproval
   grace_granted: boolean
   grace_expires_at?: string
+}
+
+// OperationApprovalsSnapshot 是 /ws/operation-approvals 每帧推送的全量快照。
+//
+// 参数：
+//   - pending: 当前待裁决审批
+//   - decided: 最近已终结的审批（approved/rejected/expired/used），24h 内按 updated_at
+//     降序、最多 50 条
+//
+// 注意：
+//   - 两段都是全量快照，不是增量事件——收到即整体替换本地状态，不做增量 merge，
+//     天然对丢帧免疫（与 /ws/port-mirrors 同一套契约，见 portMirror store 注释）
+//   - decided 段里 expired 终态没有裁决人，decided_by 是空字符串；渲染时必须与
+//     「有 decided_by」的场景区分，不要拼出「已由  处理」这种空洞文案
+export interface OperationApprovalsSnapshot {
+  pending: OperationApproval[]
+  decided: OperationApproval[]
 }
 
 export interface OperationAuditEvent {
@@ -2092,6 +2129,11 @@ export async function nodesWsUrl(): Promise<string> {
 /** portMirrorWsUrl 返回端口镜像状态 WebSocket URL（同上，附带 access_token）。 */
 export async function portMirrorWsUrl(): Promise<string> {
   return withWsToken(`${WS_BASE}/ws/port-mirrors`)
+}
+
+/** operationApprovalsWsUrl 返回操作审批快照 WebSocket URL（同上，附带 access_token）。 */
+export async function operationApprovalsWsUrl(): Promise<string> {
+  return withWsToken(`${WS_BASE}/ws/operation-approvals`)
 }
 
 /** runLogsWsUrl 返回指定 pipeline run 的 WebSocket 日志流 URL（同上，附带 access_token）。 */

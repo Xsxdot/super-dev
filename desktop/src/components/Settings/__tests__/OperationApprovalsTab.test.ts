@@ -235,4 +235,56 @@ describe('OperationApprovalsTab', () => {
     expect(source).toMatch(/\.policy-toggle\s*\{[^}]*gap:\s*8px;/s)
     expect(source).not.toMatch(/\.policy-toggle,\s*\.policy-number\s*\{[^}]*justify-content:\s*space-between;/s)
   })
+
+  it('renders a grayed-out recently-decided section with the handler name', () => {
+    const store = useOperationApprovalStore()
+    store.decided = [{
+      id: 'opa_done',
+      status: 'approved',
+      decided_by: '远程控制面 A',
+      plan: {
+        id: 'op_done',
+        kind: 'runtime.restart',
+        target: { deployment_id: 'api-prod' },
+        target_summary: 'demo/prod/api',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'sha256:done',
+      },
+    } as any]
+    vi.spyOn(useOperationApprovalStore(), 'loadPending').mockResolvedValue(undefined)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    const item = wrapper.find('[data-test="approval-decided-item-opa_done"]')
+
+    expect(item.exists()).toBe(true)
+    expect(item.text()).toContain('已由 远程控制面 A 处理')
+  })
+
+  it('shows an unnamed handled message when a decided entry has no decided_by (expired/used)', () => {
+    const store = useOperationApprovalStore()
+    store.decided = [{
+      id: 'opa_expired',
+      status: 'expired',
+      decided_by: '',
+      plan: {
+        id: 'op_expired',
+        kind: 'runtime.restart',
+        target: { deployment_id: 'api-prod' },
+        target_summary: 'demo/prod/api',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'sha256:expired',
+      },
+    } as any]
+    vi.spyOn(useOperationApprovalStore(), 'loadPending').mockResolvedValue(undefined)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    const item = wrapper.find('[data-test="approval-decided-item-opa_expired"]')
+
+    expect(item.text()).toContain('已处理')
+    expect(item.text()).not.toContain('已由')
+  })
 })

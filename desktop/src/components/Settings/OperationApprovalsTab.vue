@@ -4,6 +4,8 @@
 职责：
   - 展示待处理 operation approval
   - 提供批准/拒绝入口
+  - 展示「最近已裁决」分节（store.decided，来自 /ws/operation-approvals 快照），
+    行灰化样式 + 标注裁决方，让本控制面之外的裁决结果也能在这里看到
 
 边界：
   - 不计算风险等级
@@ -89,6 +91,17 @@ async function saveApprovalSettings() {
 function shortFingerprint(approval: OperationApproval): string {
   const fp = approval.plan.fingerprint || ''
   return fp.length > 18 ? `${fp.slice(0, 18)}...` : fp
+}
+
+// decidedLabel 渲染「最近已裁决」行的归属文案。
+//
+// 注意：
+//   - expired 终态没有裁决人，approval.decided_by 是空字符串——必须与「有
+//     decided_by」区分开，否则会拼出「已由  处理」这种空洞文案（见 store 注释）
+function decidedLabel(approval: OperationApproval): string {
+  return approval.decided_by
+    ? t('settings.approvals.decidedBy', { name: approval.decided_by })
+    : t('settings.approvals.decidedUnnamed')
 }
 </script>
 
@@ -223,6 +236,28 @@ function shortFingerprint(approval: OperationApproval): string {
         </div>
       </article>
     </div>
+
+    <section v-if="store.decided.length" class="approval-decided-section" data-test="approval-decided-section">
+      <h2 class="approval-decided-title">{{ t('settings.approvals.decidedTitle') }}</h2>
+      <div class="approval-list">
+        <article
+          v-for="approval in store.decided"
+          :key="approval.id"
+          class="settings-card approval-item approval-item-decided"
+          :data-test="`approval-decided-item-${approval.id}`"
+        >
+          <div class="approval-main">
+            <div class="approval-title">
+              <strong>{{ approval.plan.kind }}</strong>
+              <span class="settings-badge risk-badge">{{ t('settings.approvals.risk') }} {{ approval.plan.risk_level }}</span>
+            </div>
+            <p>{{ approval.plan.target_summary || approval.plan.target.deployment_id || approval.plan.target.template_path }}</p>
+            <p class="fingerprint">{{ shortFingerprint(approval) }}</p>
+          </div>
+          <p class="approval-decided-by">{{ decidedLabel(approval) }}</p>
+        </article>
+      </div>
+    </section>
   </section>
 </template>
 
@@ -339,6 +374,28 @@ ul {
 }
 .approval-actions {
   gap: 8px;
+}
+.approval-decided-section {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+.approval-decided-title {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+}
+/* 灰化：已有裁决方胜出的记录只用于回溯，不再需要用户操作，弱化视觉权重。 */
+.approval-item-decided {
+  grid-template-columns: minmax(180px, 1fr) auto;
+  opacity: 0.62;
+}
+.approval-decided-by {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
 }
 @media (max-width: 760px) {
   .approval-item {
