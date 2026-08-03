@@ -24,9 +24,18 @@ import (
 )
 
 // getProjectConfig 处理 GET /api/projects/{id}/config。
+//
+// 归属路由：项目已归属另一台节点时原样转发（config get/save/upsert 属于
+// project_home_routing.go 白名单接入点第 3 项），本机保留的 project.yaml
+// 副本转移之后即视为过期镜像，读取必须去归属节点。
 func (a *App) getProjectConfig(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	if home := a.homeRouteTargetForProject(projectID); home != "" {
+		a.forwardToHome(w, r, home)
+		return
+	}
 	a.mu.RLock()
-	project, ok := a.findProject(r.PathValue("id"))
+	project, ok := a.findProject(projectID)
 	a.mu.RUnlock()
 	if !ok {
 		jsonError(w, http.StatusNotFound, "project not found")
@@ -36,7 +45,15 @@ func (a *App) getProjectConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // previewConfigChange 处理 POST /api/config-changes/preview。
+//
+// 归属路由：见 getProjectConfig 注释；preview 与 apply 共用同一个
+// ChangeRequest 形状，用 homeRouteTargetForChangeRequest 从请求体解析目标
+// 项目 ID 后判定是否需要转发。
 func (a *App) previewConfigChange(w http.ResponseWriter, r *http.Request) {
+	if home := a.homeRouteTargetForChangeRequest(r); home != "" {
+		a.forwardToHome(w, r, home)
+		return
+	}
 	preview, status, msg := a.buildConfigChangePreview(r)
 	if status != http.StatusOK {
 		jsonError(w, status, msg)
@@ -46,7 +63,15 @@ func (a *App) previewConfigChange(w http.ResponseWriter, r *http.Request) {
 }
 
 // applyConfigChange 处理 POST /api/config-changes/apply。
+//
+// 归属路由：转发判定必须在 authorizeOperation 之前——归属机对转发到达的
+// 请求会按它自己的安全策略重新裁决，本机不需要（也不应该）为一个即将
+// 转发出去的操作先审批一次。
 func (a *App) applyConfigChange(w http.ResponseWriter, r *http.Request) {
+	if home := a.homeRouteTargetForChangeRequest(r); home != "" {
+		a.forwardToHome(w, r, home)
+		return
+	}
 	preview, status, msg := a.buildConfigChangePreview(r)
 	if status != http.StatusOK {
 		jsonError(w, status, msg)

@@ -75,6 +75,13 @@ func (a *App) controlDeploymentRuntime(w http.ResponseWriter, r *http.Request, k
 		jsonError(w, http.StatusNotFound, "deployment not found")
 		return
 	}
+	// 归属路由：项目 dev 环境已归属另一台节点时，运行控制请求原样转发到
+	// 归属 agent，绝不在本机执行——必须在 authorizeOperation 之前短路，
+	// 归属机会按它自己的策略重新裁决（见 project_home_routing.go 文件头）。
+	if home := a.homeRouteTargetForDeployment(p, dep.EnvName); home != "" {
+		a.forwardToHome(w, r, home)
+		return
+	}
 	runDep := dep
 	var err error
 	var plan operation.Plan

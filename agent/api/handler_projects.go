@@ -462,6 +462,11 @@ func (a *App) startEnvSelected(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "project not found")
 		return
 	}
+	// 归属路由：dev 环境已归属另一台节点时原样转发，见 project_home_routing.go。
+	if home := a.homeRouteTargetForDeployment(p, envName); home != "" {
+		a.forwardToHome(w, r, home)
+		return
+	}
 
 	selectedNames := map[string]struct{}{}
 	if p.EnvSelectedServiceIDs != nil {
