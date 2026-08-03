@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/configchange"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/security"
 	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
@@ -65,6 +67,13 @@ type operationTargetRequest struct {
 	Remove         bool                               `json:"remove,omitempty"`
 }
 
+// operationDecisionRequest 是 approve/reject 接口的请求体。
+//
+// 注意：
+//   - DecidedBy 字段仅为兼容旧版桌面客户端（历史上恒发字符串 "user"）而保留解析，
+//     解析后不会被采用——裁决方身份绝不信任客户端自报，服务器侧一律改用
+//     security.PrincipalFrom(r.Context()) 从已验证凭据推导出的展示名，
+//     否则审计里永远看不出真实批准人是谁。
 type operationDecisionRequest struct {
 	DecidedBy  string `json:"decided_by"`
 	Note       string `json:"note"`
@@ -121,7 +130,7 @@ func (a *App) getOperationApproval(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		writeOperationStoreError(w, err)
+		writeOperationStoreError(w, err, "")
 		return
 	}
 	jsonOK(w, operationApprovalDetailResponse{Approval: sanitizeOperationApproval(approval), ApprovalToken: token})
@@ -134,18 +143,23 @@ func (a *App) approveOperationApproval(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	approval, err := a.operationApprovals.Approve(r.Context(), r.PathValue("id"), req.DecidedBy, req.Note)
+	// 裁决方身份只认服务器侧已验证凭据推导，绝不信任请求体自报的 decided_by
+	// （req.DecidedBy 解析后直接丢弃）——见 operationDecisionRequest 的字段注释。
+	decidedByName, principalType, principalID := principalFromRequest(r)
+	id := r.PathValue("id")
+	approval, err := a.operationApprovals.Approve(r.Context(), id, decidedByName, req.Note)
 	if err != nil {
-		writeOperationStoreError(w, err)
+		writeOperationStoreError(w, err, a.decisionConflictWinner(r.Context(), id, err, "approve"))
 		return
 	}
+	log.Printf("[SuperDev] approval 裁决 id=%s action=approve by=%s(%s)", approval.ID, decidedByName, principalType)
 	a.appendOperationAudit(r.Context(), operation.AuditEvent{
 		Kind:       approval.Plan.Kind,
 		Action:     operation.AuditApproved,
 		ApprovalID: approval.ID,
 		Plan:       approval.Plan,
 		Summary:    "operation approval approved",
-		Data:       map[string]any{"decided_by": approval.DecidedBy},
+		Data:       map[string]any{"decided_by": approval.DecidedBy, "principal_type": principalType, "principal_id": principalID},
 	})
 
 	graceGranted := false
@@ -181,20 +195,64 @@ func (a *App) rejectOperationApproval(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	approval, err := a.operationApprovals.Reject(r.Context(), r.PathValue("id"), req.DecidedBy, req.Note)
+	// 裁决方身份只认服务器侧已验证凭据推导，绝不信任请求体自报的 decided_by
+	// （req.DecidedBy 解析后直接丢弃）——见 operationDecisionRequest 的字段注释。
+	decidedByName, principalType, principalID := principalFromRequest(r)
+	id := r.PathValue("id")
+	approval, err := a.operationApprovals.Reject(r.Context(), id, decidedByName, req.Note)
 	if err != nil {
-		writeOperationStoreError(w, err)
+		writeOperationStoreError(w, err, a.decisionConflictWinner(r.Context(), id, err, "reject"))
 		return
 	}
+	log.Printf("[SuperDev] approval 裁决 id=%s action=reject by=%s(%s)", approval.ID, decidedByName, principalType)
 	a.appendOperationAudit(r.Context(), operation.AuditEvent{
 		Kind:       approval.Plan.Kind,
 		Action:     operation.AuditRejected,
 		ApprovalID: approval.ID,
 		Plan:       approval.Plan,
 		Summary:    "operation approval rejected",
-		Data:       map[string]any{"decided_by": approval.DecidedBy},
+		Data:       map[string]any{"decided_by": approval.DecidedBy, "principal_type": principalType, "principal_id": principalID},
 	})
 	jsonOK(w, sanitizeOperationApproval(approval))
+}
+
+// principalFromRequest 从已验证凭据推导裁决方展示名/类型/ID。
+//
+// 参数：
+//   - r: 已经过 withSecurity 中间件的请求；Principal 挂在其 context 上
+//
+// 返回：
+//   - 展示名、Principal 类型（local/remote）、Principal 稳定 ID
+//
+// 注意：
+//   - Principal 缺失（如测试假件直接调用 handler、绕过 withSecurity 中间件的路径）
+//     时三者一律回退 "unknown"，不 panic 也不 401——鉴权判定是 withSecurity 的职责，
+//     这里只负责「有 Principal 就用，没有就诚实地说不知道」
+func principalFromRequest(r *http.Request) (name string, principalType string, id string) {
+	p, ok := security.PrincipalFrom(r.Context())
+	if !ok {
+		return "unknown", "unknown", "unknown"
+	}
+	return p.Name, string(p.Type), p.ID
+}
+
+// decisionConflictWinner 在裁决冲突（approval 已是终态）时，从 store 现取真正的
+// 胜者 DecidedBy，供 409 响应体回显；非冲突错误直接返回空串。
+//
+// 为什么现取而不是复用请求方自己的身份：409 时"谁赢了"和"这次请求是谁发的"是
+// 两码事——本次请求的 Principal 只是败者，只有重新 Get 一次才能读到抢先裁决成功
+// 的那一方；Get 失败（理论上不会，Approve/Reject 已经用同一个 id 命中过记录）时
+// 宁可返回空串也不 500，避免把一个次要的可观测性缺口升级成整个 409 响应失败。
+func (a *App) decisionConflictWinner(ctx context.Context, id string, err error, action string) string {
+	if !errors.Is(err, operation.ErrApprovalAlreadyDecided) {
+		return ""
+	}
+	winner := ""
+	if existing, getErr := a.operationApprovals.Get(ctx, id); getErr == nil {
+		winner = existing.DecidedBy
+	}
+	log.Printf("[SuperDev] approval 裁决冲突 id=%s action=%s 已由 %s 裁决", id, action, winner)
+	return winner
 }
 
 // listOperationAudit 处理 GET /api/operation-audit。
@@ -499,10 +557,19 @@ func jsonCodeError(w http.ResponseWriter, status int, code string, msg string, d
 	jsonWrite(w, status, payload)
 }
 
-func writeOperationStoreError(w http.ResponseWriter, err error) {
+// writeOperationStoreError 把 operation store 的错误映射为稳定的 HTTP 状态码 + code。
+//
+// 参数：
+//   - decidedBy: 仅 ErrApprovalAlreadyDecided 分支使用，回显真正裁决成功的胜者身份，
+//     供客户端展示"这单已经被谁处理了"；其余错误分支忽略该参数，调用方可传空串
+func writeOperationStoreError(w http.ResponseWriter, err error, decidedBy string) {
 	switch {
 	case errors.Is(err, operation.ErrApprovalNotFound):
 		jsonCodeError(w, http.StatusNotFound, "approval_not_found", "approval not found", nil)
+	case errors.Is(err, operation.ErrApprovalAlreadyDecided):
+		// 409：approved 是终态，第二个控制面的裁决请求（无论 approve 还是 reject）
+		// 都不能覆盖或翻案第一个裁决者，见 operation.ensureApprovalDecisionAllowed。
+		jsonCodeError(w, http.StatusConflict, "approval_already_decided", "approval already decided", map[string]any{"decided_by": decidedBy})
 	case errors.Is(err, operation.ErrApprovalRejected):
 		jsonCodeError(w, http.StatusForbidden, "approval_rejected", "approval rejected", nil)
 	case errors.Is(err, operation.ErrApprovalExpired):
