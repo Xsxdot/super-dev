@@ -1156,11 +1156,16 @@ func unionProjectsForReconcile(before, after model.Project) []model.Project {
 }
 
 func (a *App) registerProjectBackendsLocked(p model.Project) {
+	// devEnvs/homeHostID 对整个项目只需算一次：dev 环境集合与归属主机都是
+	// 项目级信息，不随 deployment 变化——归属路由（Task 8）据此判定每个
+	// dev deployment 的日志 backend 是否要转指归属机。
+	devEnvs := devEnvSet(p)
+	homeHostID := a.projectHomeOf(p.ID)
 	for _, svc := range p.Services {
 		for _, dep := range svc.Deployments {
 			// 新增项目和启动时加载项目必须共享同一套 backend 构建逻辑，
 			// 否则运行期注册项目后 deployment 日志接口会短暂或永久 404。
-			b := buildBackend(dep, svc.ID, a.store, a.buf, a.nodeTransport)
+			b := buildBackend(dep, svc.ID, a.store, a.buf, a.nodeTransport, devEnvs[dep.EnvName], homeHostID)
 			a.backends[dep.ID] = b
 		}
 	}

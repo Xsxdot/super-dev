@@ -463,13 +463,16 @@ func (a *App) transferAssetAudit(ctx context.Context, run *transferRun, deps *tr
 
 // transferSwitchHome 切换项目归属到目标机。
 //
-// Task 8 注意：归属变更后需重建后端日志路由（把该项目的日志读取指向目标机），
-// 该重建是 Task 8 的职责——本步骤只调 SetHome，Task 8 应在此调用点
-// （transferSwitchHome）之后接管日志路由重建。
+// SetHome 生效后立即调用 rebuildProjectBackendsOnHomeChange：a.backends 是
+// 按 dep.ID 缓存的 LogBackend 实例，只在 register 时按当时的归属状态构建
+// 一次，SetHome 本身不会让已缓存的实例感知归属变化——不重建的话，归属切换
+// 后下一次日志读取仍会打向本机 SQLite，直到进程重启或其他偶然触发
+// register 的操作发生，期间日志读取悄悄读错机器且没有任何报错提示。
 func (a *App) transferSwitchHome(_ context.Context, run *transferRun, _ *transferDeps) (string, error) {
 	if err := a.projectHomeStore.SetHome(run.projectID, run.hostID); err != nil {
 		return "切换归属", err
 	}
+	a.rebuildProjectBackendsOnHomeChange(run.projectID, run.hostID)
 	return fmt.Sprintf("归属已切换到 %s(%s)", run.hostName, run.hostID), nil
 }
 
@@ -528,11 +531,57 @@ func (a *App) transferPullLocal(ctx context.Context, _ *transferRun, deps *trans
 }
 
 // transferSwitchHomeBack 清除归属，迁回本机（SetHome 传空串）。
+//
+// 同 transferSwitchHome，清除归属后同样必须重建 backend，否则本机日志读取
+// 会继续误转发给已经不再是归属机的旧目标（buildBackend 缓存的
+// RemoteAgentBackend 不会因为 SetHome("") 自动失效）。
 func (a *App) transferSwitchHomeBack(_ context.Context, run *transferRun, _ *transferDeps) (string, error) {
 	if err := a.projectHomeStore.SetHome(run.projectID, ""); err != nil {
 		return "迁回本机（清除归属）", err
 	}
+	a.rebuildProjectBackendsOnHomeChange(run.projectID, "")
 	return "归属已迁回本机", nil
+}
+
+// rebuildProjectBackendsOnHomeChange 在项目归属变更（切换到新机或清除回本机）
+// 生效后，重建该项目的日志读取 backend（Task 8：归属路由——日志链路）。
+//
+// 参数：
+//   - projectID: 归属发生变化的项目
+//   - newHomeHostID: 变更后的归属主机 ID；空串表示清除归属、迁回本机
+//
+// 为什么必须重建：a.backends 是按 dep.ID 缓存的 LogBackend 实例，只在
+// registerProjectBackendsLocked 时依据当时的归属状态构建一次；SetHome
+// 只改落盘/内存的归属记录本身，不会让已缓存的 backend 感知变化。清除 +
+// 重新注册（复用 clearProjectBackendsLocked/registerProjectBackendsLocked
+// 既有惯例，与 handler_vscode.go/handler_config_changes.go 等其余重建点
+// 同一套写法）能让下一次日志读取立刻用上新的归属路由。
+//
+// 加锁：clearProjectBackendsLocked/registerProjectBackendsLocked/findProject
+// 均要求调用方持有 a.mu；本函数持有完整写锁 Lock（而非 RLock），因为
+// register 会写 a.backends 这张共享 map。transferSwitchHome(Back) 调用本
+// 函数前不持有 a.mu（转移引擎的 project 快照在 transferProjectSnapshot 里
+// 已经 RLock 后立即释放），这里新取一次 Lock 不会自锁。
+func (a *App) rebuildProjectBackendsOnHomeChange(projectID, newHomeHostID string) {
+	a.mu.Lock()
+	project, ok := a.findProject(projectID)
+	if ok {
+		a.clearProjectBackendsLocked(project)
+		a.registerProjectBackendsLocked(project)
+	}
+	a.mu.Unlock()
+
+	if !ok {
+		// 项目在归属切换的同时被删除，理论上不该发生（转移引擎全程持有
+		// 该项目的执行上下文），防御性跳过，不重复报错——SetHome 本身已经
+		// 成功，缺失项目不影响归属状态的正确性，只是没有 backend 可重建。
+		return
+	}
+	homeDesc := newHomeHostID
+	if homeDesc == "" {
+		homeDesc = "本机"
+	}
+	log.Printf("[SuperDev] home-transfer: 归属变更触发 backend 重建 project=%s new_home=%s", projectID, homeDesc)
 }
 
 // ---- 依赖解析 / 快照 ----
