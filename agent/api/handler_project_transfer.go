@@ -176,9 +176,14 @@ func (a *App) transferPreflight(w http.ResponseWriter, r *http.Request) {
 			Detail: "目标目录已是本机仓库的同源检出（远端地址一致），转移执行时将 fetch + pull 到最新提交",
 		})
 	default:
+		// 秘密红线：RemoteURL 可能内嵌凭据（https://user:token@host/... 或
+		// https://ghp_xxx@host/...），这条 Detail 会原样进入 HTTP 响应体，
+		// 绝不能把凭据原文吐给调用方——用 stripURLCredentials（Task 5 在
+		// project_transfer_engine.go 里已为 clone 路径加过同款红线摘除）
+		// 把两个 URL 都摘除 userinfo 后再拼进人读文案。
 		blockers = append(blockers, transferCheckItem{
 			Code:   "remote_url_mismatch",
-			Detail: fmt.Sprintf("目标目录已存在但不是本机仓库的同源检出（目标远端=%q，本机远端=%q）", remoteProbe.RemoteURL, local.RemoteURL),
+			Detail: fmt.Sprintf("目标目录已存在但不是本机仓库的同源检出（目标远端=%q，本机远端=%q）", stripURLCredentials(remoteProbe.RemoteURL), stripURLCredentials(local.RemoteURL)),
 		})
 	}
 

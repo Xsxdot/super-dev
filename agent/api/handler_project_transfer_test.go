@@ -9,6 +9,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,6 +66,31 @@ func dirAbsentRunner(cmd string) (string, int, error) {
 		return "no", 0, nil
 	}
 	return "", 1, nil
+}
+
+// existingRepoRunner 模拟目标机上已存在一个 git 仓库，origin 固定为
+// remoteURL；按 cmd 前缀分发 canned 输出，覆盖 gitinfo.InspectRemote 会
+// 执行的全部子命令。用于构造 remote_url_mismatch 场景（目录存在 + 仓库 +
+// 与本机不同源的 origin）。
+func existingRepoRunner(remoteURL string) func(cmd string) (string, int, error) {
+	return func(cmd string) (string, int, error) {
+		switch {
+		case strings.Contains(cmd, "test -d"):
+			return "yes", 0, nil
+		case strings.Contains(cmd, "rev-parse --is-inside-work-tree"):
+			return "true", 0, nil
+		case strings.Contains(cmd, "symbolic-ref --short HEAD"):
+			return "main", 0, nil
+		case strings.Contains(cmd, "remote get-url origin"):
+			return remoteURL, 0, nil
+		case strings.Contains(cmd, "status --porcelain"):
+			return "", 0, nil
+		case strings.Contains(cmd, "rev-list --count"):
+			return "", 1, nil // 无上游配置，Ahead 降级为 -1，与本用例无关
+		default:
+			return "", 1, nil
+		}
+	}
 }
 
 // addTransferTestProject 通过 POST /api/projects 注册 rootPath 对应的项目，
@@ -290,4 +316,66 @@ func TestTransferPreflight_StartingDevDeployment_FlaggedAsRunningDev(t *testing.
 		codes = append(codes, b.Code)
 	}
 	assert.Contains(t, codes, "running_dev", "starting 态的 dev deployment 也应触发 running_dev，实际 blockers=%v", codes)
+}
+
+// TestTransferPreflight_RemoteURLMismatchDetail_RedactsCredentials 覆盖秘密
+// 红线泄露修复：本机与目标机 origin 不一致时，remote_url_mismatch 的 Detail
+// 会把两个 RemoteURL 原文拼进 HTTP 响应体——如果 URL 里带凭据（无论是
+// user:token@ 形式还是裸 token@ 形式），修复前会原样泄露到调用方能看见的
+// 响应里。本用例让本机、目标机分别携带两种不同形式的凭据，断言 Detail
+// 里两个凭据子串都不出现，但主机名等非敏感部分仍然保留（证明是"摘除
+// userinfo"而不是把整条 Detail 打成不可读的占位符）。
+func TestTransferPreflight_RemoteURLMismatchDetail_RedactsCredentials(t *testing.T) {
+	const localSecret = "s3cr3t-local-pw"
+	const remoteSecret = "ghp_remoteBareToken123"
+
+	app := newTestAppForPackage(t)
+	srv := newHTTPServerForPackage(t, app)
+	setTransferRemoteRunner(t, existingRepoRunner("https://"+remoteSecret+"@remote-origin.example.com/other-repo.git"))
+
+	dir := initTransferTestRepo(t)
+	// user:token@ 形式的内嵌凭据。
+	runTransferGit(t, dir, "remote", "add", "origin", "https://user:"+localSecret+"@local-origin.example.com/repo.git")
+	project := addTransferTestProject(t, srv, dir)
+
+	_, err := app.remoteStore.AddHost(model.Host{ID: "host-dev-mismatch", Name: "Dev Machine", DevMachineMode: true})
+	require.NoError(t, err)
+
+	reqBody := `{"host_id": "host-dev-mismatch"}`
+	resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer/preflight", "application/json", strings.NewReader(reqBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result transferPreflightResponse
+	bodyBytes := readAndDecode(t, resp, &result)
+
+	var mismatch *transferCheckItem
+	for i := range result.Blockers {
+		if result.Blockers[i].Code == "remote_url_mismatch" {
+			mismatch = &result.Blockers[i]
+			break
+		}
+	}
+	require.NotNil(t, mismatch, "两个不同源的 origin 应触发 remote_url_mismatch，实际 blockers=%+v", result.Blockers)
+
+	assert.NotContains(t, mismatch.Detail, localSecret, "本机 origin 的凭据不应出现在响应 Detail 里")
+	assert.NotContains(t, mismatch.Detail, remoteSecret, "目标机 origin 的凭据不应出现在响应 Detail 里")
+	// 同时用完整响应体兜底：防止凭据从其它字段（如未来新增字段）泄露出去，
+	// 而不仅仅是 Detail 这一处。
+	assert.NotContains(t, string(bodyBytes), localSecret, "完整响应体不应包含本机凭据")
+	assert.NotContains(t, string(bodyBytes), remoteSecret, "完整响应体不应包含目标机凭据")
+
+	// 非敏感部分应保留，证明是"摘除 userinfo"而非整体打码。
+	assert.Contains(t, mismatch.Detail, "local-origin.example.com", "摘除凭据不应连带丢失主机名等非敏感信息")
+	assert.Contains(t, mismatch.Detail, "remote-origin.example.com", "摘除凭据不应连带丢失主机名等非敏感信息")
+}
+
+// readAndDecode 读取响应体全文（供整体兜底断言）并同时解码进 out。
+func readAndDecode(t *testing.T, resp *http.Response, out any) []byte {
+	t.Helper()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(body, out))
+	return body
 }
