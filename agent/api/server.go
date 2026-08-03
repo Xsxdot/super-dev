@@ -779,6 +779,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/vscode-launch", a.getVscodeLaunch)
 	mux.HandleFunc("PUT /api/projects/{id}/setup", a.putProjectSetup)
 	mux.HandleFunc("GET /api/projects/{id}/runtime-status", a.getProjectRuntimeStatus)
+	mux.HandleFunc("POST /api/projects/{id}/transfer/preflight", a.transferPreflight)
 	mux.HandleFunc("GET /api/language-runtime/providers", a.listLanguageRuntimeProviders)
 	mux.HandleFunc("GET /api/language-runtime/{language}/schema", a.describeLanguageRuntimeSchema)
 	mux.HandleFunc("POST /api/language-runtime/{language}/suggest", a.suggestServiceRuntime)
