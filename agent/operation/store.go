@@ -262,7 +262,7 @@ func (s *ApprovalFileStore) Approve(ctx context.Context, id string, decidedBy st
 	return st.Approvals[idx], nil
 }
 
-// Reject 将 pending 或 approved 审批请求标记为 rejected。
+// Reject 将 pending 审批请求标记为 rejected。
 //
 // 参数：
 //   - ctx: 上下文，当前文件 Store 不阻塞外部 I/O，仅保留接口一致性
@@ -273,6 +273,9 @@ func (s *ApprovalFileStore) Approve(ctx context.Context, id string, decidedBy st
 // 返回：
 //   - 更新后的审批请求
 //   - 错误信息
+//
+// 注意：
+//   - approved 是终态，不可被 Reject 翻案；见 ensureApprovalDecisionAllowed 的守卫说明
 func (s *ApprovalFileStore) Reject(ctx context.Context, id string, decidedBy string, note string) (Approval, error) {
 	_ = ctx
 	s.mu.Lock()
@@ -287,14 +290,10 @@ func (s *ApprovalFileStore) Reject(ctx context.Context, id string, decidedBy str
 		return Approval{}, ErrApprovalNotFound
 	}
 	now := time.Now().UTC()
-	if st.Approvals[idx].Status == ApprovalUsed {
-		return Approval{}, ErrApprovalTokenConsumed
-	}
-	if st.Approvals[idx].Status == ApprovalExpired || now.After(st.Approvals[idx].ExpiresAt) {
-		st.Approvals[idx].Status = ApprovalExpired
-		st.Approvals[idx].UpdatedAt = now
-		_ = s.save(st)
-		return Approval{}, ErrApprovalExpired
+	// 与 Approve 共用同一守卫：先裁决者生效是硬语义，approved 之后任何 Reject（翻案）
+	// 都会被 ensureApprovalDecisionAllowed 拒绝，已发出的一次性 token 不会因翻案而被吊销。
+	if err := ensureApprovalDecisionAllowed(st.Approvals[idx], now); err != nil {
+		return Approval{}, err
 	}
 
 	st.Approvals[idx].Status = ApprovalRejected
@@ -499,9 +498,18 @@ func (s *AuditFileStore) List(ctx context.Context, filter AuditFilter) ([]AuditE
 	return out, nil
 }
 
+// ensureApprovalDecisionAllowed 校验一条 approval 是否还允许被裁决（Approve 或 Reject）。
+//
+// 为什么 approved 是终态：一个 agent 可能同时被多个控制面（本机桌面 + 若干远程控制面）管理，
+// 同一条审批单会同时出现在各控制面界面上，任何一边都能点批准/拒绝。若 approved 之后还允许
+// 再次裁决，第二次 Approve 会静默覆盖第一个裁决者的 DecidedBy（胜者身份被抹掉），第二次
+// Reject 更会翻案并吊销胜者已经领到手的一次性 token（执行方被背刺）。因此“先裁决者生效”
+// 必须是服务器侧硬语义：一旦进入 approved，后续任何裁决请求都直接拒绝，不做任何状态变更。
 func ensureApprovalDecisionAllowed(approval Approval, now time.Time) error {
 	switch approval.Status {
-	case ApprovalPending, ApprovalApproved:
+	case ApprovalPending:
+	case ApprovalApproved:
+		return ErrApprovalAlreadyDecided
 	case ApprovalRejected:
 		return ErrApprovalRejected
 	case ApprovalUsed:

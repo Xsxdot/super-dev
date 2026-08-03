@@ -99,6 +99,37 @@ func TestApprovalStoreRejectAndTokenMismatch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrApprovalTokenInvalid)
 }
 
+func TestApprovalFirstDecisionWins(t *testing.T) {
+	store := NewApprovalFileStore(t.TempDir() + "/operation-approvals.json")
+	approval, err := store.FindOrCreatePending(context.Background(), storePlan("runtime.restart", "fp-1"), "mcp", "Codex")
+	require.NoError(t, err)
+
+	_, err = store.Approve(context.Background(), approval.ID, "CP-A", "")
+	require.NoError(t, err)
+
+	token, _, err := store.IssueToken(context.Background(), approval.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, token)
+
+	// 二次 approve：第二个控制面再点一次批准，必须被拒绝，不能覆盖胜者身份。
+	_, err = store.Approve(context.Background(), approval.ID, "CP-B", "")
+	assert.ErrorIs(t, err, ErrApprovalAlreadyDecided)
+
+	// 翻案 reject：已 approve 的单不可被拒绝改判，且已发出的 token 不能被吊销。
+	_, err = store.Reject(context.Background(), approval.ID, "CP-B", "")
+	assert.ErrorIs(t, err, ErrApprovalAlreadyDecided)
+
+	got, err := store.Get(context.Background(), approval.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ApprovalApproved, got.Status)
+	assert.Equal(t, "CP-A", got.DecidedBy)
+
+	// 已发出的一次性 token 未被 Reject 吊销，仍可正常消费。
+	used, err := store.ConsumeToken(context.Background(), token, approval.Plan.Fingerprint)
+	require.NoError(t, err)
+	assert.Equal(t, ApprovalUsed, used.Status)
+}
+
 func TestAuditStoreAppendsAndFilters(t *testing.T) {
 	store := NewAuditFileStore(t.TempDir()+"/operation-audit.json", 100)
 	plan := storePlan("runtime.restart", "fp-1")

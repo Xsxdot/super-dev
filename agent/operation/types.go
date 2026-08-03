@@ -135,6 +135,10 @@ var (
 	ErrApprovalTokenInvalid = errors.New("operation approval token is invalid")
 	// ErrApprovalTokenConsumed 表示审批 token 已经被使用。
 	ErrApprovalTokenConsumed = errors.New("operation approval token is already used")
+	// ErrApprovalAlreadyDecided 表示审批请求已被裁决（approved 为终态）。
+	// 双控制面下先裁决者生效：approved 之后的任何再次 Approve/Reject 都会被此错误拒绝，
+	// 防止静默覆盖胜者身份（DecidedBy）或吊销胜者已领取的一次性 token。
+	ErrApprovalAlreadyDecided = errors.New("operation approval already decided")
 )
 
 // Target 描述一次 operation 解析后的稳定目标。
