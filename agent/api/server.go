@@ -791,6 +791,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/transfer", a.startProjectTransfer)
 	mux.HandleFunc("GET /api/projects/{id}/transfer/status", a.getProjectTransferStatus)
 	mux.HandleFunc("POST /api/projects/{id}/transfer-back", a.startProjectTransferBack)
+	mux.HandleFunc("POST /api/mcp-setup/claude-code", a.setupClaudeCodeMCP)
 	mux.HandleFunc("GET /api/language-runtime/providers", a.listLanguageRuntimeProviders)
 	mux.HandleFunc("GET /api/language-runtime/{language}/schema", a.describeLanguageRuntimeSchema)
 	mux.HandleFunc("POST /api/language-runtime/{language}/suggest", a.suggestServiceRuntime)
