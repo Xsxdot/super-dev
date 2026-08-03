@@ -48,6 +48,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/operation"
 	"github.com/xsxdot/super-dev/agent/portmirror"
 	"github.com/xsxdot/super-dev/agent/process"
+	"github.com/xsxdot/super-dev/agent/projecthome"
 	"github.com/xsxdot/super-dev/agent/remote"
 	"github.com/xsxdot/super-dev/agent/remoteexec"
 	"github.com/xsxdot/super-dev/agent/remoteobservation"
@@ -185,6 +186,9 @@ type App struct {
 	nodeStatusPublisherMu sync.Mutex
 	nodeStatusPublishers  map[*nodeStatusPublisher]struct{}
 	remoteStore           *remote.Store
+	// projectHomeStore 持久化「项目 → 归属主机」本地路由标记，供 listProjects
+	// DTO 组装、后续归属路由/转移任务复用。归属是控制面本地设置，不下发节点。
+	projectHomeStore *projecthome.Store
 	// hostAssembler 是 Host HTTP DTO 与领域模型之间唯一的字段转换边界。
 	hostAssembler *apiassembler.HostAssembler
 	// remoteObservation 统一生成已脱敏系统身份与固定端口直连观察。
@@ -364,6 +368,11 @@ func NewApp(cfg AppConfig) (*App, error) {
 		filepath.Join(cfg.DataDir, "hosts.json"),
 		filepath.Join(cfg.DataDir, "log_sources.json"),
 	)
+	projectHomeStore, err := projecthome.NewStore(filepath.Join(cfg.DataDir, "project-homes.json"))
+	if err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("初始化项目归属存储失败: %w", err)
+	}
 	remoteObservation := cfg.RemoteObservationOverride
 	if remoteObservation == nil {
 		remoteObservation = remoteobservation.NewService(id.NodeID, remoteObservationHostSource{store: remoteStore})
@@ -518,6 +527,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		logCleanupDone:              logCleanupDone,
 		nodeStatusPublishers:        map[*nodeStatusPublisher]struct{}{},
 		remoteStore:                 remoteStore,
+		projectHomeStore:            projectHomeStore,
 		hostAssembler:               apiassembler.NewHostAssembler(),
 		remoteObservation:           remoteObservation,
 		agentStore:                  agentStore,

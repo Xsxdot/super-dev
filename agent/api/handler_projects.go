@@ -117,7 +117,46 @@ func (a *App) listProjects(w http.ResponseWriter, r *http.Request) {
 	copy(projects, a.projects)
 	a.mu.RUnlock()
 
+	a.fillProjectHomes(projects)
+
 	jsonOK(w, projects)
+}
+
+// fillProjectHomes 用 projectHomeStore + remoteStore 填充每个 Project 的运行时
+// 归属字段（HomeHostID/HomeHostName），原地修改传入的切片。
+//
+// 参数：
+//   - projects: 待填充的项目列表，通常是 a.projects 的拷贝
+//
+// 注意：
+//   - 归属本机（HomeOf 返回空串）的项目保持字段为空，不做任何写入——
+//     omitempty 让 JSON 响应里这类项目干脆不带 home_host_* 字段
+//   - 归属主机若已从 remoteStore 删除，hostNames 查不到对应名字，
+//     Name 会保持零值空串；HomeHostID 依然保留，不因主机缺失而丢失归属标记，
+//     也不能因为查不到主机就让整个列表接口 panic 或 500（优雅降级）
+func (a *App) fillProjectHomes(projects []model.Project) {
+	if a.projectHomeStore == nil {
+		return
+	}
+	var hosts []model.Host
+	if a.remoteStore != nil {
+		// 主机列表读取失败时保守按"查不到任何主机"处理：所有归属的 Name
+		// 都会留空，但 HomeHostID 依旧正确——不能因为这一次读取失败就让
+		// GET /api/projects 整体报错。
+		hosts, _ = a.remoteStore.ListHosts()
+	}
+	hostNames := make(map[string]string, len(hosts))
+	for _, h := range hosts {
+		hostNames[h.ID] = h.Name
+	}
+	for i := range projects {
+		hostID := a.projectHomeStore.HomeOf(projects[i].ID)
+		if hostID == "" {
+			continue
+		}
+		projects[i].HomeHostID = hostID
+		projects[i].HomeHostName = hostNames[hostID]
+	}
 }
 
 // addProject 处理 POST /api/projects，从请求体中读取 root_path，加载并注册项目。

@@ -260,6 +260,15 @@ type Project struct {
 	// key 为 env 名称（如 "dev"、"test"），value 为服务名列表，
 	// 从而实现 env 级隔离的选中状态。
 	EnvSelectedServiceIDs map[string][]string `json:"env_selected_service_ids,omitempty" yaml:"env_selected_service_ids,omitempty"`
+	// HomeHostID 是项目当前归属的主机 ID，空表示归属本机。运行时从
+	// projecthome.Store 查询填充，不持久化到 project.yaml——归属描述的是
+	// "这台控制面自己怎么消费这个项目"，随 project.yaml 走 git 流动会把
+	// A 机的归属强加给 B 机。
+	HomeHostID string `json:"home_host_id,omitempty" yaml:"-"`
+	// HomeHostName 是 HomeHostID 对应的主机展示名，运行时从 remoteStore 查询
+	// 填充。归属主机若已被删除，此字段留空但 HomeHostID 仍保留——优雅降级，
+	// 不能让主机被删导致整个项目列表接口出错。
+	HomeHostName string `json:"home_host_name,omitempty" yaml:"-"`
 }
 
 // LogEntry 表示一条从服务进程捕获的日志记录。

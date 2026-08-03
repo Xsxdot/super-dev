@@ -637,6 +637,10 @@ export interface Project {
   pipelines?: ProjectPipeline[]
   env_selected_service_ids?: Record<string, string[]>
   environments?: Environment[]
+  /** 项目当前归属的主机 ID，缺省表示归属本机。 */
+  home_host_id?: string
+  /** home_host_id 对应的主机展示名；归属主机已被删除时为空（ID 仍保留）。 */
+  home_host_name?: string
 }
 
 // ===== 配置分层迁移（legacy config.yaml → project.yaml + local.yaml） =====
