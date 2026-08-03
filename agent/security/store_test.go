@@ -272,3 +272,49 @@ func TestLegacyTokenHashMigration(t *testing.T) {
 		assert.Empty(t, tokenHash, "legacy token_hash must be cleared after migration")
 	}
 }
+
+// RevokeToken 是安全敏感操作（凭据吊销），必须验证两条路径：
+//   - 命中：吊销后该记录立即失效，且不影响其他控制面的记录（对比现状不存在
+//     "只删一条不牵连别人" 的能力，这正是多凭据模型要保证的隔离性）
+//   - 未命中：返回 ErrTokenRecordNotFound，而不是静默成功
+func TestRevokeTokenRemovesAccessAndReportsNotFound(t *testing.T) {
+	s := newTestStore(t)
+	tokA := provisionWithName(t, s, "CP-A")
+	tokB := appendRecordForTest(t, s, "CP-B")
+
+	recA, ok := s.VerifyTokenPrincipal(tokA)
+	require.True(t, ok)
+
+	require.NoError(t, s.RevokeToken(recA.ID))
+
+	// 被吊销的记录必须立即失效。
+	_, ok = s.VerifyTokenPrincipal(tokA)
+	assert.False(t, ok, "revoked token must no longer verify")
+	assert.False(t, s.VerifyToken(tokA), "VerifyToken compat layer must also reject revoked token")
+
+	// 吊销 A 不得牵连 B。
+	recB, ok := s.VerifyTokenPrincipal(tokB)
+	require.True(t, ok, "revoking one control plane's record must not affect another's")
+	assert.Equal(t, "CP-B", recB.Name)
+
+	// 未命中的 ID 必须显式报错，不能静默成功掩盖调用方的 ID 拼写错误。
+	err := s.RevokeToken("does-not-exist")
+	assert.ErrorIs(t, err, security.ErrTokenRecordNotFound)
+}
+
+// 吊销结果必须真正落盘，而不是只改了内存——否则进程重启后被吊销的 token 又会复活。
+func TestRevokeTokenPersistsAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "security.json")
+	store, err := security.NewStore(path, security.Options{BootstrapToken: "bootstrap", RequireAuth: true})
+	require.NoError(t, err)
+	tok := provisionWithName(t, store, "CP-A")
+	rec, ok := store.VerifyTokenPrincipal(tok)
+	require.True(t, ok)
+
+	require.NoError(t, store.RevokeToken(rec.ID))
+
+	reopened, err := security.NewStore(path, security.Options{})
+	require.NoError(t, err)
+	_, ok = reopened.VerifyTokenPrincipal(tok)
+	assert.False(t, ok, "revoked token must stay revoked after restart")
+}
