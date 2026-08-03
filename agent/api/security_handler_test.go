@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/security"
 )
 
 func TestSecurityHealthBypassesAuthWhilePendingBootstrap(t *testing.T) {
@@ -146,4 +147,74 @@ func TestSecurityBypassPathsRemainOpen(t *testing.T) {
 		})
 		require.NotContains(t, rec.Body.String(), "agent token required", path)
 	}
+}
+
+// probePrincipal 包一层 app.withSecurity，让下游 handler 把校验后 ctx 里的
+// Principal 读出来，供以下测试断言——不新增生产路由，只在测试内组装。
+func probePrincipal(app *App) (http.Handler, func() (security.Principal, bool)) {
+	var got security.Principal
+	var ok bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, ok = security.PrincipalFrom(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	return app.withSecurity(next), func() (security.Principal, bool) { return got, ok }
+}
+
+// 本机 token 命中时，ctx 应挂载 {local, "local", "本机"}——withSecurity 从
+// VerifyLocalToken 分支推导 Principal，供后续任务（如审批裁决审计）读取真实身份。
+func TestWithSecurityInjectsPrincipalForLocalToken(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	handler, principal := probePrincipal(app)
+	req := httptest.NewRequest(http.MethodGet, "/api/exec/health", nil)
+	req.Header.Set("Authorization", "Bearer "+app.LocalAccessToken())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	got, ok := principal()
+	require.True(t, ok, "本机 token 命中应注入 Principal")
+	require.Equal(t, security.Principal{Type: security.PrincipalLocal, ID: "local", Name: "本机"}, got)
+}
+
+// 远程 TokenRecord 命中时，ctx 应挂载 {remote, rec.ID, rec.Name}——这是 Task 4
+// 取代请求体自报 decided_by 的唯一身份来源。
+func TestWithSecurityInjectsPrincipalForRemoteToken(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	record, err := app.securityStore.AppendTokenRecord("CP-A", "remote-token")
+	require.NoError(t, err)
+
+	handler, principal := probePrincipal(app)
+	req := httptest.NewRequest(http.MethodGet, "/api/exec/health", nil)
+	req.Header.Set("Authorization", "Bearer remote-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	got, ok := principal()
+	require.True(t, ok, "远程 token 命中应注入 Principal")
+	require.Equal(t, security.Principal{Type: security.PrincipalRemote, ID: record.ID, Name: "CP-A"}, got)
+}
+
+// bypass 白名单路径无凭据校验，也就无法推导「谁在请求」——不应注入 Principal，
+// 避免下游误把零值/伪造身份当成真实主体使用。
+func TestWithSecurityDoesNotInjectPrincipalOnBypassPath(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	defer app.Close()
+
+	handler, principal := probePrincipal(app)
+	req := httptest.NewRequest(http.MethodGet, "/api/security/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	_, ok := principal()
+	require.False(t, ok, "bypass 路径不应注入 Principal")
 }

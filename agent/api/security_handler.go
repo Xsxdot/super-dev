@@ -94,6 +94,9 @@ func (a *App) provisionSecurity(w http.ResponseWriter, r *http.Request) {
 func (a *App) withSecurity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.securityStore == nil || securityBypassPath(r.URL.Path) {
+			// bypass 白名单路径不校验凭据，也就无从推导「谁在请求」——不注入
+			// Principal，让下游经 security.PrincipalFrom 读到的是「无主体」，
+			// 而不是伪造一个身份掩盖「这条路径本来就没做鉴权」的事实。
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -101,7 +104,21 @@ func (a *App) withSecurity(next http.Handler) http.Handler {
 		if token == "" && strings.HasPrefix(r.URL.Path, "/ws/") {
 			token = strings.TrimSpace(r.URL.Query().Get("access_token"))
 		}
-		if a.securityStore.VerifyToken(token) || a.securityStore.VerifyLocalToken(token) {
+		if a.securityStore.VerifyLocalToken(token) {
+			r = r.WithContext(security.WithPrincipal(r.Context(), security.Principal{
+				Type: security.PrincipalLocal,
+				ID:   "local",
+				Name: "本机",
+			}))
+			next.ServeHTTP(w, r)
+			return
+		}
+		if rec, ok := a.securityStore.VerifyTokenPrincipal(token); ok {
+			r = r.WithContext(security.WithPrincipal(r.Context(), security.Principal{
+				Type: security.PrincipalRemote,
+				ID:   rec.ID,
+				Name: rec.Name,
+			}))
 			next.ServeHTTP(w, r)
 			return
 		}
