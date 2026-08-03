@@ -1,0 +1,790 @@
+// project_transfer_engine.go 实现项目归属转移的执行引擎（forward + 迁回）。
+//
+// 职责：
+//   - 顺序编排一次转移的多个步骤（stop_dev / checkout / register / mcp_setup /
+//     asset_audit / switch_home），单 goroutine 执行，状态存内存 App 字段
+//   - 每步前后写 KindProjectTransfer 审计（prepared → executed/failed），
+//     半完成态（进程重启丢失内存态）靠这条审计链追溯，prepared 即 outbox
+//   - 汇总一份 AssetReport（需在新家启动的服务、缺失 env 文件、疑似密钥键名、
+//     superdev-mcp 缺失）交人工确认
+//
+// 边界：
+//   - 不搬运任何秘密值或 git 凭据：asset_audit 只列疑似密钥「键名」，绝不携带值；
+//     checkout 走目标机自身的 git 访问权限，不代填凭据
+//   - 不自动重启服务：v1 停掉本机 dev 部署后只记清单，不在新家自动拉起
+//     （避免体检未过就启动）
+//   - 状态不持久化：进程重启即丢失，status 端点 404 即「无进行中」
+//
+// 为什么 register 用 nodetransport Do 而 checkout 用 /ws/exec Runner：
+//   - register / mcp_setup 是对目标机 agent 的短 HTTP 请求（30s 内返回），
+//     经 nodetransport Do 直达目标 agent 的 HTTP API 最自然；
+//   - checkout（git clone）以及路径探测（cd&&pwd / test -f / command -v）是
+//     可能很长（clone 大仓库）或需要 shell 语义的命令，必须走 /ws/exec 的
+//     Runner（无 30s 上限、逐行回流输出）。两条传输各司其职，不可互换：
+//     clone 绝不能走 Do（会被 30s 掐断），注册也不该塞进一条 shell 命令。
+package api
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os/exec"
+	"path"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/xsxdot/super-dev/agent/config"
+	"github.com/xsxdot/super-dev/agent/gitinfo"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
+	"github.com/xsxdot/super-dev/agent/operation"
+	"github.com/xsxdot/super-dev/agent/pipeline"
+	"github.com/xsxdot/super-dev/agent/process"
+)
+
+// transferNodeDo 是目标机短 HTTP 请求（register / mcp_setup）的测试注入 seam。
+//
+// 非 nil 时 resolveTransferNodeDo 优先返回它（引擎测试注入假件，绕开真实
+// nodetransport 往返）；生产路径下保持 nil，回落到 a.nodeTransport.Do。
+// 与 transferRemoteRunner（/ws/exec 的 Runner seam）成对存在：一个假 Do、
+// 一个假 Runner，配真实 projectHomeStore + operationAudit 即可在引擎级
+// 完整验证编排/失败跳过/审计留痕。
+var transferNodeDo func(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error)
+
+// 稳定步骤码：供前端/上游按类型分支，切勿随意改名。
+const (
+	transferStepStopDev    = "stop_dev"
+	transferStepCheckout   = "checkout"
+	transferStepRegister   = "register"
+	transferStepMCPSetup   = "mcp_setup"
+	transferStepAssetAudit = "asset_audit"
+	transferStepSwitchHome = "switch_home"
+	// 迁回专属步骤码
+	transferStepProbeHome = "probe_home"
+	transferStepPullLocal = "pull_local"
+)
+
+// 转移终态
+const (
+	transferStateRunning   = "running"
+	transferStateSucceeded = "succeeded"
+	transferStateFailed    = "failed"
+)
+
+// 步骤态
+const (
+	stepStatePending = "pending"
+	stepStateRunning = "running"
+	stepStateDone    = "done"
+	stepStateFailed  = "failed"
+	stepStateSkipped = "skipped"
+)
+
+// transferStatusResponse 是转移执行的状态快照，GET .../transfer/status 与引擎
+// 测试消费。
+type transferStatusResponse struct {
+	State string         `json:"state"` // running / succeeded / failed
+	Steps []transferStep `json:"steps"`
+	// AssetReport 仅结束后非空：需在新家启动的服务 + EnvFile 缺失清单 +
+	// 疑似秘密 env 键名清单（脱敏，只列键名）+ superdev-mcp 缺失提示。
+	AssetReport []transferCheckItem `json:"asset_report,omitempty"`
+	Error       string              `json:"error,omitempty"`
+}
+
+// transferStep 是转移中的单个步骤状态。
+type transferStep struct {
+	Code   string `json:"code"`
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// transferRun 是一次转移的完整内存态：引擎单 goroutine 写，status 端点读，
+// 经 mu 互斥。字段区分「不变入参」与「运行中可变态」。
+type transferRun struct {
+	direction string // "forward" | "back"
+	projectID string
+	hostID    string
+	hostName  string
+	targetDir string // 原始目标目录（可能含 ~，未展开）
+	branch    string
+	repoURL   string
+
+	plan operation.Plan // 本次转移共享的审计计划（免审批门，只承载 Kind/Target/Fingerprint）
+
+	mu           sync.Mutex
+	absTargetDir string // 展开 ~ / cd&&pwd 规范化后的目标机绝对路径
+	state        string
+	steps        []transferStep
+	assetReport  []transferCheckItem
+	errMsg       string
+	startedAt    time.Time
+	finishedAt   time.Time
+}
+
+// newTransferRun 构造一次转移的初始内存态（终态先置 running）。
+func newTransferRun(projectID, hostID, hostName, targetDir, branch, repoURL string) *transferRun {
+	return &transferRun{
+		projectID: projectID,
+		hostID:    hostID,
+		hostName:  hostName,
+		targetDir: targetDir,
+		branch:    branch,
+		repoURL:   repoURL,
+		state:     transferStateRunning,
+		startedAt: time.Now(),
+	}
+}
+
+// transferDeps 是一次转移执行所需的注入依赖，execute 入口解析一次后透传给各步骤。
+type transferDeps struct {
+	runner  gitinfo.Runner
+	do      func(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error)
+	project model.Project
+	mgr     *process.Manager
+}
+
+// transferStepSpec 描述引擎驱动一个步骤所需的元信息。
+type transferStepSpec struct {
+	code string
+	fn   func(ctx context.Context, run *transferRun, deps *transferDeps) (string, error)
+	// soft 为 true 时该步骤失败不阻断转移（仅 mcp_setup）：记 failed 步骤 +
+	// 审计 failed + asset_report 提示，但后续步骤照常执行、归属照常切换。
+	soft bool
+}
+
+// executeProjectTransfer 执行一次正向转移（本机 → 目标归属机），同步阻塞直到
+// 全部步骤结束；HTTP 层负责在 goroutine 中调用它。
+func (a *App) executeProjectTransfer(ctx context.Context, run *transferRun) {
+	run.direction = "forward"
+	run.plan = transferPlan(run)
+	a.initSteps(run, []string{
+		transferStepStopDev, transferStepCheckout, transferStepRegister,
+		transferStepMCPSetup, transferStepAssetAudit, transferStepSwitchHome,
+	})
+
+	project, mgr, ok := a.transferProjectSnapshot(run.projectID)
+	if !ok {
+		a.abortRunBeforeSteps(run, fmt.Errorf("project %s not found", run.projectID))
+		return
+	}
+	deps := &transferDeps{
+		runner:  a.resolveTransferRunner(pipeline.Target{HostID: run.hostID, HostName: run.hostName}),
+		do:      a.resolveTransferNodeDo(),
+		project: project,
+		mgr:     mgr,
+	}
+
+	log.Printf("[SuperDev] 项目转移开始 project=%s host=%s targetDir=%s branch=%s", run.projectID, run.hostID, run.targetDir, run.branch)
+	a.runSteps(ctx, run, deps, []transferStepSpec{
+		{transferStepStopDev, a.transferStopDev, false},
+		{transferStepCheckout, a.transferCheckout, false},
+		{transferStepRegister, a.transferRegister, false},
+		{transferStepMCPSetup, a.transferMCPSetup, true},
+		{transferStepAssetAudit, a.transferAssetAudit, false},
+		{transferStepSwitchHome, a.transferSwitchHome, false},
+	})
+}
+
+// executeProjectTransferBack 执行一次迁回（目标归属机 → 本机），v1 简化：
+// 归属机侧探测未提交/未推送 → 本机 pull → 清除归属。run.hostID 为当前归属机。
+func (a *App) executeProjectTransferBack(ctx context.Context, run *transferRun) {
+	run.direction = "back"
+	run.plan = transferPlan(run)
+	a.initSteps(run, []string{transferStepProbeHome, transferStepPullLocal, transferStepSwitchHome})
+
+	project, mgr, ok := a.transferProjectSnapshot(run.projectID)
+	if !ok {
+		a.abortRunBeforeSteps(run, fmt.Errorf("project %s not found", run.projectID))
+		return
+	}
+	deps := &transferDeps{
+		runner:  a.resolveTransferRunner(pipeline.Target{HostID: run.hostID, HostName: run.hostName}),
+		do:      a.resolveTransferNodeDo(),
+		project: project,
+		mgr:     mgr,
+	}
+
+	log.Printf("[SuperDev] 项目迁回开始 project=%s home=%s targetDir=%s", run.projectID, run.hostID, run.targetDir)
+	a.runSteps(ctx, run, deps, []transferStepSpec{
+		{transferStepProbeHome, a.transferProbeHome, false},
+		{transferStepPullLocal, a.transferPullLocal, false},
+		{transferStepSwitchHome, a.transferSwitchHomeBack, false},
+	})
+}
+
+// runSteps 是引擎的核心驱动：顺序执行步骤，每步写 prepared/executed/failed 审计，
+// 任一硬失败后剩余步骤置 skipped、终态 failed；soft 步骤失败不阻断。
+func (a *App) runSteps(ctx context.Context, run *transferRun, deps *transferDeps, steps []transferStepSpec) {
+	failed := false
+	for _, step := range steps {
+		if failed {
+			a.setStep(run, step.code, stepStateSkipped, "前序步骤失败，已跳过")
+			continue
+		}
+
+		a.setStep(run, step.code, stepStateRunning, "")
+		a.auditStep(ctx, run, step.code, operation.AuditPrepared, "transfer step prepared", nil)
+		log.Printf("[SuperDev] 转移步骤开始 project=%s host=%s step=%s", run.projectID, run.hostID, step.code)
+
+		detail, err := step.fn(ctx, run, deps)
+		if err == nil {
+			a.setStep(run, step.code, stepStateDone, detail)
+			a.auditStep(ctx, run, step.code, operation.AuditExecuted, "transfer step executed", nil)
+			log.Printf("[SuperDev] 转移步骤完成 project=%s host=%s step=%s detail=%s", run.projectID, run.hostID, step.code, redactCreds(detail))
+			continue
+		}
+
+		// err.Error() 可能回显带内嵌凭据的 remote URL（git clone 失败输出），落库/落日志前脱敏。
+		errMsg := redactCreds(err.Error())
+		if step.soft {
+			// 软失败：步骤本身记 failed，但转移继续、归属照常切换。
+			a.setStep(run, step.code, stepStateFailed, detail)
+			a.auditStep(ctx, run, step.code, operation.AuditFailed, "transfer step soft-failed: "+errMsg, map[string]any{"soft": true})
+			log.Printf("[SuperDev] 转移步骤软失败(继续) project=%s host=%s step=%s err=%s", run.projectID, run.hostID, step.code, errMsg)
+			continue
+		}
+
+		a.setStep(run, step.code, stepStateFailed, detail+"失败: "+errMsg)
+		a.auditStep(ctx, run, step.code, operation.AuditFailed, "transfer step failed: "+errMsg, nil)
+		log.Printf("[SuperDev] 转移步骤失败 project=%s host=%s step=%s err=%s", run.projectID, run.hostID, step.code, errMsg)
+		run.setError(errMsg)
+		failed = true
+	}
+
+	if failed {
+		a.finalizeRun(run, transferStateFailed)
+		log.Printf("[SuperDev] 项目转移失败 project=%s host=%s direction=%s，归属未切换", run.projectID, run.hostID, run.direction)
+		return
+	}
+	a.finalizeRun(run, transferStateSucceeded)
+	// switch_home 成功后的总结行——这是切面里最需要事后排障的一条。
+	log.Printf("[SuperDev] 项目转移完成 project=%s host=%s direction=%s，归属已切换", run.projectID, run.hostID, run.direction)
+}
+
+// ---- 各步骤实现 ----
+
+// transferStopDev 停止本机运行中的 dev 部署，并把清单写进 AssetReport
+// （需在新家手动启动）。v1 不自动重启，避免体检未过就拉起。
+func (a *App) transferStopDev(_ context.Context, run *transferRun, deps *transferDeps) (string, error) {
+	if deps.mgr == nil {
+		return "无进程管理器，无运行中 dev 部署", nil
+	}
+	devEnvs := devEnvSet(deps.project)
+	if len(devEnvs) == 0 {
+		return "项目无 dev 环境", nil
+	}
+	var stopped []string
+	for _, svc := range deps.project.Services {
+		for _, dep := range svc.Deployments {
+			if !devEnvs[dep.EnvName] {
+				continue
+			}
+			if deps.mgr.IsDeploymentActive(dep.ID) {
+				deps.mgr.StopDeployment(dep.ID)
+				stopped = append(stopped, svc.Name+"("+dep.EnvName+")")
+			}
+		}
+	}
+	if len(stopped) == 0 {
+		return "无运行中的 dev 部署", nil
+	}
+	run.addAsset(transferCheckItem{
+		Code:   "restart_needed",
+		Detail: fmt.Sprintf("以下 dev 服务已在本机停止，需在新家手动启动：%s", strings.Join(stopped, "、")),
+	})
+	return fmt.Sprintf("已停止 %d 个运行中的 dev 部署：%s", len(stopped), strings.Join(stopped, "、")), nil
+}
+
+// transferCheckout 让目标机把仓库检出到目标分支的最新提交。
+//
+// 为什么先解析绝对路径：EnsureCheckout 内部对 path 做 shell 单引号转义，若把
+// 带 ~ 的路径直接传入，~ 不会被展开，会 clone 出一个字面量 ~ 目录。因此先把
+// ~ 依目标机 $HOME 展开成绝对路径再交给 EnsureCheckout。
+func (a *App) transferCheckout(ctx context.Context, run *transferRun, deps *transferDeps) (string, error) {
+	absDir, err := resolveRemoteAbsDir(ctx, deps.runner, run.targetDir)
+	if err != nil {
+		return "解析目标绝对路径", err
+	}
+	run.setAbsDir(absDir)
+
+	var lines []string
+	if err := gitinfo.EnsureCheckout(ctx, deps.runner, absDir, run.repoURL, run.branch, func(l string) {
+		lines = append(lines, l)
+	}); err != nil {
+		return "检出", err
+	}
+	return fmt.Sprintf("已检出到 %s；%s", absDir, strings.Join(tailLines(lines, 3), " ⏎ ")), nil
+}
+
+// transferRegister 在目标机注册项目：先 cd&&pwd 拿规范化绝对路径（此时目录已
+// 被 checkout 建好），再经 nodetransport Do 调目标机 POST /api/projects。
+// 目标机读到 project.yaml 里既有 ID 保留之；响应的 project.id 必须等于本机
+// projectID，不等即失败（撞机重分配场景，拒绝静默双身份）。
+func (a *App) transferRegister(ctx context.Context, run *transferRun, deps *transferDeps) (string, error) {
+	absDir := run.getAbsDir()
+	out, code, err := deps.runner(ctx, "cd "+shellQuoteTransfer(absDir)+" && pwd", "")
+	if err != nil {
+		return "解析规范化路径", err
+	}
+	if code != 0 {
+		return "解析规范化路径", fmt.Errorf("cd&&pwd 非零退出 exitCode=%d（目录可能未成功检出）", code)
+	}
+	rootPath := strings.TrimSpace(out)
+	if rootPath == "" {
+		rootPath = absDir
+	}
+	run.setAbsDir(rootPath)
+
+	body, _ := json.Marshal(map[string]string{"root_path": rootPath})
+	resp, err := deps.do(ctx, run.hostID, nodetransport.NodeRequest{
+		Method:  http.MethodPost,
+		Path:    "/api/projects",
+		Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Body:    bytes.NewReader(body),
+	})
+	if err != nil {
+		return "调用目标机注册项目", err
+	}
+	respBody, statusCode := readNodeBody(resp)
+	if statusCode != http.StatusOK {
+		return "目标机注册项目", fmt.Errorf("目标机返回 %d: %s", statusCode, truncateStr(respBody, 200))
+	}
+	var registered struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(respBody), &registered); err != nil {
+		return "解析目标机注册响应", fmt.Errorf("响应非合法 JSON: %w", err)
+	}
+	if registered.ID != run.projectID {
+		return "校验目标机项目身份", fmt.Errorf("目标机项目 ID 不一致：期望 %s 得到 %s（撞机重分配，拒绝双身份）", run.projectID, registered.ID)
+	}
+	return fmt.Sprintf("目标机项目已注册且 ID 一致（root_path=%s）", rootPath), nil
+}
+
+// transferMCPSetup 在目标机配置 claude-code 的 superdev-mcp（Task 6 提供目标侧
+// handler）。失败不阻断转移：降级为 asset_report 提示并继续。
+func (a *App) transferMCPSetup(ctx context.Context, run *transferRun, deps *transferDeps) (string, error) {
+	body, _ := json.Marshal(map[string]string{"project_id": run.projectID, "root_path": run.getAbsDir()})
+	resp, err := deps.do(ctx, run.hostID, nodetransport.NodeRequest{
+		Method:  http.MethodPost,
+		Path:    "/api/mcp-setup/claude-code",
+		Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Body:    bytes.NewReader(body),
+	})
+	if err != nil {
+		run.addAsset(transferCheckItem{
+			Code:   "mcp_setup_failed",
+			Detail: "目标机 superdev-mcp 配置调用失败：" + err.Error() + "，请在目标机手动运行 claude-code mcp-setup",
+		})
+		return "MCP 配置失败，已降级为资产提示，不阻断转移", err
+	}
+	respBody, statusCode := readNodeBody(resp)
+	if statusCode != http.StatusOK {
+		run.addAsset(transferCheckItem{
+			Code:   "mcp_setup_failed",
+			Detail: fmt.Sprintf("目标机 superdev-mcp 配置返回 %d，请在目标机手动运行 claude-code mcp-setup", statusCode),
+		})
+		return "MCP 配置失败，已降级为资产提示，不阻断转移", fmt.Errorf("目标机返回 %d: %s", statusCode, truncateStr(respBody, 200))
+	}
+	return "目标机 MCP 已配置", nil
+}
+
+// transferAssetAudit 只产 AssetReport 清单，不改变任何状态：
+//   - 每个 dev 部署的 EnvFile（相对 targetDir）经 /ws/exec test -f 探是否就位
+//   - 本机共享层 ScanSharedLayer 的疑似密钥「键名」（脱敏，绝不带值），提示目标机自行确认
+//   - superdev-mcp 是否存在（command -v）
+//
+// 只有 Runner 传输层故障才让本步骤失败（连目标机都探不通就不该切归属）；
+// 「文件缺失/mcp 缺失」是探测的负向结果，记进清单，步骤仍算 done。
+func (a *App) transferAssetAudit(ctx context.Context, run *transferRun, deps *transferDeps) (string, error) {
+	rootPath := run.getAbsDir()
+	devEnvs := devEnvSet(deps.project)
+
+	missing := 0
+	for _, svc := range deps.project.Services {
+		for _, dep := range svc.Deployments {
+			if !devEnvs[dep.EnvName] || strings.TrimSpace(dep.EnvFile) == "" {
+				continue
+			}
+			remotePath := path.Join(rootPath, dep.EnvFile)
+			out, _, err := deps.runner(ctx, "test -f "+shellQuoteTransfer(remotePath)+" && echo yes || echo no", "")
+			if err != nil {
+				return "体检 env 文件", err
+			}
+			if strings.TrimSpace(out) != "yes" {
+				missing++
+				run.addAsset(transferCheckItem{
+					Code:   "env_file_missing",
+					Detail: fmt.Sprintf("目标机缺失 env 文件 %s（服务 %s/%s），需在新家自行放置", dep.EnvFile, svc.Name, dep.EnvName),
+				})
+			}
+		}
+	}
+
+	// 疑似密钥：照搬本机扫描结果，只列键名交目标机确认。绝不携带任何值。
+	suspects, err := config.NewLoader(deps.project.RootPath).ScanSharedLayer()
+	if err != nil {
+		log.Printf("[SuperDev] 转移 asset_audit 扫描共享层疑似密钥失败 project=%s err=%v", run.projectID, err)
+	}
+	secretCount := 0
+	for _, s := range suspects {
+		secretCount++
+		run.addAsset(transferCheckItem{
+			Code:   "suspect_secret",
+			Detail: fmt.Sprintf("疑似密钥键名 %q（作用域 %s），目标机需自行确认对应值是否已就位", s.Key, s.Scope),
+		})
+	}
+
+	// superdev-mcp 存在性
+	_, code, err := deps.runner(ctx, "command -v superdev-mcp", "")
+	if err != nil {
+		return "体检 superdev-mcp", err
+	}
+	mcpMissing := code != 0
+	if mcpMissing {
+		run.addAsset(transferCheckItem{
+			Code:   "superdev_mcp_missing",
+			Detail: "目标机未找到 superdev-mcp 可执行文件，代码调试/日志采集能力将不可用，请先在目标机安装",
+		})
+	}
+
+	return fmt.Sprintf("资产体检完成：缺失 env %d 项，疑似密钥 %d 项，superdev-mcp %s", missing, secretCount, ternaryStr(mcpMissing, "缺失", "就位")), nil
+}
+
+// transferSwitchHome 切换项目归属到目标机。
+//
+// Task 8 注意：归属变更后需重建后端日志路由（把该项目的日志读取指向目标机），
+// 该重建是 Task 8 的职责——本步骤只调 SetHome，Task 8 应在此调用点
+// （transferSwitchHome）之后接管日志路由重建。
+func (a *App) transferSwitchHome(_ context.Context, run *transferRun, _ *transferDeps) (string, error) {
+	if err := a.projectHomeStore.SetHome(run.projectID, run.hostID); err != nil {
+		return "切换归属", err
+	}
+	return fmt.Sprintf("归属已切换到 %s(%s)", run.hostName, run.hostID), nil
+}
+
+// ---- 迁回步骤实现 ----
+
+// transferProbeHome 在归属机侧探测未提交/未推送变更（同 gitinfo 口径：
+// status --porcelain + rev-list @{u}..HEAD）。任一存在即失败：避免本机 pull
+// 覆盖丢失归属机上尚未回流的改动。
+func (a *App) transferProbeHome(ctx context.Context, run *transferRun, deps *transferDeps) (string, error) {
+	absDir, err := resolveRemoteAbsDir(ctx, deps.runner, run.targetDir)
+	if err != nil {
+		return "解析归属机路径", err
+	}
+	run.setAbsDir(absDir)
+
+	out, code, err := deps.runner(ctx, "cd "+shellQuoteTransfer(absDir)+" && pwd", "")
+	if err != nil {
+		return "定位归属机项目目录", err
+	}
+	if code != 0 {
+		return "定位归属机项目目录", fmt.Errorf("cd&&pwd 非零退出 exitCode=%d（归属机目录可能不存在）", code)
+	}
+	homeDir := strings.TrimSpace(out)
+	if homeDir == "" {
+		homeDir = absDir
+	}
+
+	status, _, err := deps.runner(ctx, "git -C "+shellQuoteTransfer(homeDir)+" status --porcelain", "")
+	if err != nil {
+		return "探测归属机未提交变更", err
+	}
+	if strings.TrimSpace(status) != "" {
+		return "归属机存在未提交变更", fmt.Errorf("归属机有未提交变更，请先在归属机提交或暂存后再迁回")
+	}
+
+	count, code, err := deps.runner(ctx, "git -C "+shellQuoteTransfer(homeDir)+" rev-list --count @{u}..HEAD", "")
+	if err != nil {
+		return "探测归属机未推送提交", err
+	}
+	// rev-list 非零退出多为「无上游」，v1 简化：无从判定则不阻断。
+	if code == 0 {
+		if n := strings.TrimSpace(count); n != "" && n != "0" {
+			return "归属机存在未推送提交", fmt.Errorf("归属机有 %s 个未推送提交，请先在归属机推送后再迁回", n)
+		}
+	}
+	return fmt.Sprintf("归属机工作区干净、无未推送提交（%s）", homeDir), nil
+}
+
+// transferPullLocal 在本机执行 git pull --ff-only，把归属机推上来的最新提交拉回。
+func (a *App) transferPullLocal(ctx context.Context, _ *transferRun, deps *transferDeps) (string, error) {
+	out, err := runLocalGit(ctx, deps.project.RootPath, "pull", "--ff-only")
+	if err != nil {
+		return "本机 pull", fmt.Errorf("%v: %s", err, truncateStr(out, 200))
+	}
+	return "本机已 pull 到最新（" + truncateStr(strings.TrimSpace(out), 120) + "）", nil
+}
+
+// transferSwitchHomeBack 清除归属，迁回本机（SetHome 传空串）。
+func (a *App) transferSwitchHomeBack(_ context.Context, run *transferRun, _ *transferDeps) (string, error) {
+	if err := a.projectHomeStore.SetHome(run.projectID, ""); err != nil {
+		return "迁回本机（清除归属）", err
+	}
+	return "归属已迁回本机", nil
+}
+
+// ---- 依赖解析 / 快照 ----
+
+// resolveTransferNodeDo 返回本次转移使用的 nodetransport Do。
+// transferNodeDo 非 nil 时优先（测试注入）；否则回落 a.nodeTransport.Do。
+func (a *App) resolveTransferNodeDo() func(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	if transferNodeDo != nil {
+		return transferNodeDo
+	}
+	if a.nodeTransport == nil {
+		return func(context.Context, string, nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+			return nodetransport.NodeResponse{}, fmt.Errorf("nodeTransport 未装配")
+		}
+	}
+	return a.nodeTransport.Do
+}
+
+// transferProjectSnapshot 在 RLock 下取项目快照与其进程管理器。
+func (a *App) transferProjectSnapshot(projectID string) (model.Project, *process.Manager, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	p, ok := a.findProject(projectID)
+	if !ok {
+		return model.Project{}, nil, false
+	}
+	return p, a.managers[projectID], true
+}
+
+// ---- 审计 ----
+
+// transferPlan 构造本次转移共享的审计计划——RequiresApproval 恒为 false
+// （免审批门，preflight→execute 人审对话框即人工审查），只承载
+// Kind/Target/Fingerprint 供审计事件引用。Target.ProjectID 必填，审计按它过滤。
+func transferPlan(run *transferRun) operation.Plan {
+	now := time.Now().UTC()
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%s", operation.KindProjectTransfer, run.projectID, run.hostID, run.direction)))
+	return operation.Plan{
+		ID:               "op_" + uuid.NewString(),
+		Kind:             operation.KindProjectTransfer,
+		Target:           operation.Target{ProjectID: run.projectID, HostID: run.hostID},
+		TargetSummary:    fmt.Sprintf("transfer project %s home to host %s (%s)", run.projectID, run.hostID, run.direction),
+		RiskLevel:        operation.RiskMedium,
+		RequiresApproval: false,
+		ExpectedEffects:  []string{fmt.Sprintf("move project %s dev home to %s", run.projectID, run.hostID)},
+		Fingerprint:      "sha256:" + hex.EncodeToString(sum[:]),
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(operation.DefaultPlanTTL),
+	}
+}
+
+// auditStep 写一条转移步骤审计事件。Data 只承载步骤码/项目/host/结果，
+// 绝不携带任何秘密值或 git 凭据。审计写失败只记日志、不阻断转移。
+func (a *App) auditStep(ctx context.Context, run *transferRun, stepCode, action, summary string, extra map[string]any) {
+	data := map[string]any{
+		"step":       stepCode,
+		"project_id": run.projectID,
+		"host_id":    run.hostID,
+		"host_name":  run.hostName,
+		"direction":  run.direction,
+	}
+	for k, v := range extra {
+		data[k] = v
+	}
+	if _, err := a.operationAudit.Append(ctx, operation.AuditEvent{
+		Kind:    operation.KindProjectTransfer,
+		Action:  action,
+		Plan:    run.plan,
+		Summary: summary,
+		Data:    data,
+	}); err != nil {
+		log.Printf("[SuperDev] 转移审计写入失败 project=%s step=%s action=%s err=%v", run.projectID, stepCode, action, err)
+	}
+}
+
+// ---- transferRun 内部态操作（全部经 mu 互斥） ----
+
+func (a *App) initSteps(run *transferRun, codes []string) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	run.steps = make([]transferStep, 0, len(codes))
+	for _, c := range codes {
+		run.steps = append(run.steps, transferStep{Code: c, State: stepStatePending})
+	}
+}
+
+func (a *App) setStep(run *transferRun, code, state, detail string) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	for i := range run.steps {
+		if run.steps[i].Code == code {
+			run.steps[i].State = state
+			if detail != "" {
+				// 统一在写入前脱敏：任何步骤 detail 都可能夹带 git 输出里的内嵌凭据。
+				run.steps[i].Detail = redactCreds(detail)
+			}
+			return
+		}
+	}
+}
+
+func (a *App) finalizeRun(run *transferRun, state string) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	run.state = state
+	run.finishedAt = time.Now()
+}
+
+// abortRunBeforeSteps 处理步骤开始前的致命错误（如项目不存在）：置终态 failed。
+func (a *App) abortRunBeforeSteps(run *transferRun, err error) {
+	log.Printf("[SuperDev] 项目转移启动失败 project=%s host=%s err=%v", run.projectID, run.hostID, err)
+	run.setError(err.Error())
+	a.finalizeRun(run, transferStateFailed)
+}
+
+func (r *transferRun) setError(msg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.errMsg == "" {
+		r.errMsg = msg
+	}
+}
+
+func (r *transferRun) addAsset(item transferCheckItem) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.assetReport = append(r.assetReport, item)
+}
+
+func (r *transferRun) setAbsDir(dir string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.absTargetDir = dir
+}
+
+func (r *transferRun) getAbsDir() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.absTargetDir
+}
+
+// snapshot 返回当前状态的深拷贝。AssetReport 仅在转移结束后（非 running）暴露，
+// 运行中不暴露半成品清单。
+func (r *transferRun) snapshot() transferStatusResponse {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	steps := make([]transferStep, len(r.steps))
+	copy(steps, r.steps)
+	resp := transferStatusResponse{
+		State: r.state,
+		Steps: steps,
+		Error: r.errMsg,
+	}
+	if r.state != transferStateRunning && len(r.assetReport) > 0 {
+		report := make([]transferCheckItem, len(r.assetReport))
+		copy(report, r.assetReport)
+		resp.AssetReport = report
+	}
+	return resp
+}
+
+// ---- 小工具 ----
+
+// devEnvSet 返回项目 dev 环境名集合。
+func devEnvSet(project model.Project) map[string]bool {
+	set := make(map[string]bool, len(project.Environments))
+	for _, env := range project.Environments {
+		if env.IsDev {
+			set[env.Name] = true
+		}
+	}
+	return set
+}
+
+// resolveRemoteAbsDir 把目标目录展开成目标机上的绝对路径。
+//
+// 不含 ~ 时原样返回（视为已是绝对路径）。含 ~ 时依目标机 $HOME 展开：
+// `cd && pwd`（cd 无参进 $HOME，恒成功，不依赖目标目录已存在）拿到 $HOME 后
+// 在 Go 侧拼接——刻意不靠 shell 展开 ~（EnsureCheckout 会单引号转义路径，
+// shell 不会展开引号内的 ~）。
+func resolveRemoteAbsDir(ctx context.Context, run gitinfo.Runner, dir string) (string, error) {
+	if !strings.HasPrefix(dir, "~") {
+		return dir, nil
+	}
+	out, code, err := run(ctx, "cd && pwd", "")
+	if err != nil {
+		return "", fmt.Errorf("解析目标机 $HOME: %w", err)
+	}
+	if code != 0 {
+		return "", fmt.Errorf("解析目标机 $HOME 非零退出 exitCode=%d", code)
+	}
+	home := strings.TrimSpace(out)
+	if home == "" {
+		return "", fmt.Errorf("目标机 $HOME 解析为空")
+	}
+	return home + strings.TrimPrefix(dir, "~"), nil
+}
+
+// shellQuoteTransfer 单引号包裹并转义，用于把路径安全嵌入 shell 命令。
+// 与 gitinfo.shellQuote 同款（gitinfo 内的是私有，无法跨包复用）。
+func shellQuoteTransfer(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// urlCredRe 命中把凭据内嵌进 URL 的写法：scheme://user:pass@host。
+// git clone 失败时的输出/错误会原样回显 remote URL，若源地址内嵌了 token
+// （https://x-access-token:ghp_xxx@github.com/...），不脱敏就会随 detail/日志/
+// 审计外泄。user 段不含 /、空白、@、:，故 http://host:8080/path 不会误伤。
+var urlCredRe = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://)[^/\s:@]+:[^/\s@]+@`)
+
+// redactCreds 把 URL 里内嵌的 user:pass 段替换为 ***:***，用于一切要落库/落日志/
+// 落审计的字符串。这是转移引擎自身输出的红线兜底，不替代 gitinfo 侧的处理。
+func redactCreds(s string) string {
+	return urlCredRe.ReplaceAllString(s, "${1}***:***@")
+}
+
+// readNodeBody 读取并关闭 NodeResponse.Body，返回响应体与状态码。
+func readNodeBody(resp nodetransport.NodeResponse) (string, int) {
+	if resp.Body == nil {
+		return "", resp.StatusCode
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b), resp.StatusCode
+}
+
+// runLocalGit 在本机 rootPath 上执行一条 git 命令，返回合并输出。
+func runLocalGit(ctx context.Context, rootPath string, args ...string) (string, error) {
+	full := append([]string{"-C", rootPath}, args...)
+	out, err := exec.CommandContext(ctx, "git", full...).CombinedOutput()
+	return string(out), err
+}
+
+// tailLines 返回末尾至多 n 行。
+func tailLines(lines []string, n int) []string {
+	if len(lines) <= n {
+		return lines
+	}
+	return lines[len(lines)-n:]
+}
+
+// truncateStr 把字符串截断到至多 n 个 rune，超长追加省略号。
+func truncateStr(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+func ternaryStr(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
+}

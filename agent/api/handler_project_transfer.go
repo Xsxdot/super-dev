@@ -194,6 +194,170 @@ func (a *App) transferPreflight(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// transferExecTimeout 是一次转移/迁回后台执行的整体超时上限。
+// clone 大仓库可能很慢，但也不能永久挂起——30 分钟是「长命令」与「卡死」的分界。
+const transferExecTimeout = 30 * time.Minute
+
+// startProjectTransfer 处理 POST /api/projects/{id}/transfer：校验后异步启动
+// 一次正向转移，立即 202 返回初始状态；同项目已有进行中的转移则 409。
+//
+// 请求体同 preflight（host_id 必填、target_dir 可选）。分支与 clone 源地址
+// 由本机 git 快照现场解析，不信任客户端传入，避免检出到错误分支/仓库。
+func (a *App) startProjectTransfer(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+
+	var req transferPreflightRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.HostID) == "" {
+		jsonError(w, http.StatusBadRequest, "host_id is required")
+		return
+	}
+
+	a.mu.RLock()
+	project, ok := a.findProject(projectID)
+	a.mu.RUnlock()
+	if !ok {
+		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	host, ok := a.resolveTransferTargetHost(w, req.HostID)
+	if !ok {
+		return
+	}
+
+	targetDir := strings.TrimSpace(req.TargetDir)
+	if targetDir == "" {
+		targetDir = defaultTransferTargetDir(project.RootPath)
+	}
+
+	// 本机 git 快照：确定检出分支与 clone 源地址。这两项是执行的硬前提，
+	// preflight 已把 not_a_git_repo / no_upstream 报成 blocker，此处再兜一次底，
+	// 避免绕过 preflight 直接 execute 时把无效转移放进后台。
+	timeout := a.runtimeStatusRequestTimeout
+	if timeout == 0 {
+		timeout = 3 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	local, err := gitinfo.Inspect(ctx, project.RootPath)
+	if err != nil {
+		log.Printf("[SuperDev] transfer execute: 本机 git 探测失败 project=%s err=%v", projectID, err)
+		jsonError(w, http.StatusInternalServerError, "local git inspect failed: "+err.Error())
+		return
+	}
+	if !local.IsRepo {
+		jsonError(w, http.StatusBadRequest, "项目根目录不是 git 仓库，无法转移")
+		return
+	}
+	if local.RemoteURL == "" {
+		jsonError(w, http.StatusBadRequest, "本机未配置 origin，目标机无法从远端 clone，无法转移")
+		return
+	}
+	if local.Branch == "" {
+		jsonError(w, http.StatusBadRequest, "本机处于 detached HEAD，无法确定要检出的分支")
+		return
+	}
+
+	run := newTransferRun(projectID, host.ID, host.Name, targetDir, local.Branch, local.RemoteURL)
+	if !a.beginTransfer(projectID, run) {
+		jsonError(w, http.StatusConflict, "该项目已有进行中的转移")
+		return
+	}
+
+	bg, bgCancel := context.WithTimeout(context.Background(), transferExecTimeout)
+	go func() {
+		defer bgCancel()
+		a.executeProjectTransfer(bg, run)
+	}()
+
+	jsonWrite(w, http.StatusAccepted, run.snapshot())
+}
+
+// getProjectTransferStatus 处理 GET /api/projects/{id}/transfer/status：
+// 返回内存中进行中/最近一次转移的状态；无任何记录（含进程重启后）→ 404。
+func (a *App) getProjectTransferStatus(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	a.transferMu.Lock()
+	run, ok := a.projectTransfers[projectID]
+	a.transferMu.Unlock()
+	if !ok {
+		jsonError(w, http.StatusNotFound, "no transfer in progress or history")
+		return
+	}
+	jsonOK(w, run.snapshot())
+}
+
+// startProjectTransferBack 处理 POST /api/projects/{id}/transfer-back：异步启动
+// 一次迁回（归属机 → 本机）。归属机由 projectHomeStore 反查得到；项目已归属
+// 本机则 400。请求体可选 target_dir（归属机侧项目路径，留空取默认）。
+func (a *App) startProjectTransferBack(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+
+	// 请求体可选：只用 target_dir（归属机侧路径）；host 由归属反查，不由客户端指定。
+	var req transferPreflightRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	a.mu.RLock()
+	project, ok := a.findProject(projectID)
+	a.mu.RUnlock()
+	if !ok {
+		jsonError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	homeHostID := ""
+	if a.projectHomeStore != nil {
+		homeHostID = a.projectHomeStore.HomeOf(projectID)
+	}
+	if homeHostID == "" {
+		jsonError(w, http.StatusBadRequest, "项目已归属本机，无需迁回")
+		return
+	}
+
+	// 归属机展示名尽力而为：记录已被删除时留空，不阻断迁回（仍能探测/清除归属）。
+	hostName := homeHostID
+	if host, found, err := hostByID(a.remoteStore, homeHostID); err == nil && found {
+		hostName = host.Name
+	}
+
+	targetDir := strings.TrimSpace(req.TargetDir)
+	if targetDir == "" {
+		targetDir = defaultTransferTargetDir(project.RootPath)
+	}
+
+	run := newTransferRun(projectID, homeHostID, hostName, targetDir, "", "")
+	if !a.beginTransfer(projectID, run) {
+		jsonError(w, http.StatusConflict, "该项目已有进行中的转移")
+		return
+	}
+
+	bg, bgCancel := context.WithTimeout(context.Background(), transferExecTimeout)
+	go func() {
+		defer bgCancel()
+		a.executeProjectTransferBack(bg, run)
+	}()
+
+	jsonWrite(w, http.StatusAccepted, run.snapshot())
+}
+
+// beginTransfer 登记一次转移的内存态：同项目已有进行中的转移（state==running）
+// 时返回 false（调用方回 409）；否则登记（覆盖上一次已结束的记录）并返回 true。
+func (a *App) beginTransfer(projectID string, run *transferRun) bool {
+	a.transferMu.Lock()
+	defer a.transferMu.Unlock()
+	if existing, ok := a.projectTransfers[projectID]; ok {
+		if existing.snapshot().State == transferStateRunning {
+			return false
+		}
+	}
+	a.projectTransfers[projectID] = run
+	return true
+}
+
 // resolveTransferTargetHost 解析并校验转移目标 host，校验失败时直接写入
 // HTTP 错误响应并返回 ok=false。
 //

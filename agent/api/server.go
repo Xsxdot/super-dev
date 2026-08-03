@@ -266,6 +266,13 @@ type App struct {
 	// mirrorRegistryUnsub 取消端口镜像对 nodeRegistry 的订阅；Close 时先于
 	// mirrorManager.Close 调用，避免订阅 channel 关闭后 goroutine 泄漏。
 	mirrorRegistryUnsub func()
+	// transferMu 保护 projectTransfers 的读写（start/409 判定/status 查询）。
+	transferMu sync.Mutex
+	// projectTransfers 保存进行中/最近一次项目转移的内存态（按 projectID）。
+	// 单 goroutine 执行转移，reader（status 端点）与 writer（引擎）经
+	// transferMu + transferRun.mu 互斥。进程重启即丢失——半完成态靠
+	// operation 审计追溯，status 404 即「无进行中」（Task 5 定的诚实边界）。
+	projectTransfers map[string]*transferRun
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -514,6 +521,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		cfg:                         cfg,
 		projects:                    []model.Project{},
 		managers:                    map[string]*process.Manager{},
+		projectTransfers:            map[string]*transferRun{},
 		buf:                         buf,
 		store:                       s,
 		registry:                    registry,
@@ -780,6 +788,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/projects/{id}/setup", a.putProjectSetup)
 	mux.HandleFunc("GET /api/projects/{id}/runtime-status", a.getProjectRuntimeStatus)
 	mux.HandleFunc("POST /api/projects/{id}/transfer/preflight", a.transferPreflight)
+	mux.HandleFunc("POST /api/projects/{id}/transfer", a.startProjectTransfer)
+	mux.HandleFunc("GET /api/projects/{id}/transfer/status", a.getProjectTransferStatus)
+	mux.HandleFunc("POST /api/projects/{id}/transfer-back", a.startProjectTransferBack)
 	mux.HandleFunc("GET /api/language-runtime/providers", a.listLanguageRuntimeProviders)
 	mux.HandleFunc("GET /api/language-runtime/{language}/schema", a.describeLanguageRuntimeSchema)
 	mux.HandleFunc("POST /api/language-runtime/{language}/suggest", a.suggestServiceRuntime)

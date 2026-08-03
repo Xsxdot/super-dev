@@ -65,6 +65,17 @@ const (
 	//     但两条路径（托管走 runDeploymentRuntimeAction 语义 / 非托管 SIGTERM）都必须
 	//     写入 prepared + executed/failed 审计，保证冲突处理动作事后可追溯
 	KindPortMirrorStopOccupier = "port_mirror.stop_occupier"
+	// KindProjectTransfer 表示项目归属转移（含迁回）的多步编排动作。
+	//
+	// 注意：
+	//   - 该 kind 同 OperationTunnelInvalidate / KindPortMirrorStopOccupier 一样不参与
+	//     审批门禁——转移前的 preflight→execute 人审对话框本身即人工审查，见
+	//     operation/policy.go 的「免审批门 + 强制审计」段落
+	//   - 但每个步骤（stop_dev/checkout/register/mcp_setup/asset_audit/switch_home）
+	//     开始前写 prepared、结束后写 executed/failed，半完成态（进程重启丢失内存态）
+	//     靠这条审计链追溯，prepared 事件即失败恢复的 outbox
+	//   - 审计 Data 只承载步骤码/项目/host/结果，绝不携带任何秘密值或 git 凭据
+	KindProjectTransfer = "project.transfer"
 
 	// RiskLow 表示仅影响开发环境本机目标的低风险操作。
 	RiskLow = "low"
