@@ -5,6 +5,8 @@
 //   - 覆盖 HTTP 创建 pending 审批后 ≤1s 内收到含新单的帧
 //   - 覆盖 approve 后收到该单进入 decided 且 pending 清空的帧
 //   - 覆盖断连后发布者注册表被清理（对齐 wsPortMirrors 读 pump 教训的测试写法）
+//   - 覆盖 spec §12「双控制面」验收四项串起来的集成语义（Task 11）：双投递、
+//     先裁决生效、灰化数据面、记录裁决方
 //
 // 边界：
 //   - 不覆盖桌面端消费逻辑（Task 6）
@@ -13,6 +15,7 @@ package api
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strings"
 	"testing"
@@ -72,6 +75,132 @@ func TestWsOperationApprovals_SnapshotFanOut(t *testing.T) {
 	assert.Equal(t, operation.ApprovalApproved, afterApprove.Decided[0].Status)
 	assert.NotEmpty(t, afterApprove.Decided[0].DecidedBy)
 	assert.Empty(t, afterApprove.Decided[0].TokenHash, "快照必须脱敏 token 哈希")
+}
+
+// TestWsOperationApprovals_DualControlPlaneAcceptance 是 Task 11 的集成测试，
+// 把 spec §12「双控制面」的四项验收在一个测试里连起来验证（对应
+// task-11-brief.md 的验收描述），各步骤都用真实 HTTP server + 真实 WS 连接 +
+// 两条真实凭据（不伪造 Principal 塞 ctx）：
+//
+//  1. 双投递：CP-A、CP-B 两个 WS 订阅方同时在线，创建 pending 后两边都必须
+//     收到含新单的帧。
+//  2. 先裁决生效：CP-A approve 成功后，CP-B 再 reject 同一单必须得到 409
+//     approval_already_decided，响应体 decided_by 回显真正的胜者 CP-A（而不是
+//     败者 CP-B 或本机)。
+//  3. 灰化数据面：两边随后各自的帧里该单都落在 decided 段，且
+//     Decided[0].DecidedBy == "CP-A"。
+//  4. 记录裁决方：approve 产生的审计事件 Data 里的 decided_by/principal_type/
+//     principal_id 记录的是 CP-A 这条远程凭据，而不是败者或本机。
+func TestWsOperationApprovals_DualControlPlaneAcceptance(t *testing.T) {
+	app := newTestAppForPackage(t)
+	app.mu.Lock()
+	app.appendProjectLocked(operationAPIProject(false, false))
+	app.mu.Unlock()
+
+	// 追加两条独立凭据记录，模拟两个真实控制面各自持有的长期 token
+	// （Task 1: AppendTokenRecord；下游 withSecurity 命中后据此推导 Principal）。
+	recA, err := app.securityStore.AppendTokenRecord("CP-A", "cp-a-secret-token")
+	require.NoError(t, err)
+	_, err = app.securityStore.AppendTokenRecord("CP-B", "cp-b-secret-token")
+	require.NoError(t, err)
+
+	// 故意不用 newHTTPServerForPackage/testServerHandler：那层包装会在请求缺失
+	// Authorization 头时自动注入本机 token，WS dial 只带 access_token query 参数、
+	// 不带 Authorization 头，会被那层包装的默认注入吃掉——两个连接会都被鉴权成
+	// 「本机」，测不出真正的双控制面 access_token 鉴权路径。这里绑定裸
+	// app.Handler()，凡是需要鉴权的请求都显式带凭据。
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	dial := func(accessToken string) *websocket.Conn {
+		t.Helper()
+		wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/operation-approvals?access_token=" + accessToken
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn
+	}
+	readFrame := func(conn *websocket.Conn) approvalsSnapshot {
+		t.Helper()
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+		var snap approvalsSnapshot
+		require.NoError(t, conn.ReadJSON(&snap), "expected a snapshot frame within 2s")
+		return snap
+	}
+
+	// --- 1. 双投递：两个控制面同时在线 ---
+	connA := dial("cp-a-secret-token")
+	connB := dial("cp-b-secret-token")
+
+	initialA := readFrame(connA)
+	initialB := readFrame(connB)
+	assert.Empty(t, initialA.Pending)
+	assert.Empty(t, initialB.Pending)
+
+	// preflight 触发 approval_required（runtime.restart 默认需审批），落地一条
+	// pending 审批；创建方身份与本测试无关，显式带本机 token 即可（这里绑定的
+	// 是裸 app.Handler()，没有 testServerHandler 的默认注入）。
+	required := postJSONWithHeadersForTest[map[string]any](t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, map[string]string{
+		"Authorization": "Bearer " + app.LocalAccessToken(),
+	}, http.StatusForbidden)
+	approvalID := required["approval"].(map[string]any)["id"].(string)
+
+	afterCreateA := readFrame(connA)
+	afterCreateB := readFrame(connB)
+	require.Len(t, afterCreateA.Pending, 1, "CP-A must receive the new pending approval (dual delivery)")
+	require.Len(t, afterCreateB.Pending, 1, "CP-B must receive the same pending approval (dual delivery)")
+	assert.Equal(t, approvalID, afterCreateA.Pending[0].ID)
+	assert.Equal(t, approvalID, afterCreateB.Pending[0].ID)
+
+	// --- 2. 先裁决生效：CP-A approve 成功，CP-B 随后 reject 同一单必须 409 ---
+	approveResp := postJSONWithHeadersForTest[operationApprovalDecisionResponse](t, srv.URL+"/api/operation-approvals/"+approvalID+"/approve", map[string]any{
+		"note": "approved by CP-A",
+	}, map[string]string{
+		"Authorization": "Bearer cp-a-secret-token",
+	}, http.StatusOK)
+	assert.Equal(t, "CP-A", approveResp.Approval.DecidedBy)
+
+	// approved 已是终态：CP-B 无论 approve 还是 reject 都不能覆盖或翻案，
+	// 必须收到稳定的 409，且响应体回显真正裁决成功的胜者 CP-A。
+	conflict := postJSONWithHeadersForTest[map[string]any](t, srv.URL+"/api/operation-approvals/"+approvalID+"/reject", map[string]any{
+		"note": "CP-B trying to reject an already-decided approval",
+	}, map[string]string{
+		"Authorization": "Bearer cp-b-secret-token",
+	}, http.StatusConflict)
+	assert.Equal(t, "approval_already_decided", conflict["code"])
+	assert.Equal(t, "CP-A", conflict["decided_by"])
+
+	// --- 3. 灰化数据面：两边随后的帧里该单落在 decided 段，DecidedBy=="CP-A" ---
+	// CP-B 的 reject 走的是 409 早退路径，不调用 signalApprovalsPublishers，
+	// 所以两边各自只会再收到 approve 那一次广播触发的帧，不会因为 reject
+	// 尝试额外多收一帧。
+	afterApproveA := readFrame(connA)
+	afterApproveB := readFrame(connB)
+	assert.Empty(t, afterApproveA.Pending)
+	assert.Empty(t, afterApproveB.Pending)
+	require.Len(t, afterApproveA.Decided, 1)
+	require.Len(t, afterApproveB.Decided, 1)
+	assert.Equal(t, approvalID, afterApproveA.Decided[0].ID)
+	assert.Equal(t, approvalID, afterApproveB.Decided[0].ID)
+	assert.Equal(t, operation.ApprovalApproved, afterApproveA.Decided[0].Status)
+	assert.Equal(t, "CP-A", afterApproveA.Decided[0].DecidedBy)
+	assert.Equal(t, "CP-A", afterApproveB.Decided[0].DecidedBy)
+
+	// --- 4. 记录裁决方：审计事件 Data 里记录的 principal 信息是 CP-A ---
+	audit := getJSONWithHeadersForTest[operationAuditListResponse](t, srv.URL+"/api/operation-audit?approval_id="+approvalID, map[string]string{
+		"Authorization": "Bearer " + app.LocalAccessToken(),
+	}, http.StatusOK)
+	var approvedEvent *operation.AuditEvent
+	for i := range audit.Events {
+		if audit.Events[i].Action == operation.AuditApproved {
+			approvedEvent = &audit.Events[i]
+			break
+		}
+	}
+	require.NotNil(t, approvedEvent, "expected an approved audit event")
+	assert.Equal(t, "CP-A", approvedEvent.Data["decided_by"])
+	assert.Equal(t, "remote", approvedEvent.Data["principal_type"])
+	assert.Equal(t, recA.ID, approvedEvent.Data["principal_id"])
 }
 
 // TestWsOperationApprovals_UnregistersPublisherOnDisconnect 验证连接断开后

@@ -337,6 +337,25 @@ func getJSONForTest[T any](t *testing.T, url string, status int) T {
 	return out
 }
 
+// getJSONWithHeadersForTest 同 getJSONForTest，但允许显式带请求头——用于绑定
+// 裸 app.Handler()（没有 testServerHandler 默认注入本机 token）的测试场景，
+// 调用方必须自己带凭据。
+func getJSONWithHeadersForTest[T any](t *testing.T, url string, headers map[string]string, status int) T {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, status, resp.StatusCode)
+	var out T
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	return out
+}
+
 func postJSONForRawTest(t *testing.T, url string, body any, status int) map[string]any {
 	t.Helper()
 	return postJSONWithHeadersForTest[map[string]any](t, url, body, nil, status)
