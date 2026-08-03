@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -220,6 +221,49 @@ func TestAdoptionAPI_CreateRateLimited429(t *testing.T) {
 	rec := httptestDoWithHeader(t, app, http.MethodPost, "/api/security/adoption-requests",
 		bytes.NewBufferString(`{"name":"CP-Flood"}`), map[string]string{"Authorization": ""})
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
+}
+
+// TestAdoptionAPI_ConcurrentCreateNeverExceedsRateLimit 是 Critical 修复的
+// 端到端回归测试：早期的 createAdoptionRequest 把限流检查（RateLimited）和
+// 创建（Create）拆成两次独立加锁的调用，并发的匿名 POST 可以全部先通过检查
+// 再各自成功插入，"30s 内最多 3 个 pending" 在并发下形同虚设。现在 handler
+// 只调用一次原子的 TryCreate，本测试用一批并发请求穿过真实 HTTP 路由验证
+// 201 的数量恒不超过限流上限。
+func TestAdoptionAPI_ConcurrentCreateNeverExceedsRateLimit(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	srv := newHTTPServerForPackage(t, app)
+
+	const attempts = 20
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	created := 0
+
+	wg.Add(attempts)
+	for i := 0; i < attempts; i++ {
+		go func() {
+			defer wg.Done()
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/security/adoption-requests",
+				bytes.NewBufferString(`{"name":"CP-Concurrent"}`))
+			if err != nil {
+				return
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusCreated {
+				mu.Lock()
+				created++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, 3, created, "%d 个并发 Create 请求中成功创建的数量必须恰好等于限流上限", attempts)
 }
 
 // TestAdoptionAPI_BypassPathsRemainOpen 验证纳管的三个端点都在 bypass 白名单内，

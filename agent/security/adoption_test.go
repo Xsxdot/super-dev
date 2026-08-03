@@ -2,6 +2,7 @@
 package security_test
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,15 @@ func (c *testClock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
+// mustTryCreate 是 TryCreate 的测试便利包装：断言未被限流并返回创建结果，
+// 简化"确定不会命中限流"的既有用例。
+func mustTryCreate(t *testing.T, mgr *security.AdoptionManager, name string) security.AdoptionRequest {
+	t.Helper()
+	req, ok := mgr.TryCreate(name)
+	require.True(t, ok, "本次 TryCreate 不应被限流")
+	return req
+}
+
 // TestAdoptionManager_FullHappyPath 覆盖 brief Step1 的全链路：
 // Create → 既有控制面 Approve → 接入方 Get 拿 adoption_token → Exchange 拿长期
 // token → VerifyTokenPrincipal 命中且 Name 正确。同时断言纳管成功后原控制面
@@ -30,7 +40,7 @@ func TestAdoptionManager_FullHappyPath(t *testing.T) {
 	clock := &testClock{now: time.Now().UTC()}
 	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{Now: clock.Now})
 
-	req := mgr.Create("新控制面")
+	req := mustTryCreate(t, mgr, "新控制面")
 	assert.Equal(t, security.AdoptionStatePending, req.State)
 	assert.Equal(t, "新控制面", req.Name)
 	assert.NotEmpty(t, req.ID)
@@ -71,7 +81,7 @@ func TestAdoptionManager_ApproveDefaultsEmptyNameToPlaceholder(t *testing.T) {
 	store := newTestStore(t)
 	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{})
 
-	req := mgr.Create("  ")
+	req := mustTryCreate(t, mgr, "  ")
 	assert.NotEmpty(t, req.Name)
 	assert.NotEqual(t, "  ", req.Name)
 }
@@ -83,7 +93,7 @@ func TestAdoptionManager_ExpiredRequestRejectsApprove(t *testing.T) {
 	clock := &testClock{now: time.Now().UTC()}
 	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{Now: clock.Now})
 
-	req := mgr.Create("迟到的控制面")
+	req := mustTryCreate(t, mgr, "迟到的控制面")
 	clock.Advance(security.AdoptionRequestTTL + time.Second)
 
 	_, err := mgr.Approve(req.ID)
@@ -102,7 +112,7 @@ func TestAdoptionManager_GetIsOneTimeForToken(t *testing.T) {
 	clock := &testClock{now: time.Now().UTC()}
 	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{Now: clock.Now})
 
-	req := mgr.Create("控制面 X")
+	req := mustTryCreate(t, mgr, "控制面 X")
 	_, err := mgr.Approve(req.ID)
 	require.NoError(t, err)
 
@@ -124,7 +134,7 @@ func TestAdoptionManager_ExchangeIsOneTime(t *testing.T) {
 	clock := &testClock{now: time.Now().UTC()}
 	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{Now: clock.Now})
 
-	req := mgr.Create("控制面 Y")
+	req := mustTryCreate(t, mgr, "控制面 Y")
 	adoptionToken, err := mgr.Approve(req.ID)
 	require.NoError(t, err)
 
@@ -144,7 +154,7 @@ func TestAdoptionManager_ExchangeUnknownTokenRejected(t *testing.T) {
 	_, _, err := mgr.Exchange("never-issued-token")
 	require.ErrorIs(t, err, security.ErrAdoptionTokenInvalid)
 
-	req := mgr.Create("控制面 Z")
+	req := mustTryCreate(t, mgr, "控制面 Z")
 	_, _, err = mgr.Exchange("guess-" + req.ID)
 	require.ErrorIs(t, err, security.ErrAdoptionTokenInvalid)
 }
@@ -155,7 +165,7 @@ func TestAdoptionManager_RejectThenGetShowsRejected(t *testing.T) {
 	store := newTestStore(t)
 	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{})
 
-	req := mgr.Create("被拒绝的控制面")
+	req := mustTryCreate(t, mgr, "被拒绝的控制面")
 	err := mgr.Reject(req.ID)
 	require.NoError(t, err)
 
@@ -175,7 +185,7 @@ func TestAdoptionManager_ApproveTwiceAlreadyDecided(t *testing.T) {
 	store := newTestStore(t)
 	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{})
 
-	req := mgr.Create("控制面 W")
+	req := mustTryCreate(t, mgr, "控制面 W")
 	_, err := mgr.Approve(req.ID)
 	require.NoError(t, err)
 
@@ -200,18 +210,80 @@ func TestAdoptionManager_UnknownIDReturnsNotFound(t *testing.T) {
 }
 
 // TestAdoptionManager_RateLimited 验证 30s 窗口内超过 3 个 pending 接入请求时
-// RateLimited 报告 true；窗口滑出后自动恢复为 false。
+// TryCreate 报告 !ok；窗口滑出后自动恢复为可创建。
 func TestAdoptionManager_RateLimited(t *testing.T) {
 	store := newTestStore(t)
 	clock := &testClock{now: time.Now().UTC()}
 	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{Now: clock.Now})
 
 	for i := 0; i < security.AdoptionRateLimitMax; i++ {
-		require.False(t, mgr.RateLimited(), "第 %d 个 pending 请求前不应限流", i+1)
-		mgr.Create("控制面")
+		_, ok := mgr.TryCreate("控制面")
+		require.True(t, ok, "第 %d 个 pending 请求不应被限流", i+1)
 	}
-	assert.True(t, mgr.RateLimited(), "达到上限后应报告限流")
+	_, ok := mgr.TryCreate("控制面")
+	assert.False(t, ok, "达到上限后应拒绝创建")
 
 	clock.Advance(security.AdoptionRateLimitWindow + time.Second)
-	assert.False(t, mgr.RateLimited(), "窗口滑出后应自动恢复")
+	_, ok = mgr.TryCreate("控制面")
+	assert.True(t, ok, "窗口滑出后应自动恢复")
+}
+
+// TestAdoptionManager_TryCreateConcurrentRequestsNeverExceedCap 是 Critical
+// 修复的回归测试：早期实现把限流判断（RateLimited）和创建（Create）拆成两次
+// 独立加锁的调用，并发请求可以全部先通过检查、再各自成功插入，导致 "30s 内最多
+// 3 个 pending" 的限流在并发下形同虚设。TryCreate 把两步合并进同一次加锁的
+// 临界区，本测试用一批并发调用验证成功创建数恒不超过 AdoptionRateLimitMax。
+func TestAdoptionManager_TryCreateConcurrentRequestsNeverExceedCap(t *testing.T) {
+	store := newTestStore(t)
+	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{})
+
+	const attempts = 50
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	succeeded := 0
+
+	wg.Add(attempts)
+	for i := 0; i < attempts; i++ {
+		go func() {
+			defer wg.Done()
+			if _, ok := mgr.TryCreate("并发控制面"); ok {
+				mu.Lock()
+				succeeded++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, security.AdoptionRateLimitMax, succeeded,
+		"%d 个并发 TryCreate 中成功创建的数量必须恰好等于限流上限，不能被竞态绕过", attempts)
+}
+
+// TestAdoptionManager_EvictsExpiredRecordsOnNextCreate 是 Important #1
+// 修复的回归测试：requests map 此前只增不减，pending/approved/rejected/expired
+// 记录会在进程生命周期内无界累积。本测试验证一条记录过期后，下一次 TryCreate
+// 会把它连同它占用的内存一起清扫掉——用 Get 返回 ErrAdoptionNotFound 间接证明
+// 记录已经从内部 map 中被删除，而不是仅仅状态翻转为 expired。
+func TestAdoptionManager_EvictsExpiredRecordsOnNextCreate(t *testing.T) {
+	store := newTestStore(t)
+	clock := &testClock{now: time.Now().UTC()}
+	mgr := security.NewAdoptionManager(store, security.AdoptionManagerOptions{Now: clock.Now})
+
+	stale := mustTryCreate(t, mgr, "过期的控制面")
+
+	// 尚未过期时，下一次 TryCreate 不应清扫它——GET 仍能读到 pending。
+	_, ok := mgr.TryCreate("控制面 A")
+	require.True(t, ok)
+	got, _, err := mgr.Get(stale.ID)
+	require.NoError(t, err)
+	assert.Equal(t, security.AdoptionStatePending, got.State, "未过期前不应被清扫")
+
+	clock.Advance(security.AdoptionRequestTTL + time.Second)
+
+	// 触发一次新的 TryCreate，惰性清扫应删除已过期的 stale 记录。
+	_, ok = mgr.TryCreate("控制面 B")
+	require.True(t, ok)
+
+	_, _, err = mgr.Get(stale.ID)
+	require.ErrorIs(t, err, security.ErrAdoptionNotFound, "过期记录必须被清扫出内部 map，而不是无限期保留")
 }

@@ -72,23 +72,31 @@ func (a *App) createAdoptionRequest(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if a.adoptions.RateLimited() {
+	// 限流判断与创建必须原子完成（见 TryCreate 注释）——分成两次独立加锁的
+	// RateLimited()+Create() 调用会被并发请求绕过，这是本端点唯一的防骚扰门槛。
+	adoptionReq, ok := a.adoptions.TryCreate(req.Name)
+	if !ok {
 		log.Printf("[SuperDev] security: adoption 创建限流触发 name=%s", req.Name)
 		jsonError(w, http.StatusTooManyRequests, "too many pending adoption requests, try again later")
 		return
 	}
-
-	adoptionReq := a.adoptions.Create(req.Name)
 	plan, err := operation.PlanAgentAdopt(adoptionReq.ID, adoptionReq.Name)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		// requestID 不可能为空（uuid.NewString 生成），本分支理论不可达；
+		// 即便如此也不把内部错误文本回显给未持有凭据的匿名调用方。
+		log.Printf("[SuperDev] security: adoption plan 生成失败 id=%s err=%v", adoptionReq.ID, err)
+		jsonError(w, http.StatusInternalServerError, "adoption request failed")
 		return
 	}
 	// requester/requesterLabel 都取接入方自报名——这条单没有 X-SuperDev-Requester
 	// 之类的 MCP 请求头可用，接入方展示名就是「谁在申请」的唯一可读信息。
 	approval, err := a.operationApprovals.FindOrCreatePending(r.Context(), plan, adoptionReq.Name, adoptionReq.Name)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		// FindOrCreatePending 内部做文件 I/O（operation.ApprovalFileStore），
+		// 磁盘/权限故障会带出本机路径等信息——绝不能把 err.Error() 原样回显给
+		// 这个 bypass 白名单端点背后未持有任何凭据的匿名调用方，只服务器侧记录。
+		log.Printf("[SuperDev] security: adoption 审批单创建失败 id=%s err=%v", adoptionReq.ID, err)
+		jsonError(w, http.StatusInternalServerError, "adoption request failed")
 		return
 	}
 	// 广播给所有在线控制面：新落的待审批单必须立刻出现在既有控制面的审批列表里，
@@ -126,7 +134,10 @@ func (a *App) getAdoptionRequest(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusNotFound, "adoption request not found")
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, err.Error())
+		// AdoptionManager.Get 当前只会返回 ErrAdoptionNotFound，本分支理论不
+		// 可达；防御性地同样不把内部错误文本回显给匿名调用方（同上）。
+		log.Printf("[SuperDev] security: adoption 状态查询失败 id=%s err=%v", id, err)
+		jsonError(w, http.StatusInternalServerError, "adoption request failed")
 		return
 	}
 	jsonOK(w, adoptionStatusResponse{State: req.State, AdoptionToken: token})

@@ -3,9 +3,10 @@
 // 职责：
 //   - 保存进程内的接入请求（pending/approved/rejected/expired）及其一次性
 //     adoption token
-//   - 为接入方 Create 请求、既有控制面 Approve/Reject 决策、接入方 Exchange
-//     兑换长期 token 提供并发安全的状态机
+//   - 为接入方 TryCreate 请求（限流判断与创建原子化）、既有控制面
+//     Approve/Reject 决策、接入方 Exchange 兑换长期 token 提供并发安全的状态机
 //   - 兑换成功后调用 Store.AppendTokenRecord 为接入方追加一条独立的长期凭据
+//   - 惰性清扫过期记录，约束 bypass 白名单端点带来的无界内存增长
 //
 // 边界：
 //   - 不落盘：AdoptionManager 是进程内存态，agent 重启即丢失全部接入请求，
@@ -121,18 +122,27 @@ func NewAdoptionManager(store *Store, opts AdoptionManagerOptions) *AdoptionMana
 	return &AdoptionManager{now: now, store: store, requests: map[string]*adoptionRecord{}}
 }
 
-// Create 创建一条新的待审批接入请求。
+// TryCreate 原子地判断限流上限并创建一条新的待审批接入请求。
 //
 // 参数：
 //   - name: 接入方（新控制面）自报的展示名，空则默认为「控制面」
 //
 // 返回：
-//   - 新创建的 pending AdoptionRequest
+//   - 新创建的 pending AdoptionRequest；被限流时为零值
+//   - 是否成功创建；false 表示 AdoptionRateLimitWindow 内已有
+//     AdoptionRateLimitMax 个 pending 接入请求，调用方（handler_adoption.go
+//     的 Create 端点）应据此返回 429，不再重试
 //
 // 注意：
-//   - 调用方（handler_adoption.go 的 Create 端点）必须先经 RateLimited 判断
-//     是否已达到 30s 内 3 个 pending 的上限，本方法本身不做限流拒绝
-func (m *AdoptionManager) Create(name string) AdoptionRequest {
+//   - 限流判断与插入在同一次加锁内完成——这是本方法存在的唯一原因：早期版本
+//     把「查限流」和「真正创建」拆成 RateLimited()+Create() 两次独立加锁的
+//     调用，中间留出的窗口让并发请求可以全部先通过检查、再各自成功插入，
+//     限流形同虚设（这是本文件唯一防骚扰的门槛，因为 Create 端点是 bypass
+//     白名单，攻击者此刻没有任何凭据）。调用方必须只用本方法创建，不要再
+//     自行组合别的判断+插入两步调用
+//   - 顺带惰性清扫已过期的接入请求（见 evictExpiredLocked），把内存增长
+//     限制在「窗口内活跃请求数」量级，而不是无界累积
+func (m *AdoptionManager) TryCreate(name string) (AdoptionRequest, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = defaultTokenRecordName
@@ -140,6 +150,10 @@ func (m *AdoptionManager) Create(name string) AdoptionRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now().UTC()
+	m.evictExpiredLocked(now)
+	if m.pendingCountWithinWindowLocked(now) >= AdoptionRateLimitMax {
+		return AdoptionRequest{}, false
+	}
 	req := AdoptionRequest{
 		ID:        uuid.NewString(),
 		Name:      name,
@@ -149,22 +163,12 @@ func (m *AdoptionManager) Create(name string) AdoptionRequest {
 	}
 	m.requests[req.ID] = &adoptionRecord{request: req}
 	log.Printf("[SuperDev] security: adoption 接入请求已创建 id=%s name=%s", req.ID, req.Name)
-	return req
+	return req, true
 }
 
-// RateLimited 判断当前是否已达到 Create 的限流上限。
-//
-// 返回：
-//   - AdoptionRateLimitWindow 窗口内创建、且仍处于 pending 状态的接入请求数
-//     达到 AdoptionRateLimitMax 时返回 true
-//
-// 注意：
-//   - 接入方此刻没有任何凭据，Create 端点是 bypass 白名单的一部分——这里的
-//     限流就是防骚扰的唯一门槛，必须在调用 Create 前先检查
-func (m *AdoptionManager) RateLimited() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	now := m.now().UTC()
+// pendingCountWithinWindowLocked 统计 AdoptionRateLimitWindow 内创建、且仍
+// 处于 pending 状态的接入请求数；调用方必须已持有 m.mu。
+func (m *AdoptionManager) pendingCountWithinWindowLocked(now time.Time) int {
 	count := 0
 	for _, rec := range m.requests {
 		if rec.request.State != AdoptionStatePending {
@@ -177,7 +181,28 @@ func (m *AdoptionManager) RateLimited() bool {
 			count++
 		}
 	}
-	return count >= AdoptionRateLimitMax
+	return count
+}
+
+// evictExpiredLocked 清理已超过 AdoptionRequestTTL 的接入请求（无论
+// pending/approved/rejected），防止 requests map 无界增长；调用方必须已
+// 持有 m.mu。
+//
+// 注意：
+//   - 只在每次 TryCreate 时惰性清扫，不额外起定时器 goroutine（YAGNI）——
+//     Create 本身就是本文件唯一的增长入口，没有 Create 就没有新的清理压力
+//   - 不提前清理仍在有效期内、approved 但尚未被领取/兑换的记录——它们的
+//     ExpiresAt 还没到，本来就不会被本函数删除，Get/Exchange 仍能正常命中
+//   - 清扫只发生在被 TryCreate 触发时，因此一条请求过期后、在下一次任意
+//     TryCreate 调用之前，仍可被 Get 正常读到「state: expired」——这不是
+//     竞态，只是清理时机是惰性的，不影响单条请求自身的过期判定（那部分由
+//     Approve/Reject/Get/Exchange 各自的时间比较独立保证）
+func (m *AdoptionManager) evictExpiredLocked(now time.Time) {
+	for id, rec := range m.requests {
+		if now.After(rec.request.ExpiresAt) {
+			delete(m.requests, id)
+		}
+	}
 }
 
 // Approve 批准一条 pending 接入请求，生成一次性 adoption token（只落 hash）。
