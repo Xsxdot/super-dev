@@ -29,6 +29,9 @@ export function agentUninstallScriptURL(name: AgentUninstallScriptName): string 
 //   - approval: 待处理审批请求
 //   - decided_by: code 为 approval_already_decided 时，服务端从裁决方凭据推导的展示名
 //   - version: code 为 existing_agent_detected 时，探测到的既有 agent 版本
+//   - address: code 为 existing_agent_detected 时，权威的目标机直连地址（host:port，
+//     取自本机为该 Host 配置的 direct 连接链项，不是探测用的临时连接）；链上
+//     只有 tunnel（无 direct 项）时为空字符串
 //   - data: 错误码特有的结构化副作用或恢复上下文
 //
 // 注意：
@@ -41,6 +44,7 @@ export interface AgentAPIErrorPayload {
   approval?: OperationApproval
   decided_by?: string
   version?: string
+  address?: string
   data?: unknown
 }
 
@@ -65,6 +69,7 @@ export class AgentAPIError extends Error {
   approval?: OperationApproval
   decided_by?: string
   version?: string
+  address?: string
   data?: unknown
 
   constructor(message: string, status: number, payload?: AgentAPIErrorPayload) {
@@ -77,6 +82,7 @@ export class AgentAPIError extends Error {
     this.approval = payload?.approval
     this.decided_by = payload?.decided_by
     this.version = payload?.version
+    this.address = payload?.address
     this.data = payload?.data
   }
 }
@@ -117,13 +123,17 @@ export function isApprovalAlreadyDecidedError(error: unknown): error is AgentAPI
 //   - error: 任意捕获到的异常值
 //
 // 返回：
-//   - true 表示 code 为 existing_agent_detected，version 携带探测到的既有 agent 版本
+//   - true 表示 code 为 existing_agent_detected，version 携带探测到的既有 agent
+//     版本，address 携带权威的目标机直连地址（可能为空——见 AgentAPIErrorPayload
+//     的 address 字段注释）
 //
 // 注意：
 //   - 命中时不应盲目重试安装——调用方需要引导用户在「纳管」（发起接入请求，
 //     经既有控制面审批换发独立凭据）与「强制重装」（显式确认、停掉对方在跑的
 //     agent）之间选择，见 AgentConfigPanel 的既有 agent 检测分支
-export function isExistingAgentDetectedError(error: unknown): error is AgentAPIError & { version?: string } {
+//   - 纳管请求必须使用 address，不能自己用本控制面的监听端口拼地址——那是
+//     两回事（详见 AgentConfigPanel.vue 里 adoptionTargetURL 的注释）
+export function isExistingAgentDetectedError(error: unknown): error is AgentAPIError & { version?: string; address?: string } {
   return error instanceof AgentAPIError && error.code === 'existing_agent_detected'
 }
 

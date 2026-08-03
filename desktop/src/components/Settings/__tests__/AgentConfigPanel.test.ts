@@ -926,5 +926,64 @@ describe('AgentConfigPanel', () => {
       expect(installAgent).toHaveBeenLastCalledWith('h1', { method: 'push_over_ssh', force_reinstall: true })
       expect(wrapper.find('[data-test="agent-install-existing-detected"]').exists()).toBe(false)
     })
+
+    it('uses the authoritative address from the 409 payload, not a guess from this control plane\'s own port', async () => {
+      const store = useAgentsStore()
+      // 用一个既不是 host 记录的公网 IP、也不是本控制面 bindPort 猜测结果的地址，
+      // 确保断言只可能在"确实用了 409 payload 里的权威地址"时才通过。
+      vi.spyOn(store, 'installAgent').mockRejectedValueOnce(
+        new AgentAPIError('existing agent detected', 409, { code: 'existing_agent_detected', version: '1.4.0', address: '198.51.100.7:9001' }),
+      )
+      const wrapper = mount(AgentConfigPanel, {
+        props: {
+          visible: true,
+          agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+          host: hosts[0],
+          initialTab: 'install',
+        },
+        global: { plugins: [installTestI18n()] },
+      })
+      await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+      await wrapper.find('[data-test="agent-install-push"]').trigger('click')
+      await flushPromises()
+
+      const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+
+      expect(requestAdoption).toHaveBeenCalledWith('http://198.51.100.7:9001', expect.any(String))
+    })
+
+    it('falls back to the host IP with the standard default port, not this control plane\'s own configured port, when 409 carries no address', async () => {
+      const store = useAgentsStore()
+      // agent 配置了一个非默认的 listen_port（9999）——旧实现会误用它拼纳管地址；
+      // 修复后即使 409 没带 address，兜底猜测也必须用标准默认端口 57017，不是 9999。
+      vi.spyOn(store, 'installAgent').mockRejectedValueOnce(existingAgentDetectedError('1.4.0'))
+      const wrapper = mount(AgentConfigPanel, {
+        props: {
+          visible: true,
+          agent: agent({
+            runtime: { installed: false, health: 'unknown', reachable: false },
+            config: { listen_address: '127.0.0.1', listen_port: 9999 },
+          }),
+          host: hosts[0],
+          initialTab: 'install',
+        },
+        global: { plugins: [installTestI18n()] },
+      })
+      await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+      await wrapper.find('[data-test="agent-install-push"]').trigger('click')
+      await flushPromises()
+
+      const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+
+      expect(requestAdoption).toHaveBeenCalledWith('http://203.0.113.10:57017', expect.any(String))
+    })
   })
 })

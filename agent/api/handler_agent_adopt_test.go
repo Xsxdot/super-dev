@@ -75,6 +75,46 @@ func TestAdoptAgentStoresTokenAndMarksProvisioned(t *testing.T) {
 	assert.Contains(t, string(rawAgents), "adopted-secret-token")
 }
 
+// TestAdoptAgentRejectsWhenAlreadyProvisioned 覆盖状态前置条件（review 修复）：
+// 本机记录已经是 provisioned 态（本控制面之前已经成功持有过一份能用的凭据）时，
+// 拒绝任意调用方自报的 token 覆盖它——否则任何持有本机凭据的调用方都能悄悄
+// 顶替一个正常工作的 agent 凭据，且本端点设计上不联网核实，无法验证新 token
+// 是否真的有效。
+func TestAdoptAgentRejectsWhenAlreadyProvisioned(t *testing.T) {
+	dataDir := t.TempDir()
+	app, err := NewApp(AppConfig{DataDir: dataDir})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	host, err := app.remoteStore.AddHost(model.Host{Name: "already-managed"})
+	require.NoError(t, err)
+	_, err = app.agentStore.UpsertAgent(model.Agent{
+		HostID: host.ID,
+		Transport: model.TransportConfig{Chain: []model.TransportEntry{
+			{Type: model.TransportTypeDirect, Direct: &model.DirectParams{Address: "100.64.0.9:57017"}},
+		}},
+		Security: model.AgentSecurity{ProvisionState: model.AgentProvisionStateProvisioned, TokenConfigured: true},
+		Secret:   model.AgentSecret{Token: "already-working-token"},
+	})
+	require.NoError(t, err)
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+host.ID+"/adopt",
+		bytes.NewBufferString(`{"token":"attacker-or-stale-supplied-token"}`))
+	require.Equal(t, http.StatusConflict, resp.Code, resp.Body.String())
+	assert.Contains(t, resp.Body.String(), `"code":"already_provisioned"`)
+	assert.NotContains(t, resp.Body.String(), "attacker-or-stale-supplied-token")
+	assert.NotContains(t, resp.Body.String(), "already-working-token")
+
+	agent, exists, err := app.agentStore.AgentByHostID(host.ID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	assert.Equal(t, "already-working-token", agent.Secret.Token, "已工作的凭据不能被覆盖")
+
+	rawAgents, err := os.ReadFile(filepath.Join(dataDir, "agents.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(rawAgents), "attacker-or-stale-supplied-token")
+}
+
 // TestAdoptAgentRejectsUnauthenticated 证明该端点不在 bypass 白名单内：
 // 写凭据的端点必须持有效凭据才能调用，匿名调用必须 401 且不产生任何副作用。
 func TestAdoptAgentRejectsUnauthenticated(t *testing.T) {
@@ -107,9 +147,12 @@ func TestAdoptAgentRequiresExistingAgentRecord(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, resp.Code)
 }
 
-// TestAdoptAgentSecondCallOverwritesCleanly 覆盖幂等语义：第二次纳管调用
-// （例如首次落盘后又重新走了一遍纳管流程）以最新 token 为准，不残留旧值。
-func TestAdoptAgentSecondCallOverwritesCleanly(t *testing.T) {
+// TestAdoptAgentSecondCallRejectedOnceProvisioned 覆盖状态前置条件加上之后的
+// 修正语义（review 修复：不再是"第二次调用覆盖式生效"）——首次调用把本机记录
+// 从 pending-bootstrap 推进到 provisioned 后，第二次调用必须被 409 拒绝，
+// 首次落盘的 token 原样保留，不会被第二次调用的 token 覆盖。
+// "幂等"现在体现在"重复调用不破坏已生效的状态"，而不是"后写者覆盖前写者"。
+func TestAdoptAgentSecondCallRejectedOnceProvisioned(t *testing.T) {
 	dataDir := t.TempDir()
 	app, err := NewApp(AppConfig{DataDir: dataDir})
 	require.NoError(t, err)
@@ -121,16 +164,17 @@ func TestAdoptAgentSecondCallOverwritesCleanly(t *testing.T) {
 	require.Equal(t, http.StatusOK, first.Code)
 
 	second := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/adopt", bytes.NewBufferString(`{"token":"second-token"}`))
-	require.Equal(t, http.StatusOK, second.Code)
+	require.Equal(t, http.StatusConflict, second.Code, second.Body.String())
+	assert.Contains(t, second.Body.String(), `"code":"already_provisioned"`)
 
 	agent, exists, err := app.agentStore.AgentByHostID(hostID)
 	require.NoError(t, err)
 	require.True(t, exists)
-	assert.Equal(t, "second-token", agent.Secret.Token)
+	assert.Equal(t, "first-token", agent.Secret.Token)
 
 	rawAgents, err := os.ReadFile(filepath.Join(dataDir, "agents.json"))
 	require.NoError(t, err)
-	assert.NotContains(t, string(rawAgents), "first-token")
+	assert.NotContains(t, string(rawAgents), "second-token")
 }
 
 // TestAdoptAgentRejectsEmptyToken 校验请求体校验：空 token 不应被当作「清空凭据」

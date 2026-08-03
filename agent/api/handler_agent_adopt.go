@@ -10,7 +10,11 @@
 //   - 不创建 Host/Agent 记录，只更新已存在的记录（目标不存在 404）——add-host+
 //     install 流程早已建好这条记录，本端点只补上纳管这一条支线缺的最后一步
 //   - 不与远端通信：token 的有效性已由 Task 7 的 exchange 端点在目标机侧确认过，
-//     本端点纯本地落盘
+//     本端点纯本地落盘——正因为不联网核实，写入前必须先校验本机记录当前状态
+//     （见 adoptAgent 的 ProvisionState 前置条件），不能只信调用方一句话
+//   - 本机记录已是 provisioned 态时拒绝覆盖（409 already_provisioned）：纳管
+//     只解决"本控制面对这个 host 还没有可用凭据"的场景，不是任意时刻都能拿
+//     调用方自报的字符串覆盖一份可能仍在正常工作的凭据
 //   - 绝不在日志、响应体或错误信息里回显 token 明文
 //
 // 计划偏离说明：docs/superpowers/plans/2026-08-03-dual-control-plane-approvals.md
@@ -27,6 +31,10 @@ import (
 	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/model"
 )
+
+// agentAlreadyProvisionedErrorCode 是「本控制面已持有该 host 的可用凭据，拒绝
+// 覆盖」冲突响应的稳定错误码。
+const agentAlreadyProvisionedErrorCode = "already_provisioned"
 
 // agentAdoptRequest 是 POST /api/agents/{host_id}/adopt 的请求体。
 type agentAdoptRequest struct {
@@ -46,9 +54,18 @@ type agentAdoptResponse struct {
 //   - 必须走 withSecurity（不在 bypass 白名单内）——这是一个写凭据的端点，
 //     匿名可达等于任何人都能把自己的 token 塞进别人的 agent 记录
 //   - 只更新已存在的 Agent 记录，找不到直接 404，不隐式创建
-//   - 覆盖式写入：同一 host 第二次调用直接覆盖旧 token。纳管场景下旧 token
-//     要么从未成功落盘（首次失败重试），要么已经是过时凭据（重新走了一遍纳管
-//     流程）——覆盖是唯一合理语义，不做"保留旧值"或"追加"处理
+//   - 状态前置条件：本机记录的 ProvisionState 已经是 provisioned 时拒绝
+//     （409 already_provisioned）——纳管解决的是"本控制面对这个 host 还没有
+//     可用凭据"的场景；已经 provisioned 意味着本控制面之前已经成功持有过一份
+//     能用的凭据，此时接受任意调用方自报的 token 覆盖它，等于把"token 只能
+//     由后端自己生成"（原先 provisionAgent 的唯一写路径）的信任边界悄悄放宽成
+//     "调用方随便传一个字符串就能覆盖任何已在正常工作的凭据"——不校验、不与
+//     远端通信核实（本端点设计上就不联网），必须靠这道状态前置条件堵住
+//   - 前置条件之内是覆盖式写入：只要本机记录还没到 provisioned（如
+//     pending-bootstrap/not-configured，或此前 UpsertAgent 半途失败留下的
+//     残留状态），本次调用直接覆盖旧值——不做"保留旧值"或"追加"处理。一旦
+//     写入成功推进到 provisioned，后续任何调用（包括同一份 token 的重放）
+//     都会被上面的前置条件挡下，不存在"provisioned 之后还能再覆盖一次"的路径
 func (a *App) adoptAgent(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("host_id")
 	release, ok := a.acquireAgentLifecycleOperation(w, hostID, "adopt")
@@ -64,6 +81,13 @@ func (a *App) adoptAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		jsonError(w, http.StatusNotFound, "agent not configured")
+		return
+	}
+	if agent.Security.ProvisionState == model.AgentProvisionStateProvisioned {
+		logger.GetLogger().WithEntryName("AgentAdopt").WithFields(map[string]any{"host_id": host.ID}).
+			Warn("拒绝纳管覆盖：本机记录已是 provisioned 态")
+		jsonErrorCode(w, http.StatusConflict, agentAlreadyProvisionedErrorCode,
+			"agent already has a provisioned credential; adopt is only for hosts this control plane does not yet hold a working credential for", nil)
 		return
 	}
 

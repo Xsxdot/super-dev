@@ -321,6 +321,34 @@ func TestInstallAgentBlocksWhenExistingProvisionedAgentDetected(t *testing.T) {
 	require.Equal(t, http.StatusConflict, resp.Code)
 	assert.Contains(t, resp.Body.String(), `"code":"existing_agent_detected"`)
 	assert.Contains(t, resp.Body.String(), `"version":"1.4.0"`)
+	// address 必须是本机配置的 direct 直连地址（目标机权威地址），不是探测
+	// 用的 fake health server 的随机端口——这是桌面端纳管流程唯一可信的目标地址来源。
+	assert.Contains(t, resp.Body.String(), `"address":"100.117.127.123:57019"`)
+	assert.Equal(t, 0, fake.calls)
+}
+
+// TestInstallAgentBlocksWithoutDirectAddressLeavesAddressEmpty 覆盖纯 tunnel
+// 链（无 direct 项）时守卫仍然拦截，但 address 字段留空——没有对浏览器可达的
+// HTTP 地址可回，桌面端据此判断"当前配置无法直连纳管"，不能瞎编一个。
+func TestInstallAgentBlocksWithoutDirectAddressLeavesAddressEmpty(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"tunnel","tunnel":{"remote_agent_port":57019}}]},
+	  "config":{"listen_address":"127.0.0.1","listen_port":57019},
+	  "security":{"tls":{"mode":"off"}}
+	`)
+	srv := newProvisionedSecurityHealthServer(t, "1.4.0")
+	app.nodeTransport = testNodeTransport{table: map[string]string{hostID: srv.URL}}
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install", bytes.NewBufferString(`{"method":"push_over_ssh"}`))
+
+	require.Equal(t, http.StatusConflict, resp.Code)
+	assert.Contains(t, resp.Body.String(), `"code":"existing_agent_detected"`)
+	assert.Contains(t, resp.Body.String(), `"address":""`)
 	assert.Equal(t, 0, fake.calls)
 }
 

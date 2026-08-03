@@ -18,6 +18,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/installer"
@@ -95,6 +96,31 @@ func (a *App) guardAgainstExistingProvisionedAgent(ctx context.Context, hostID s
 	return existingAgentGuardResult{Blocked: true, Version: body.Version}
 }
 
+// existingAgentDirectAddress 返回既有 agent 探测守卫拦截时可回给桌面端的权威
+// 直连地址。
+//
+// 参数：
+//   - agent: 触发 409 的这条本机 Agent 配置（installAgent 已经查过、在作用域内）
+//
+// 返回：
+//   - agent.Transport.Chain 中 direct 链项的 host:port（用户在"添加主机"连接链
+//     步骤里填写、agent.DirectParams() 已封装的取值逻辑）；链上没有 direct 项
+//     （纯 tunnel）时返回空字符串
+//
+// 注意：
+//   - 只有 direct 地址对浏览器发起的裸 fetch 有意义——tunnel 项是走 SSH 转发，
+//     桌面端纳管三端点的直连请求够不到它，所以不尝试从 tunnel 参数拼地址
+//   - 不使用本控制面当前正在编辑的监听端口（securityForm.listenPort 对应的
+//     agent.Config.ListenPort）：那是"这次准备装的新 agent 打算监听的端口"，
+//     与目标机既有 agent 实际监听的端口毫无关系，用它拼地址是纯粹的误导
+func existingAgentDirectAddress(agent model.Agent) string {
+	direct, ok := agent.DirectParams()
+	if !ok || direct == nil {
+		return ""
+	}
+	return strings.TrimSpace(direct.Address)
+}
+
 type agentUpdateTargetResponse struct {
 	Version            string `json:"version"`
 	Source             string `json:"source"`
@@ -147,10 +173,17 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 		// 跳过探测守卫，直接走原安装路径。
 		log.Printf("[SuperDev] installAgent 用户强制重装：host=%s 跳过既有 agent 探测守卫", host.ID)
 	} else if guard := a.guardAgainstExistingProvisionedAgent(r.Context(), host.ID); guard.Blocked {
+		address := existingAgentDirectAddress(agent)
 		log.Printf("[SuperDev] installAgent 守卫拦截：探到既有 provisioned agent host=%s version=%s，阻断盲目重装，请走纳管或显式 force_reinstall", host.ID, guard.Version)
 		jsonWrite(w, http.StatusConflict, map[string]string{
 			"code":    existingAgentDetectedErrorCode,
 			"version": guard.Version,
+			// address 是权威目标地址（agent.Transport.Chain 里配置的 direct
+			// 直连地址，不是这次安装表单里正在编辑的本控制面自身监听端口）：
+			// 桌面端纳管流程据此直连目标机，不再靠"目标机端口 == 我方配置的
+			// 端口"这种猜测——两者本来就毫无关系。链上没有 direct 项（纯
+			// tunnel）时留空，桌面端据此判断"当前配置下无法直连纳管"。
+			"address": address,
 		})
 		return
 	}
