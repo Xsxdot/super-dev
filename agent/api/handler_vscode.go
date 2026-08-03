@@ -90,6 +90,15 @@ type setupServiceEntry struct {
 func (a *App) putProjectSetup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
+	// 归属路由：整份 project.yaml 归属节点持有，桌面配置编辑器的保存必须落
+	// 归属机权威副本——写进本机过期镜像会静默丢失（零报错）、弄脏本机 git
+	// 工作树并卡住迁回 pull --ff-only。判定必须在读 body 之前：forwardToHome
+	// 要把 r.Body 原文完整转发。
+	if home := a.homeRouteTargetForProject(id); home != "" {
+		a.forwardToHome(w, r, home)
+		return
+	}
+
 	var req setupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")

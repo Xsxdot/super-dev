@@ -41,6 +41,17 @@ func initTransferTestRepo(t *testing.T) string {
 	return dir
 }
 
+// wireTransferTestUpstream 给夹具仓库人工接一条上游（不联网）：伪造
+// refs/remotes/origin/<branch> 指向 HEAD 并配置 branch.<branch>.remote/merge，
+// 使 @{u} 可解析且 Ahead==0——execute 端点的 Dirty/Ahead 执行时复检才会放行。
+func wireTransferTestUpstream(t *testing.T, dir string) {
+	t.Helper()
+	branch := runTransferGit(t, dir, "symbolic-ref", "--short", "HEAD")
+	runTransferGit(t, dir, "update-ref", "refs/remotes/origin/"+branch, "HEAD")
+	runTransferGit(t, dir, "config", "branch."+branch+".remote", "origin")
+	runTransferGit(t, dir, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+}
+
 func runTransferGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)

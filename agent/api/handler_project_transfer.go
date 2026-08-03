@@ -116,11 +116,7 @@ func (a *App) transferPreflight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	timeout := a.runtimeStatusRequestTimeout
-	if timeout == 0 {
-		timeout = 3 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx, cancel := context.WithTimeout(r.Context(), transferPreflightTimeout)
 	defer cancel()
 
 	local, err := gitinfo.Inspect(ctx, project.RootPath)
@@ -176,10 +172,14 @@ func (a *App) transferPreflight(w http.ResponseWriter, r *http.Request) {
 				Detail: "目标目录不存在，转移执行时将 git clone 到该路径",
 			})
 		}
-	case remoteProbe.IsRepo && local.RemoteURL != "" && remoteProbe.RemoteURL == local.RemoteURL:
+	case remoteProbe.IsRepo && local.RemoteURL != "" && stripURLCredentials(remoteProbe.RemoteURL) == stripURLCredentials(local.RemoteURL):
 		// 要求本机/目标机的 RemoteURL 都非空才判定"同源"：两边都为空时无法证明
 		// 目标目录检出的就是同一个仓库，冒着复用错误代码库的风险不如让人工确认，
 		// 因此落入下面的 default 分支报 remote_url_mismatch。
+		// 比较前先 stripURLCredentials：同一个仓库在两台机器上完全可能一边 URL
+		// 内嵌了凭据、一边没有（或凭据不同）——凭据不是仓库身份的一部分，用原始
+		// URL 相等比较会把真同源误判成 mismatch，且 Detail 里两个脱敏后的 URL
+		// 看起来一模一样，用户根本无从理解哪里"不一致"。
 		ready = append(ready, transferCheckItem{
 			Code:   "checkout_reuse",
 			Detail: "目标目录已是本机仓库的同源检出（远端地址一致），转移执行时将 fetch + pull 到最新提交",
@@ -222,6 +222,13 @@ func (a *App) transferPreflight(w http.ResponseWriter, r *http.Request) {
 // clone 大仓库可能很慢，但也不能永久挂起——30 分钟是「长命令」与「卡死」的分界。
 const transferExecTimeout = 30 * time.Minute
 
+// transferPreflightTimeout 是预检/执行前置探测的整体超时。预检要顺序跑完
+// 本机 5 条 git 子命令 + 目标机 6 条远端命令（可能经 SSH 降级路径，一次握手
+// 就以秒计）+ 一次版本核对 HTTP——复用 runtimeStatusRequestTimeout 的 3s
+// 在真机上大概率直接 deadline exceeded。预检是用户显式点击触发的低频操作，
+// 宁可多等几秒也要给出完整结论。
+const transferPreflightTimeout = 30 * time.Second
+
 // startProjectTransfer 处理 POST /api/projects/{id}/transfer：校验后异步启动
 // 一次正向转移，立即 202 返回初始状态；同项目已有进行中的转移则 409。
 //
@@ -258,14 +265,12 @@ func (a *App) startProjectTransfer(w http.ResponseWriter, r *http.Request) {
 		targetDir = defaultTransferTargetDir(project.RootPath)
 	}
 
-	// 本机 git 快照：确定检出分支与 clone 源地址。这两项是执行的硬前提，
-	// preflight 已把 not_a_git_repo / no_upstream 报成 blocker，此处再兜一次底，
-	// 避免绕过 preflight 直接 execute 时把无效转移放进后台。
-	timeout := a.runtimeStatusRequestTimeout
-	if timeout == 0 {
-		timeout = 3 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	// 本机 git 快照：确定检出分支与 clone 源地址，并把 preflight 的全部硬前提
+	// 在执行时刻复检一遍——preflight 通过后到点击执行之间完全可能新增提交/改动
+	// （TOCTOU），也可能有人绕过 preflight 直接调 execute。目标机检出的是 origin
+	// 上的提交，本机未提交/未推送的内容不会到达目标机，却会随归属切换「看起来
+	// 转移完成了」——必须在这里拦下，而不是让用户在新家发现代码是旧的。
+	ctx, cancel := context.WithTimeout(r.Context(), transferPreflightTimeout)
 	defer cancel()
 	local, err := gitinfo.Inspect(ctx, project.RootPath)
 	if err != nil {
@@ -283,6 +288,18 @@ func (a *App) startProjectTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	if local.Branch == "" {
 		jsonError(w, http.StatusBadRequest, "本机处于 detached HEAD，无法确定要检出的分支")
+		return
+	}
+	if local.Dirty {
+		jsonError(w, http.StatusBadRequest, "本机存在未提交的变更，请先提交并推送后再转移")
+		return
+	}
+	if local.Ahead > 0 {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("本机有 %d 个提交尚未推送到远端，请先推送后再转移", local.Ahead))
+		return
+	}
+	if local.Ahead == -1 {
+		jsonError(w, http.StatusBadRequest, "当前分支未配置上游分支，请先 git push -u 后再转移")
 		return
 	}
 
@@ -356,7 +373,13 @@ func (a *App) startProjectTransferBack(w http.ResponseWriter, r *http.Request) {
 		hostName = host.Name
 	}
 
+	// 归属机侧项目目录的解析优先级：请求显式指定 > 转移时持久化的 remote_dir
+	// > 默认目录兜底。持久化记录是主路径——自定义目录 + agent 重启后，只有它
+	// 还记得项目在归属机的真实位置，默认目录猜测必然打错。
 	targetDir := strings.TrimSpace(req.TargetDir)
+	if targetDir == "" && a.projectHomeStore != nil {
+		targetDir = a.projectHomeStore.RemoteDirOf(projectID)
+	}
 	if targetDir == "" {
 		targetDir = defaultTransferTargetDir(project.RootPath)
 	}

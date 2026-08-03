@@ -43,7 +43,7 @@ func TestRemoveHostSafely_ProjectHomeGuard(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(model.Project{ID: projectID, Name: "demo-project", RootPath: t.TempDir()})
 	app.mu.Unlock()
-	require.NoError(t, app.projectHomeStore.SetHome(projectID, hostID))
+	require.NoError(t, app.projectHomeStore.SetHome(projectID, hostID, ""))
 
 	blocked := httptestDo(t, app, http.MethodDelete, "/api/hosts/"+hostID, nil)
 	require.Equal(t, http.StatusConflict, blocked.Code)
@@ -54,7 +54,7 @@ func TestRemoveHostSafely_ProjectHomeGuard(t *testing.T) {
 	assert.True(t, hostFound, "守卫拒绝时 Host 不能被删除")
 
 	// 迁回本机（SetHome ""）后守卫解除，Host 可以正常删除。
-	require.NoError(t, app.projectHomeStore.SetHome(projectID, ""))
+	require.NoError(t, app.projectHomeStore.SetHome(projectID, "", ""))
 	deleted := httptestDo(t, app, http.MethodDelete, "/api/hosts/"+hostID, nil)
 	require.Equal(t, http.StatusOK, deleted.Code)
 	_, hostFound, err = app.remoteHostByID(hostID)
@@ -72,8 +72,8 @@ func TestRemoveHostSafely_ProjectHomeGuard_MultipleProjects(t *testing.T) {
 	app.appendProjectLocked(model.Project{ID: "proj-a", Name: "alpha-svc", RootPath: t.TempDir()})
 	app.appendProjectLocked(model.Project{ID: "proj-b", Name: "beta-svc", RootPath: t.TempDir()})
 	app.mu.Unlock()
-	require.NoError(t, app.projectHomeStore.SetHome("proj-a", hostID))
-	require.NoError(t, app.projectHomeStore.SetHome("proj-b", hostID))
+	require.NoError(t, app.projectHomeStore.SetHome("proj-a", hostID, ""))
+	require.NoError(t, app.projectHomeStore.SetHome("proj-b", hostID, ""))
 
 	blocked := httptestDo(t, app, http.MethodDelete, "/api/hosts/"+hostID, nil)
 	require.Equal(t, http.StatusConflict, blocked.Code)
@@ -90,7 +90,7 @@ func TestRemoveHostSafely_ProjectHomeGuard_MissingProjectDegradesToID(t *testing
 	hostID := createGuardTestHost(t, app, `{"name":"h1"}`)
 
 	const ghostProjectID = "proj-ghost"
-	require.NoError(t, app.projectHomeStore.SetHome(ghostProjectID, hostID))
+	require.NoError(t, app.projectHomeStore.SetHome(ghostProjectID, hostID, ""))
 
 	blocked := httptestDo(t, app, http.MethodDelete, "/api/hosts/"+hostID, nil)
 	require.Equal(t, http.StatusConflict, blocked.Code)
@@ -109,7 +109,7 @@ func TestUpdateHost_DevMachineModeOff_ReportsHomedProjects(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(model.Project{ID: projectID, Name: "notice-project", RootPath: t.TempDir()})
 	app.mu.Unlock()
-	require.NoError(t, app.projectHomeStore.SetHome(projectID, hostID))
+	require.NoError(t, app.projectHomeStore.SetHome(projectID, hostID, ""))
 
 	offResp := httptestDo(t, app, http.MethodPut, "/api/hosts/"+hostID, bytes.NewBufferString(`{"name":"dev01","dev_machine_mode":false}`))
 	require.Equal(t, http.StatusOK, offResp.Code)
@@ -135,7 +135,7 @@ func TestUpdateHost_DevMachineModeOn_OmitsHomedProjects(t *testing.T) {
 	app.mu.Lock()
 	app.appendProjectLocked(model.Project{ID: projectID, Name: "notice-project-2", RootPath: t.TempDir()})
 	app.mu.Unlock()
-	require.NoError(t, app.projectHomeStore.SetHome(projectID, hostID))
+	require.NoError(t, app.projectHomeStore.SetHome(projectID, hostID, ""))
 
 	onResp := httptestDo(t, app, http.MethodPut, "/api/hosts/"+hostID, bytes.NewBufferString(`{"name":"dev01","dev_machine_mode":true}`))
 	require.Equal(t, http.StatusOK, onResp.Code)

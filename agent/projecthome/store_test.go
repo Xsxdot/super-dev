@@ -23,7 +23,7 @@ func TestStoreRoundTrip(t *testing.T) {
 
 	s1, err := projecthome.NewStore(path)
 	require.NoError(t, err)
-	require.NoError(t, s1.SetHome("proj-1", "host-A"))
+	require.NoError(t, s1.SetHome("proj-1", "host-A", ""))
 
 	// 重新打开：模拟 agent 重启后从磁盘恢复归属状态。
 	s2, err := projecthome.NewStore(path)
@@ -46,10 +46,10 @@ func TestSetHomeEmptyDeletesEntry(t *testing.T) {
 	s, err := projecthome.NewStore(path)
 	require.NoError(t, err)
 
-	require.NoError(t, s.SetHome("proj-1", "host-A"))
+	require.NoError(t, s.SetHome("proj-1", "host-A", ""))
 	require.Equal(t, "host-A", s.HomeOf("proj-1"))
 
-	require.NoError(t, s.SetHome("proj-1", ""))
+	require.NoError(t, s.SetHome("proj-1", "", ""))
 	assert.Equal(t, "", s.HomeOf("proj-1"), "迁回本机后 HomeOf 应恢复为空")
 
 	// 迁回本机后条目应被物理删除，而非写入空字符串占位——
@@ -66,9 +66,9 @@ func TestProjectsHomedOnFiltersByHost(t *testing.T) {
 	s, err := projecthome.NewStore(path)
 	require.NoError(t, err)
 
-	require.NoError(t, s.SetHome("proj-1", "host-A"))
-	require.NoError(t, s.SetHome("proj-2", "host-B"))
-	require.NoError(t, s.SetHome("proj-3", "host-A"))
+	require.NoError(t, s.SetHome("proj-1", "host-A", ""))
+	require.NoError(t, s.SetHome("proj-2", "host-B", ""))
+	require.NoError(t, s.SetHome("proj-3", "host-A", ""))
 
 	gotA := s.ProjectsHomedOn("host-A")
 	assert.ElementsMatch(t, []string{"proj-1", "proj-3"}, gotA)
@@ -88,4 +88,29 @@ func TestNewStoreOnCorruptFileReturnsError(t *testing.T) {
 
 	_, err := projecthome.NewStore(path)
 	assert.Error(t, err)
+}
+
+// TestStoreRemoteDirPersistsAndLegacyFormatCompat 验证 remote_dir 随归属持久化，
+// 以及早期扁平格式 {"id": "host-id"} 文件仍可读取（不破坏已落盘的归属状态）。
+func TestStoreRemoteDirPersistsAndLegacyFormatCompat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "project-homes.json")
+
+	s1, err := projecthome.NewStore(path)
+	require.NoError(t, err)
+	require.NoError(t, s1.SetHome("proj-1", "host-A", "/home/dev/workspace/proj-1"))
+
+	// 新进程重建 store：remote_dir 必须从磁盘恢复（agent 重启后迁回靠它定位）。
+	s2, err := projecthome.NewStore(path)
+	require.NoError(t, err)
+	assert.Equal(t, "host-A", s2.HomeOf("proj-1"))
+	assert.Equal(t, "/home/dev/workspace/proj-1", s2.RemoteDirOf("proj-1"))
+
+	// 早期扁平格式：直接落盘旧形态文件，读取语义必须完整保留。
+	legacyPath := filepath.Join(t.TempDir(), "project-homes.json")
+	require.NoError(t, os.WriteFile(legacyPath, []byte(`{"proj-x": "host-B"}`), 0o644))
+	s3, err := projecthome.NewStore(legacyPath)
+	require.NoError(t, err)
+	assert.Equal(t, "host-B", s3.HomeOf("proj-x"))
+	assert.Equal(t, "", s3.RemoteDirOf("proj-x"), "旧格式无 remote_dir，按空处理")
+	assert.Equal(t, []string{"proj-x"}, s3.ProjectsHomedOn("host-B"))
 }

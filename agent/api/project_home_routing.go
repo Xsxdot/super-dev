@@ -48,17 +48,23 @@ import (
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-// homeRouteForwardedHeaders 是转发到归属机时逐个放行的请求头白名单，取值与
-// CORS 允许头一致（middleware_cors.go）：Content-Type/Authorization 是请求
-// 正常处理所需，三个 X-SuperDev-* 头供归属机自己的 authorizeOperation/
-// 操作审计记录发起者与豁免 token。不整体透传 r.Header——避免把本机专属的
-// 头意外泄漏给归属机，也让转发的头面保持可枚举。
+// homeRouteForwardedHeaders 是转发到归属机时逐个放行的请求头白名单：
+// Content-Type 是请求体正常解析所需，两个 X-SuperDev-Requester* 头供归属机
+// 的操作审计记录真实发起者。不整体透传 r.Header——避免把本机专属的头意外
+// 泄漏给归属机，也让转发的头面保持可枚举。
+//
+// 刻意排除的两个头（红线，勿加回）：
+//   - Authorization：调用方带的是「本机 agent」的凭据（local-access-token 或
+//     本控制面 token），归属机既不认它（必 401），把它发过去也等于在机器间
+//     搬运本机凭据。归属机的正确凭据由 nodetransport 按 host 配置注入
+//     （applyAgentHeaders 先 Set 正确 token）；若这里透传 Authorization，
+//     override 语义（逐 key Del 再 Add）会把正确凭据覆盖掉。
+//   - X-SuperDev-Approval-Token：审批 token 是签发 agent 本机语义（对
+//     approval store 一对一），跨机透传毫无意义且徒增凭据外流面。
 var homeRouteForwardedHeaders = []string{
 	"Content-Type",
-	"Authorization",
 	"X-SuperDev-Requester",
 	"X-SuperDev-Requester-Label",
-	"X-SuperDev-Approval-Token",
 }
 
 // homeRouteTargetForDeployment 返回 deployment 运行控制类请求（start/stop/

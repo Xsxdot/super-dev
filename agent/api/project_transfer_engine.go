@@ -275,7 +275,7 @@ func (a *App) runSteps(ctx context.Context, run *transferRun, deps *transferDeps
 
 // transferStopDev 停止本机运行中的 dev 部署，并把清单写进 AssetReport
 // （需在新家手动启动）。v1 不自动重启，避免体检未过就拉起。
-func (a *App) transferStopDev(_ context.Context, run *transferRun, deps *transferDeps) (string, error) {
+func (a *App) transferStopDev(ctx context.Context, run *transferRun, deps *transferDeps) (string, error) {
 	if deps.mgr == nil {
 		return "无进程管理器，无运行中 dev 部署", nil
 	}
@@ -284,6 +284,7 @@ func (a *App) transferStopDev(_ context.Context, run *transferRun, deps *transfe
 		return "项目无 dev 环境", nil
 	}
 	var stopped []string
+	var stoppedIDs []string
 	for _, svc := range deps.project.Services {
 		for _, dep := range svc.Deployments {
 			if !devEnvs[dep.EnvName] {
@@ -292,11 +293,20 @@ func (a *App) transferStopDev(_ context.Context, run *transferRun, deps *transfe
 			if deps.mgr.IsDeploymentActive(dep.ID) {
 				deps.mgr.StopDeployment(dep.ID)
 				stopped = append(stopped, svc.Name+"("+dep.EnvName+")")
+				stoppedIDs = append(stoppedIDs, dep.ID)
 			}
 		}
 	}
 	if len(stopped) == 0 {
 		return "无运行中的 dev 部署", nil
+	}
+
+	// 核实真的停了：StopDeployment 不返回结果（停止失败只 emitLog），若不复查
+	// 就计入「已停止」，本机进程可能还活着——转移完成后它与归属机上同端口的
+	// 服务/镜像打架，用户面对的是「明明转移成功了怎么端口还冲突」。有界轮询
+	// IsDeploymentActive，超时仍活跃即失败，把没停掉的清单如实报出来。
+	if lingering := waitDeploymentsStopped(ctx, deps.mgr, stoppedIDs, transferStopVerifyTimeout); len(lingering) > 0 {
+		return "核实 dev 部署停止", fmt.Errorf("以下 deployment 在 %s 内未停止：%s，请先手动停止后重试转移", transferStopVerifyTimeout, strings.Join(lingering, "、"))
 	}
 	run.addAsset(transferCheckItem{
 		Code:   "restart_needed",
@@ -469,7 +479,10 @@ func (a *App) transferAssetAudit(ctx context.Context, run *transferRun, deps *tr
 // 后下一次日志读取仍会打向本机 SQLite，直到进程重启或其他偶然触发
 // register 的操作发生，期间日志读取悄悄读错机器且没有任何报错提示。
 func (a *App) transferSwitchHome(_ context.Context, run *transferRun, _ *transferDeps) (string, error) {
-	if err := a.projectHomeStore.SetHome(run.projectID, run.hostID); err != nil {
+	// 随归属一并持久化归属机侧项目目录（checkout/register 阶段已规范化的
+	// 绝对路径）：迁回时靠它定位归属机仓库，不能依赖内存中的转移记录
+	// （agent 重启即丢）或默认目录猜测（自定义目录必然打错）。
+	if err := a.projectHomeStore.SetHome(run.projectID, run.hostID, run.getAbsDir()); err != nil {
 		return "切换归属", err
 	}
 	a.rebuildProjectBackendsOnHomeChange(run.projectID, run.hostID)
@@ -518,7 +531,59 @@ func (a *App) transferProbeHome(ctx context.Context, run *transferRun, deps *tra
 			return "归属机存在未推送提交", fmt.Errorf("归属机有 %s 个未推送提交，请先在归属机推送后再迁回", n)
 		}
 	}
+
+	// 对称性检查：正向转移有 running_dev blocker + stop_dev 步骤，迁回同样不能
+	// 把归属机上运行中的 dev 服务丢下不管——迁回后它们变成无人认领的孤儿进程
+	// 继续占端口（镜像语义混乱，本机再启动同服务即撞端口）。v1 不跨机自动停止
+	// （远程停进程应由用户经归属路由的启停界面显式操作），探到即失败并列清单。
+	if running, checkErr := a.probeHomeRunningDev(ctx, run, deps); checkErr != nil {
+		// 探测本身失败（网络/端点异常）不阻断迁回：git 探测已证明归属机可达，
+		// 这条附加信号拿不到时降级为日志留痕，与版本核对「失败只提示」同哲学。
+		log.Printf("[SuperDev] 迁回 probe_home: 归属机运行态探测失败（不阻断） project=%s home=%s err=%v", run.projectID, run.hostID, checkErr)
+	} else if len(running) > 0 {
+		return "归属机存在运行中的 dev 服务", fmt.Errorf("归属机上有 %d 个 dev 服务仍在运行：%s，请先在服务面板停止它们再迁回", len(running), strings.Join(running, "、"))
+	}
+
 	return fmt.Sprintf("归属机工作区干净、无未推送提交（%s）", homeDir), nil
+}
+
+// probeHomeRunningDev 经 nodetransport Do 查询归属机上该项目的运行态快照，
+// 返回 dev 环境下仍处于活跃健康态（running/healthy/restarting）的实例描述列表。
+//
+// 返回：
+//   - 活跃 dev 实例的 "服务名(环境)" 列表，空表示归属机上没有在跑的 dev 服务
+//   - 查询失败（传输层错误/非 2xx/响应不可解析）返回 error，由调用方决定降级
+func (a *App) probeHomeRunningDev(ctx context.Context, run *transferRun, deps *transferDeps) ([]string, error) {
+	resp, err := deps.do(ctx, run.hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   "/api/projects/" + run.projectID + "/runtime-status",
+	})
+	if err != nil {
+		return nil, err
+	}
+	body, statusCode := readNodeBody(resp)
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("归属机 runtime-status 返回 %d", statusCode)
+	}
+	var status model.RuntimeStatusResponse
+	if err := json.Unmarshal([]byte(body), &status); err != nil {
+		return nil, fmt.Errorf("归属机 runtime-status 响应解析失败: %w", err)
+	}
+
+	devEnvs := devEnvSet(deps.project)
+	var running []string
+	for _, env := range status.Environments {
+		if !devEnvs[env.EnvName] {
+			continue
+		}
+		for _, inst := range env.Instances {
+			switch inst.Metrics.Health {
+			case model.HealthRunning, model.HealthHealthy, model.HealthRestarting:
+				running = append(running, inst.ServiceName+"("+env.EnvName+")")
+			}
+		}
+	}
+	return running, nil
 }
 
 // transferPullLocal 在本机执行 git pull --ff-only，把归属机推上来的最新提交拉回。
@@ -536,7 +601,7 @@ func (a *App) transferPullLocal(ctx context.Context, _ *transferRun, deps *trans
 // 会继续误转发给已经不再是归属机的旧目标（buildBackend 缓存的
 // RemoteAgentBackend 不会因为 SetHome("") 自动失效）。
 func (a *App) transferSwitchHomeBack(_ context.Context, run *transferRun, _ *transferDeps) (string, error) {
-	if err := a.projectHomeStore.SetHome(run.projectID, ""); err != nil {
+	if err := a.projectHomeStore.SetHome(run.projectID, "", ""); err != nil {
 		return "迁回本机（清除归属）", err
 	}
 	a.rebuildProjectBackendsOnHomeChange(run.projectID, "")
@@ -786,20 +851,24 @@ func shellQuoteTransfer(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// urlCredRe 命中把凭据内嵌进 URL 的写法：scheme://user:pass@host。
-// git clone 失败时的输出/错误会原样回显 remote URL，若源地址内嵌了 token
-// （https://x-access-token:ghp_xxx@github.com/...），不脱敏就会随 detail/日志/
-// 审计外泄。user 段不含 /、空白、@、:，故 http://host:8080/path 不会误伤。
-var urlCredRe = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://)[^/\s:@]+:[^/\s@]+@`)
+// urlCredRe 命中把凭据内嵌进 URL 的写法：scheme:// 与首个 @ 之间的整段
+// userinfo（user:pass@ 与裸 token@ 两种形态都算）。git 输出会原样回显
+// remote URL，若源地址内嵌了凭据（https://x-access-token:ghp_xxx@github.com/
+// 或 GitHub PAT 惯用的裸 token 形态 https://ghp_xxx@github.com/），不脱敏就
+// 会随 detail/日志/审计外泄。userinfo 段不含 /、空白，故 http://host:8080/path
+// （@ 只会出现在 path/query 里、且 host:port 后必有 / 或串尾）不会误伤。
+var urlCredRe = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://)[^/\s@]+@`)
 
-// redactCreds 把 URL 里内嵌的 user:pass 段替换为 ***:***，用于一切要落库/落日志/
+// redactCreds 把 URL 里内嵌的整段 userinfo 替换为 ***，用于一切要落库/落日志/
 // 落审计的字符串。这是转移引擎自身输出的红线兜底，不替代 gitinfo 侧的处理。
 //
-// 注意：只能命中带冒号的 user:pass@ 形式，命不中裸 token（https://ghp_x@host）——
-// 裸 token 的根治在 stripURLCredentials（在源头把 userinfo 从 clone URL 摘掉），
-// redactCreds 只是输出路径上的第二道防线，不承担唯一防线的职责。
+// 为什么整段替换而不是只遮 pass 段：pull_local 走的是本机仓库自己配置的
+// origin，不经过 stripURLCredentials 的源头摘除，这里是它唯一的防线——
+// GitHub PAT 恰恰是 token-as-username 的裸形态（https://ghp_xxx@host），
+// 只遮「user:pass」的冒号形态会漏掉它。宁可把无害的 ssh://git@host 一并
+// 遮掉（安全方向的误伤），也不能放走一个真 token。
 func redactCreds(s string) string {
-	return urlCredRe.ReplaceAllString(s, "${1}***:***@")
+	return urlCredRe.ReplaceAllString(s, "${1}***@")
 }
 
 // stripURLCredentials 从 remote URL 上摘除内嵌的 userinfo（user:pass@ 或裸
@@ -832,6 +901,36 @@ func readNodeBody(resp nodetransport.NodeResponse) (string, int) {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return string(b), resp.StatusCode
+}
+
+// transferStopVerifyTimeout 是 stop_dev 步骤核实进程真正退出的等待上限。
+// 托管服务默认 SIGTERM + 宽限期强杀，正常在几秒内退出；超过这个窗口仍活跃
+// 说明停止路径本身出了问题，应中断转移交人工处理，而不是带病切归属。
+const transferStopVerifyTimeout = 15 * time.Second
+
+// waitDeploymentsStopped 有界轮询等待一组 deployment 全部退出活跃态，
+// 返回超时后仍活跃的 deployment ID 列表（空表示全部已停止）。
+func waitDeploymentsStopped(ctx context.Context, mgr *process.Manager, ids []string, timeout time.Duration) []string {
+	deadline := time.Now().Add(timeout)
+	for {
+		var lingering []string
+		for _, id := range ids {
+			if mgr.IsDeploymentActive(id) {
+				lingering = append(lingering, id)
+			}
+		}
+		if len(lingering) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return lingering
+		}
+		select {
+		case <-ctx.Done():
+			return lingering
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
 
 // runLocalGit 在本机 rootPath 上执行一条 git 命令，返回合并输出。

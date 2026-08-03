@@ -367,6 +367,12 @@ func TestTransferEngine_StripsEmbeddedCredsFromCloneURL(t *testing.T) {
 			dir := initTransferTestRepo(t)
 			runTransferGit(t, dir, "remote", "add", "origin", tc.origin)
 			project := addTransferTestProject(t, srv, dir)
+			// 注册项目会落 .superdev/project.yaml——execute 的 Dirty/Ahead 复检
+			// 要求工作区干净且与上游同步（真实世界里 project.yaml 本就随 git
+			// 流动），因此先提交、再把上游 ref 接到最新 HEAD。
+			runTransferGit(t, dir, "add", "-A")
+			runTransferGit(t, dir, "commit", "-m", "register project")
+			wireTransferTestUpstream(t, dir)
 
 			_, err := app.remoteStore.AddHost(model.Host{ID: "host-strip", Name: "Strip Host", DevMachineMode: true})
 			require.NoError(t, err)
@@ -448,7 +454,7 @@ func TestTransferEngineBack_HomeDirtyBlocks(t *testing.T) {
 	dir := initTransferTestRepo(t)
 
 	seedTransferProject(t, app, projectID, dir, ".env", "sleep 30")
-	require.NoError(t, app.projectHomeStore.SetHome(projectID, homeHost)) // 先在远端
+	require.NoError(t, app.projectHomeStore.SetHome(projectID, homeHost, "")) // 先在远端
 
 	setTransferRemoteRunner(t, func(cmd string) (string, int, error) {
 		if strings.Contains(cmd, "pwd") {
@@ -466,4 +472,66 @@ func TestTransferEngineBack_HomeDirtyBlocks(t *testing.T) {
 
 	assert.Equal(t, transferStateFailed, resp.State, "归属机有未提交变更时迁回应失败")
 	assert.Equal(t, homeHost, app.projectHomeStore.HomeOf(projectID), "迁回失败时归属应保持在原目标机")
+}
+
+// TestRedactCreds_CoversBareTokenForm 红线回归：redactCreds 必须同时命中
+// user:pass@ 与裸 token@（GitHub PAT 形态）两种内嵌凭据写法——pull_local
+// 走本机 origin、不经 stripURLCredentials 源头摘除，redactCreds 是该路径
+// 上唯一防线，漏掉裸 token 就等于把 PAT 写进步骤 Detail/审计/日志。
+func TestRedactCreds_CoversBareTokenForm(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"user:pass 形态", "fatal: unable to access 'https://user:s3cret@github.com/x/y.git'", "fatal: unable to access 'https://***@github.com/x/y.git'"},
+		{"裸 token 形态", "fatal: unable to access 'https://ghp_abc123@github.com/x/y.git'", "fatal: unable to access 'https://***@github.com/x/y.git'"},
+		{"ssh 用户段一并遮蔽", "ssh://git@github.com/x/y.git", "ssh://***@github.com/x/y.git"},
+		{"host:port 不误伤", "http://localhost:8080/path", "http://localhost:8080/path"},
+		{"无凭据不改动", "https://github.com/x/y.git", "https://github.com/x/y.git"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, redactCreds(tc.in))
+		})
+	}
+}
+
+// TestTransferEngineBack_HomeRunningDevBlocks 迁回时归属机上仍有运行中的 dev
+// 服务 → probe_home 失败并列出清单，归属保持不变（对称于正向的 running_dev
+// 拦截：不能把归属机上的服务丢成无人认领的孤儿进程）。
+func TestTransferEngineBack_HomeRunningDevBlocks(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	const projectID = "proj-transfer-back-running"
+	const homeHost = "host-home"
+	const absDir = "/remote/workspace/back-running"
+	dir := initTransferTestRepo(t)
+
+	seedTransferProject(t, app, projectID, dir, ".env", "sleep 30")
+	require.NoError(t, app.projectHomeStore.SetHome(projectID, homeHost, absDir))
+
+	setTransferRemoteRunner(t, func(cmd string) (string, int, error) {
+		if strings.Contains(cmd, "pwd") {
+			return absDir, 0, nil
+		}
+		if strings.Contains(cmd, "rev-list") {
+			return "0", 0, nil
+		}
+		return "", 0, nil // status --porcelain 干净
+	})
+	setTransferNodeDo(t, func(_ context.Context, _ string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+		if strings.HasSuffix(req.Path, "/runtime-status") {
+			return nodeRespJSON(`{"environments":[{"env_name":"dev","instances":[{"service_name":"web","metrics":{"health":"running"}}]}]}`), nil
+		}
+		return nodeRespJSON(`{}`), nil
+	})
+
+	run := newTransferRun(projectID, homeHost, "Home Host", absDir, "", "")
+	app.executeProjectTransferBack(context.Background(), run)
+	resp := run.snapshot()
+
+	assert.Equal(t, transferStateFailed, resp.State, "归属机有运行中 dev 服务时迁回应失败")
+	assert.Contains(t, resp.Error, "web(dev)", "失败信息应列出仍在运行的服务")
+	assert.Equal(t, homeHost, app.projectHomeStore.HomeOf(projectID), "迁回失败时归属应保持不变")
 }

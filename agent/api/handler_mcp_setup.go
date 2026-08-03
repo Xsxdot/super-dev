@@ -16,6 +16,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,7 +118,12 @@ func loadMCPSetupDocument(path string) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 	var doc map[string]any
-	if err := json.Unmarshal(data, &doc); err != nil {
+	// UseNumber：round-trip 用户既有配置时，普通 Decode 会把所有数字转成
+	// float64——超过 2^53 的大整数（时间戳、ID 类字段）会静默丢精度写回，
+	// 等于悄悄改坏了用户配置里与我们无关的值。json.Number 原样保形。
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
 		return nil, err
 	}
 	if doc == nil {
@@ -156,9 +162,17 @@ func mergeMCPSetupEntry(doc map[string]any) {
 
 // writeMCPSetupDocumentAtomic 把 doc 写回 path，临时文件 + rename 原子替换
 // （惯例对齐 agent/projecthome/store.go），避免进程崩溃或并发写入截断出半份 JSON。
+//
+// 文件权限：既有文件保留其原 mode（多人共用开发机上用户可能刻意收紧为 0600，
+// rename 替换绝不能把它放宽）；新建文件用 0600——~/.claude.json 里可能有用户
+// 为其他 MCP server 配置的 API key，宁紧勿松。
 func writeMCPSetupDocumentAtomic(path string, doc map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
+	}
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
 	}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -166,7 +180,12 @@ func writeMCPSetupDocumentAtomic(path string, doc map[string]any) error {
 	}
 	data = append(data, '\n')
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+	if err := os.WriteFile(tmpPath, data, mode); err != nil {
+		return err
+	}
+	// WriteFile 的 mode 只对「新建」生效，若 tmp 残留自上次失败写入则沿用旧
+	// 权限，这里显式 Chmod 补一刀，保证替换后的最终权限确定。
+	if err := os.Chmod(tmpPath, mode); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, path)

@@ -37,7 +37,7 @@ func TestListProjectsCarriesHomeHost(t *testing.T) {
 	require.NotEmpty(t, created.ID)
 
 	// 归属指向一台从未在 remoteStore 注册过的主机 ID，模拟"主机已被删除"。
-	require.NoError(t, app.projectHomeStore.SetHome(created.ID, "host-ghost"))
+	require.NoError(t, app.projectHomeStore.SetHome(created.ID, "host-ghost", ""))
 
 	listResp, err := http.Get(srv.URL + "/api/projects")
 	require.NoError(t, err)
@@ -53,7 +53,7 @@ func TestListProjectsCarriesHomeHost(t *testing.T) {
 	// 补上真实存在的主机后，Name 应正确回填。
 	_, err = app.remoteStore.AddHost(model.Host{ID: "host-real", Name: "Real Host"})
 	require.NoError(t, err)
-	require.NoError(t, app.projectHomeStore.SetHome(created.ID, "host-real"))
+	require.NoError(t, app.projectHomeStore.SetHome(created.ID, "host-real", ""))
 
 	listResp2, err := http.Get(srv.URL + "/api/projects")
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestListProjectsCarriesHomeHost_HostListReadFailureDegrades(t *testing.T) {
 
 	var created model.Project
 	require.NoError(t, json.NewDecoder(addResp.Body).Decode(&created))
-	require.NoError(t, app.projectHomeStore.SetHome(created.ID, "host-A"))
+	require.NoError(t, app.projectHomeStore.SetHome(created.ID, "host-A", ""))
 
 	// 破坏 hosts.json：remoteStore 的 loadHostsRaw 对目录路径调用 os.ReadFile
 	// 会得到 "is a directory" 错误（非 os.IsNotExist），可稳定复现真实读取失败。

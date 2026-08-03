@@ -140,7 +140,7 @@ func setupHomeRoutedApp(t *testing.T) (*App, string, *recordingNodeTransport) {
 	app.mu.Lock()
 	app.appendProjectLocked(project)
 	app.mu.Unlock()
-	require.NoError(t, app.projectHomeStore.SetHome(project.ID, homeRouteTestHost))
+	require.NoError(t, app.projectHomeStore.SetHome(project.ID, homeRouteTestHost, ""))
 	srv := newHTTPServerForPackage(t, app)
 	return app, srv.URL, transport
 }
@@ -377,17 +377,91 @@ func TestApplyConfigChange_UnknownProjectNotForwarded(t *testing.T) {
 	assert.Equal(t, 0, transport.callCount(), "全新项目不应被转发")
 }
 
+// jsonBodyForTest 把 body 序列化为 JSON reader，供手工构造 PUT 请求使用。
+func jsonBodyForTest(t *testing.T, body any) *bytes.Reader {
+	t.Helper()
+	data, err := json.Marshal(body)
+	require.NoError(t, err)
+	return bytes.NewReader(data)
+}
+
+// ---- 桌面主配置编辑端点（setup / rules） ----
+
+// putProjectSetup 是桌面配置编辑器（ProjectConfigSurface/ProjectPipelineEditor）
+// 的保存主路径：归属他机时必须转发，否则保存静默落在本机过期镜像上（零报错、
+// 弄脏本机工作树、卡住迁回 pull）。
+func TestPutProjectSetup_ForwardsToHome(t *testing.T) {
+	_, baseURL, transport := setupHomeRoutedApp(t)
+
+	body := map[string]any{"environments": []any{}, "services": []any{}, "pipelines": []any{}}
+	req, err := http.NewRequest(http.MethodPut, baseURL+"/api/projects/proj-home-route/setup", jsonBodyForTest(t, body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.Equal(t, 1, transport.callCount())
+	call := transport.lastCall()
+	assert.Equal(t, homeRouteTestHost, call.hostID)
+	assert.Equal(t, http.MethodPut, call.method)
+	assert.Equal(t, "/api/projects/proj-home-route/setup", call.path)
+	assert.Contains(t, string(call.body), "environments", "请求体必须原文转发")
+}
+
+// rules（日志过滤规则）属共享层 project.yaml：读写成对转发，否则会出现
+// 「写进归属机、读回本机旧值」的假回滚。
+func TestProjectRules_ForwardsToHome(t *testing.T) {
+	_, baseURL, transport := setupHomeRoutedApp(t)
+
+	req, err := http.NewRequest(http.MethodPut, baseURL+"/api/projects/proj-home-route/rules", jsonBodyForTest(t, []any{}))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	getResp, err := http.Get(baseURL + "/api/projects/proj-home-route/rules")
+	require.NoError(t, err)
+	getResp.Body.Close()
+	assert.Equal(t, http.StatusOK, getResp.StatusCode)
+
+	require.Equal(t, 2, transport.callCount())
+	assert.Equal(t, "/api/projects/proj-home-route/rules", transport.lastCall().path)
+}
+
 // ---- 转发头白名单 ----
 
 func TestForwardToHome_PropagatesWhitelistedHeaders(t *testing.T) {
 	_, baseURL, transport := setupHomeRoutedApp(t)
 
 	postJSONWithHeadersForTest[map[string]any](t, baseURL+"/api/deployments/dep-web-dev/start", map[string]any{}, map[string]string{
-		"X-SuperDev-Approval-Token": "tok-123",
-		"X-SuperDev-Requester":      "alice",
+		"X-SuperDev-Requester":       "alice",
+		"X-SuperDev-Requester-Label": "Alice Desktop",
 	}, http.StatusOK)
 
 	call := transport.lastCall()
-	assert.Equal(t, "tok-123", call.header.Get("X-SuperDev-Approval-Token"))
 	assert.Equal(t, "alice", call.header.Get("X-SuperDev-Requester"))
+	assert.Equal(t, "Alice Desktop", call.header.Get("X-SuperDev-Requester-Label"))
+}
+
+// 红线回归：Authorization / X-SuperDev-Approval-Token 绝不能进入转发头——
+// 调用方带的是本机 agent 的凭据，透传会（经 applyAgentHeaders 的 override
+// 语义）覆盖 nodetransport 注入的归属机正确 token，导致转发必 401，且等于
+// 在机器间搬运本机凭据。审批 token 同理是签发 agent 的本机语义，跨机无效。
+func TestForwardToHome_NeverForwardsCredentialHeaders(t *testing.T) {
+	app, baseURL, transport := setupHomeRoutedApp(t)
+
+	// 显式带上「本机的真实 local-access-token」——它能通过本机鉴权中间件，
+	// 但绝不能出现在转发给归属机的请求头里。
+	postJSONWithHeadersForTest[map[string]any](t, baseURL+"/api/deployments/dep-web-dev/start", map[string]any{}, map[string]string{
+		"Authorization":             "Bearer " + app.LocalAccessToken(),
+		"X-SuperDev-Approval-Token": "tok-123",
+	}, http.StatusOK)
+
+	call := transport.lastCall()
+	assert.Empty(t, call.header.Get("Authorization"), "本机凭据绝不能被转发到归属机")
+	assert.Empty(t, call.header.Get("X-SuperDev-Approval-Token"), "审批 token 是本机语义，不跨机透传")
 }

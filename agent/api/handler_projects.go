@@ -317,8 +317,16 @@ func (a *App) deleteProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // getProjectRules 处理 GET /api/projects/{id}/rules，返回项目的日志过滤规则列表。
+//
+// 归属路由：log_rules 属共享层 project.yaml，项目归属他机时权威副本在归属机，
+// 读写都必须转发（读不转发会出现「写进归属机、读回本机旧值」的假回滚）。
 func (a *App) getProjectRules(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	if home := a.homeRouteTargetForProject(id); home != "" {
+		a.forwardToHome(w, r, home)
+		return
+	}
 
 	a.mu.RLock()
 	p, ok := a.findProject(id)
@@ -346,8 +354,16 @@ func (a *App) getProjectRules(w http.ResponseWriter, r *http.Request) {
 // putProjectRules 处理 PUT /api/projects/{id}/rules，覆写项目的日志过滤规则。
 //
 // 请求体：[]model.LogRule
+//
+// 归属路由：与 getProjectRules 成对转发——写落归属机权威 project.yaml，
+// 本机过期镜像绝不能承接写入（会静默丢失且弄脏本机 git 工作树、卡住迁回）。
 func (a *App) putProjectRules(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	if home := a.homeRouteTargetForProject(id); home != "" {
+		a.forwardToHome(w, r, home)
+		return
+	}
 
 	a.mu.RLock()
 	p, ok := a.findProject(id)
