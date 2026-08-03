@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -193,7 +194,10 @@ func runCheckoutStep(ctx context.Context, run Runner, step, cmd string, onLine f
 		return fmt.Errorf("步骤 %s 执行异常: %w", step, err)
 	}
 	if exitCode != 0 {
-		tail := lastNLines(lines, 5)
+		// git 原始输出可能回显仓库自身配置里内嵌的凭据（submodule 里的 token、
+		// url.<base>.insteadOf 改写规则），这类凭据不经 api 层捕获点，必须在
+		// gitinfo 落日志与返回错误前就地脱敏，详见 redactURLCreds。
+		tail := redactLines(lastNLines(lines, 5))
 		log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤 %s 失败, exitCode=%d, 最后输出: %v", step, exitCode, tail)
 		return fmt.Errorf("步骤 %s 失败, exitCode=%d, 最后输出: %s", step, exitCode, strings.Join(tail, "\n"))
 	}
@@ -218,6 +222,38 @@ func lastNLines(lines []string, n int) []string {
 		return lines
 	}
 	return lines[len(lines)-n:]
+}
+
+// credURLPattern 匹配 http(s) URL 里嵌在 host 之前的 userinfo：`scheme://`
+// 之后、第一个 `/` 之前出现的 `...@` 段。`[^/@\s]*` 保证 `@` 必须在路径起始的
+// `/` 之前，因此只命中真正嵌在 host 前的凭据，而不会误伤路径里出现的 `@`
+// （如 https://host/a@b/c）。同时覆盖两种形态：`user:pass@`（冒号分隔）与裸
+// `token@`（无冒号），因为 `[^/@\s]*` 对是否含冒号无所谓。
+var credURLPattern = regexp.MustCompile(`(https?://)[^/@\s]*@`)
+
+// redactURLCreds 把文本里 http(s) URL 内嵌的凭据（userinfo）替换成 ***，
+// 只保留 scheme 与 host，覆盖 `user:pass@host` 与裸 `token@host` 两种形态。
+//
+// 为什么 gitinfo 要自带一份而不复用 api.redactCreds：分层约束——api 依赖
+// gitinfo（api 侧在 clone 前于捕获点剥离凭据），gitinfo 不能反向 import api，
+// 否则形成 import 循环。因此按本包已有 shellQuote 的先例，在包内放一个不导出
+// 的小工具，让「gitinfo 落日志前脱敏」这道防线不依赖任何调用方，即便某个
+// 未来调用方忘了在上层脱敏，密钥也不会从 gitinfo 层日志/错误漏出。
+//
+// 注意：本包版本比 api.redactCreds 更全——api 版只命中带冒号的 user:pass@，
+// 这里连裸 token@ 也一并抹掉，正对应 git 回显 submodule/insteadOf 凭据的形态。
+func redactURLCreds(s string) string {
+	return credURLPattern.ReplaceAllString(s, "${1}***@")
+}
+
+// redactLines 对每行套用 redactURLCreds，返回一个新切片，不改动入参底层数组
+// （lastNLines 返回的是原 lines 的子切片，原地改会污染已回调给 onLine 的数据）。
+func redactLines(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = redactURLCreds(line)
+	}
+	return out
 }
 
 // shellQuote 把字符串包装成单引号 shell 字面量，把内部的单引号替换成转义序列：

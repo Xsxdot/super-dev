@@ -291,6 +291,39 @@ func TestEnsureCheckout_CloneFailureIncludesExitCodeAndTail(t *testing.T) {
 	}
 }
 
+// TestEnsureCheckout_FailureOutputRedactsCredentials 验证 clone 失败路径的错误
+// 摘要会脱敏 git 原始输出里回显的凭据（user:pass@ 与裸 token@ 两种形态），
+// 只保留 host。git 可能把仓库自身配置里的凭据（submodule 内嵌 token、
+// url.<base>.insteadOf 改写）回显进输出，这类凭据不经 api 层捕获点，必须在
+// gitinfo 落日志/返回错误前就地脱敏，否则密钥会随 gitinfo 层日志外泄。
+func TestEnsureCheckout_FailureOutputRedactsCredentials(t *testing.T) {
+	credOutput := "Cloning into 'app'...\n" +
+		"fatal: unable to access 'https://user:s3cret@host/org/repo.git/'\n" +
+		"fatal: submodule 'https://ghp_baretoken@host/org/sub.git' auth failed\n"
+	fr := &fakeRunner{t: t, responses: []fakeResponse{
+		{prefix: "test -d", stdout: "no\n", exitVal: 0},
+		{prefix: "git clone", stdout: credOutput, exitVal: 128},
+	}}
+
+	err := EnsureCheckout(context.Background(), fr.run, "/srv/app", "https://example.com/a.git", "main", nil)
+	if err == nil {
+		t.Fatalf("clone 失败应返回 error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "s3cret") {
+		t.Errorf("错误摘要不应包含 user:pass 凭据, got %q", msg)
+	}
+	if strings.Contains(msg, "ghp_baretoken") {
+		t.Errorf("错误摘要不应包含裸 token 凭据, got %q", msg)
+	}
+	if !strings.Contains(msg, "host/org/repo.git") {
+		t.Errorf("脱敏后应保留 host 与路径, got %q", msg)
+	}
+	if !strings.Contains(msg, "***") {
+		t.Errorf("凭据应被替换为 ***, got %q", msg)
+	}
+}
+
 // TestEnsureCheckout_TransportFailureStopsSequence 验证 fetch 阶段传输层故障时
 // 立即中断，不再往下执行 checkout/pull。
 func TestEnsureCheckout_TransportFailureStopsSequence(t *testing.T) {
@@ -306,6 +339,37 @@ func TestEnsureCheckout_TransportFailureStopsSequence(t *testing.T) {
 	}
 	if len(fr.calls) != 2 {
 		t.Fatalf("fetch 传输失败后不应再调用 checkout/pull，实际: %+v", fr.calls)
+	}
+}
+
+// TestRedactURLCreds 直接验证凭据脱敏：同时抹掉 http(s) URL 内嵌的
+// user:pass@ 与裸 token@ 两种形态，只保留 scheme 与 host；不误伤无凭据的
+// URL，也不误伤路径里出现的 @。
+func TestRedactURLCreds(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"user_pass", "fatal: access 'https://user:s3cret@host/org/repo.git/'", "fatal: access 'https://***@host/org/repo.git/'"},
+		{"bare_token", "remote: https://ghp_baretoken@host/org/repo.git rejected", "remote: https://***@host/org/repo.git rejected"},
+		{"no_creds_untouched", "Cloning from https://host/org/repo.git", "Cloning from https://host/org/repo.git"},
+		{"http_scheme", "err https://tok@host/x", "err https://***@host/x"},
+		{"at_in_path_untouched", "see https://host/a@b/c", "see https://host/a@b/c"},
+		{"both_forms_one_line", "https://user:s3cret@host/a.git and https://ghp_baretoken@host/b.git", "https://***@host/a.git and https://***@host/b.git"},
+	}
+	for _, c := range cases {
+		if got := redactURLCreds(c.in); got != c.want {
+			t.Errorf("%s: redactURLCreds(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+	// 显式钉住「两个密钥都被抹掉、host 保留」，与 finding 描述一致。
+	both := redactURLCreds("https://user:s3cret@host/a.git https://ghp_baretoken@host/b.git")
+	if strings.Contains(both, "s3cret") || strings.Contains(both, "ghp_baretoken") {
+		t.Errorf("两种凭据都应被抹掉, got %q", both)
+	}
+	if !strings.Contains(both, "host/a.git") || !strings.Contains(both, "host/b.git") {
+		t.Errorf("脱敏后应保留 host, got %q", both)
 	}
 }
 

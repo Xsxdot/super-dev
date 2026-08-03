@@ -165,7 +165,15 @@ func (a *App) resolveConfigChangeProject(req configchange.ChangeRequest) (model.
 		if projectName != "" && project.Name != projectName {
 			continue
 		}
-		if rootPath != "" && project.RootPath != rootPath {
+		// project_id 优先：一旦请求带了 project_id 就不再叠加 root_path 相等性。
+		// 归属路由下，配置写入会原样转发到归属机，请求体里的 root_path 是控制面
+		// 的检出路径，而 project_id 是随 project.yaml 迁移的稳定身份——归属机自己
+		// 的检出路径与控制面天然不同。若继续对 project_id 命中的项目 AND root_path，
+		// 归属机会漏过它自己的项目（ID 命中但 root_path 不符被 skip）：
+		// config.service/pipeline.upsert 退化成 404 not found，config.project.upsert
+		// 落入下方骨架分支，在归属机上以控制面路径误建一个虚假项目。
+		// 因此 root_path 相等性仅在 project_id 缺省时作为回退匹配依据。
+		if projectID == "" && rootPath != "" && project.RootPath != rootPath {
 			continue
 		}
 		a.mu.RUnlock()

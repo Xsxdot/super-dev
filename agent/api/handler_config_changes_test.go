@@ -220,6 +220,68 @@ func TestConfigChangeProjectUpsertBackfillsConfigFormat(t *testing.T) {
 	assert.Equal(t, "split", projects[0].ConfigFormat, "内存中的项目必须带上刚落盘的格式，否则 putEnvSelected 会误走 legacy 分支")
 }
 
+// TestResolveConfigChangeProjectPrefersProjectID 钉住归属路由下的跨机解析：
+// 配置写入被转发到归属机后，请求体里带的 root_path 是控制面的检出路径，与
+// 归属机自己的检出路径天然不同。resolveConfigChangeProject 必须在 project_id
+// 命中时直接返回该项目，不再叠加 root_path 相等性——否则归属机会漏过自己的
+// 项目：service/pipeline upsert 退化成 404 not found，project upsert 落入骨架
+// 分支在归属机上以控制面路径误建一个虚假项目，破坏「配置写入落到目标机」的承诺。
+// 单机测试恰好 root_path 始终相符，天然照不出这个缺口。
+func TestResolveConfigChangeProjectPrefersProjectID(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	const homePath = "/home/checkout/app"
+	const controlPlanePath = "/control-plane/workspace/app"
+	app.mu.Lock()
+	app.appendProjectLocked(model.Project{ID: "proj-x", Name: "demo", RootPath: homePath})
+	app.mu.Unlock()
+
+	// 跨机形状：project_id 命中归属机项目，但 root_path 是控制面路径（与归属机不符）。
+	// 修复前：service upsert 会因 root_path 不符被 skip → 落入 not found。
+	got, status, msg := app.resolveConfigChangeProject(configchange.ChangeRequest{
+		Kind:      configchange.KindServiceUpsert,
+		ProjectID: "proj-x",
+		RootPath:  controlPlanePath,
+	})
+	require.Equal(t, http.StatusOK, status, "project_id 命中时不应因 root_path 不符返回 %d: %s", status, msg)
+	assert.Equal(t, "proj-x", got.ID)
+	assert.Equal(t, homePath, got.RootPath, "必须解析到归属机上的真实项目，而不是控制面路径的骨架项目")
+
+	// project_id-only 仍解析（未提供 root_path，纯 ID 命中，行为不变）。
+	got, status, _ = app.resolveConfigChangeProject(configchange.ChangeRequest{
+		Kind:      configchange.KindServiceUpsert,
+		ProjectID: "proj-x",
+	})
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, "proj-x", got.ID)
+
+	// root_path-only 回退匹配仍解析（project_id 为空时走 root_path 相等，行为不变）。
+	got, status, _ = app.resolveConfigChangeProject(configchange.ChangeRequest{
+		Kind:     configchange.KindServiceUpsert,
+		RootPath: homePath,
+	})
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, "proj-x", got.ID)
+
+	// ID 不符但 root_path 相符：维持既有 AND 语义——ID 一旦提供且不符即 skip，
+	// 不得因 root_path 相符而命中（本次修复不能把这条也放开，否则回归）。
+	_, status, _ = app.resolveConfigChangeProject(configchange.ChangeRequest{
+		Kind:      configchange.KindServiceUpsert,
+		ProjectID: "other-id",
+		RootPath:  homePath,
+	})
+	assert.Equal(t, http.StatusNotFound, status, "ID 提供且不符时应维持 skip 语义，不得因 root_path 相符命中")
+
+	// 真正不存在：project_id 不命中且非 project upsert → not found（行为不变）。
+	_, status, _ = app.resolveConfigChangeProject(configchange.ChangeRequest{
+		Kind:      configchange.KindServiceUpsert,
+		ProjectID: "ghost",
+	})
+	assert.Equal(t, http.StatusNotFound, status)
+}
+
 func TestConfigChangeOperationPreflightReturnsPlan(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
