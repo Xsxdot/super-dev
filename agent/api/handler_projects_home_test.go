@@ -8,6 +8,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,6 +65,45 @@ func TestListProjectsCarriesHomeHost(t *testing.T) {
 	require.Len(t, projects2, 1)
 	assert.Equal(t, "host-real", projects2[0].HomeHostID)
 	assert.Equal(t, "Real Host", projects2[0].HomeHostName)
+}
+
+// TestListProjectsCarriesHomeHost_HostListReadFailureDegrades 验证 remoteStore.ListHosts
+// 真实读取失败时（复现手法：把 hosts.json 应在的路径换成一个目录，os.ReadFile
+// 对目录会返回非 IsNotExist 的错误，不需要 mock/接口注入即可稳定触发），
+// GET /api/projects 依旧返回 200，HomeHostID 保留、HomeHostName 统一留空——
+// 这正是本次修复补的日志分支（fillProjectHomes 里 ListHosts 出错时 log.Printf）
+// 所覆盖的真实路径，而不仅仅是"host id 查不到"这种 map 未命中的路径。
+func TestListProjectsCarriesHomeHost_HostListReadFailureDegrades(t *testing.T) {
+	app := newTestAppForPackage(t)
+	srv := newHTTPServerForPackage(t, app)
+
+	dir := t.TempDir()
+	addBody := `{"root_path": "` + dir + `"}`
+	addResp, err := http.Post(srv.URL+"/api/projects", "application/json", strings.NewReader(addBody))
+	require.NoError(t, err)
+	defer addResp.Body.Close()
+	require.Equal(t, http.StatusOK, addResp.StatusCode)
+
+	var created model.Project
+	require.NoError(t, json.NewDecoder(addResp.Body).Decode(&created))
+	require.NoError(t, app.projectHomeStore.SetHome(created.ID, "host-A"))
+
+	// 破坏 hosts.json：remoteStore 的 loadHostsRaw 对目录路径调用 os.ReadFile
+	// 会得到 "is a directory" 错误（非 os.IsNotExist），可稳定复现真实读取失败。
+	hostsPath := filepath.Join(app.cfg.DataDir, "hosts.json")
+	require.NoError(t, os.RemoveAll(hostsPath))
+	require.NoError(t, os.Mkdir(hostsPath, 0o755))
+
+	listResp, err := http.Get(srv.URL + "/api/projects")
+	require.NoError(t, err)
+	defer listResp.Body.Close()
+	require.Equal(t, http.StatusOK, listResp.StatusCode, "主机列表读取失败不应导致列表接口 500")
+
+	var projects []model.Project
+	require.NoError(t, json.NewDecoder(listResp.Body).Decode(&projects))
+	require.Len(t, projects, 1)
+	assert.Equal(t, "host-A", projects[0].HomeHostID, "读取失败也不能丢失已设置的归属 ID")
+	assert.Empty(t, projects[0].HomeHostName, "读取失败时展示名统一留空")
 }
 
 // TestListProjectsOmitsHomeFieldsWhenLocal 验证从未设置过归属的项目（归属本机）

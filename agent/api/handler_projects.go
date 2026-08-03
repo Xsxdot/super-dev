@@ -142,8 +142,14 @@ func (a *App) fillProjectHomes(projects []model.Project) {
 	if a.remoteStore != nil {
 		// 主机列表读取失败时保守按"查不到任何主机"处理：所有归属的 Name
 		// 都会留空，但 HomeHostID 依旧正确——不能因为这一次读取失败就让
-		// GET /api/projects 整体报错。
-		hosts, _ = a.remoteStore.ListHosts()
+		// GET /api/projects 整体报错。但降级本身必须留痕：否则 hosts.json
+		// 一旦损坏，GET /api/projects 会静默把所有归属展示名清空，
+		// 没有任何日志能定位到根因（与 projecthome.Store 的降级日志纪律一致）。
+		var err error
+		hosts, err = a.remoteStore.ListHosts()
+		if err != nil {
+			log.Printf("[SuperDev] projecthome: 读取主机列表失败，归属展示名将全部留空 err=%v", err)
+		}
 	}
 	hostNames := make(map[string]string, len(hosts))
 	for _, h := range hosts {
