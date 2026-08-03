@@ -128,7 +128,14 @@ func (a *App) transferPreflight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var blockers, ready []transferCheckItem
+	// 显式初始化为非 nil 空切片（而非 var 声明的 nil 切片）：一切正常（无阻塞项）
+	// 是预检最常见的"全绿"结果，此时若用 nil 切片，json.Marshal 会编码成
+	// `null` 而不是 `[]`。前端 TS 类型把 blockers/ready 声明为非空数组
+	// （TransferPreflightResponse），拿到 null 后 `.length`/`.map(...)` 会直接
+	// TypeError 崩掉——这恰恰是最常见的"仓库干净、无 dev 部署运行"路径，
+	// 属于 happy path 崩溃，必须从根上保证空集合也编码成 `[]`。
+	blockers := []transferCheckItem{}
+	ready := []transferCheckItem{}
 	blockers = append(blockers, localGitBlockers(local)...)
 	blockers = append(blockers, runningDevBlockers(project, mgr, hasMgr)...)
 

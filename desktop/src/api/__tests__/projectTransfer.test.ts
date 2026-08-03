@@ -7,6 +7,9 @@
  *   - Verify deleteHost surfaces the stable `project_home` error code (409) so callers
  *     (Task 12) can branch on it
  *   - Verify updateHost's response type carries the optional homed_projects field
+ *   - Verify transferPreflight normalizes a `null` blockers/ready wire payload into `[]`
+ *     (defense-in-depth for the "all clear" happy path, see the agent-side fix in
+ *     agent/api/handler_project_transfer.go)
  *
  * Boundaries:
  *   - Does not call a real Agent process
@@ -79,6 +82,35 @@ describe('transferPreflight', () => {
 
     expect(res.blockers).toHaveLength(1)
     expect(res.blockers[0]).toEqual({ code: 'uncommitted', detail: '本机存在未提交的变更，请先提交或暂存后再转移' })
+  })
+
+  it('normalizes a null blockers/ready wire payload into empty arrays (all-clear happy path defense)', async () => {
+    // 复现审阅发现的 Critical：agent 侧曾在"全绿"（无阻塞项）时把 nil 切片编码成
+    // JSON null（已在 handler_project_transfer.go 修复为固定编码 []）。此处的
+    // 防御性归一化不依赖后端修复本身——即使未来又有某条路径退化回 null，
+    // transferPreflight 也必须把它兜成 []，不能让调用方在 blockers.length /
+    // blockers.map(...) 上直接 TypeError 崩溃。
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        blockers: null,
+        ready: null,
+        target_dir: '~/workspace/super-debug',
+        branch: 'main',
+      }),
+    } as Response)
+
+    const res = await api.transferPreflight('proj-1', 'host-2')
+
+    expect(Array.isArray(res.blockers)).toBe(true)
+    expect(res.blockers).toEqual([])
+    expect(res.blockers.length).toBe(0)
+    expect(Array.isArray(res.ready)).toBe(true)
+    expect(res.ready).toEqual([])
+    expect(res.ready.length).toBe(0)
+    // 不应该崩：调用方最常见的用法就是直接 .map(...) 渲染清单。
+    expect(() => res.blockers.map(b => b.code)).not.toThrow()
+    expect(() => res.ready.map(r => r.code)).not.toThrow()
   })
 })
 

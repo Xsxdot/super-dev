@@ -1918,12 +1918,19 @@ export const api = {
    *   - targetDir: 目标机项目路径；留空时后端按 "~/workspace/<项目目录名>" 计算默认值
    *
    * 端点：POST /api/projects/{projectId}/transfer/preflight
+   *
+   * 注意：
+   *   - 防御性归一化：blockers/ready 在 TS 类型里声明为非空数组，但"全绿"（无
+   *     阻塞项）恰恰是最常见的 happy path——历史上后端曾在这条路径用 nil 切片
+   *     编码出 `null`（已在 agent 侧修复为固定编码成 `[]`），此处仍兜底把
+   *     null/undefined 转成 `[]`，双保险防止未来任何一侧的回归让调用方在
+   *     `.length`/`.map(...)` 上直接崩溃
    */
   transferPreflight: (projectId: string, hostId: string, targetDir?: string) =>
     request<TransferPreflightResponse>(`/api/projects/${encodeURIComponent(projectId)}/transfer/preflight`, {
       method: 'POST',
       body: JSON.stringify({ host_id: hostId, target_dir: targetDir ?? '' }),
-    }),
+    }).then(res => ({ ...res, blockers: res.blockers ?? [], ready: res.ready ?? [] })),
   /**
    * startTransfer 异步启动一次正向转移（本机 → 目标 host）。
    *

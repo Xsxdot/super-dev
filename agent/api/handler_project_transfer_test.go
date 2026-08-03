@@ -230,6 +230,73 @@ func TestTransferPreflight_NoLocalOrigin_ReadyExcludesCheckoutClone(t *testing.T
 	assert.Contains(t, blockerCodes, "no_upstream", "根因 blocker 应仍然存在，实际 blockers=%v", blockerCodes)
 }
 
+// TestTransferPreflight_AllClear_WireFormatUsesEmptyArraysNotNull 覆盖审阅
+// Critical 修复：预检"全绿"（无 blocker、无 ready 项）是最常见的 happy path，
+// 此时 blockers/ready 必须在 HTTP 响应体里编码成 `[]` 而不是 `null`。
+//
+// 为什么本用例要断言原始字节而不是结构体解码结果：json.Unmarshal 把 `null`
+// 和 `[]` 都无害地解码成 Go 的 nil 切片，对 nil 切片 range/len 都不会 panic，
+// 结构体往返测试会对这个 bug 完全失明——正是既有测试套件没能拦住这次线上
+// 崩溃的根因。前端 TS 把 blockers/ready 声明为非空数组类型，拿到 wire 上的
+// `null` 后 `.length`/`.map(...)` 会直接 TypeError。因此本用例必须直接读
+// resp.Body 的原始字节，对 JSON 字符串做 Contains 断言，才能真正覆盖这个
+// bug（修复前会拿到 `"blockers":null`，assert.Contains 会失败）。
+//
+// 构造"全绿"场景的关键：
+//   - 本机仓库干净（不脏）
+//   - Ahead 必须是 0（不能是 -1 走 no_upstream、不能 >0 走 unpushed）——用
+//     `git branch --set-upstream-to` 把当前分支追踪同一提交的另一个本地
+//     分支，全程不配置 origin，即可拿到 Ahead=0 而无需真实远端
+//   - local.RemoteURL 留空 + 目标机目录不存在（dirAbsentRunner）：命中预检
+//     switch 里 "!DirExists 但 local.RemoteURL=="" " 分支，其 if 条件不成立，
+//     不会往 ready 追加 checkout_clone——这是唯一能让 blockers 和 ready
+//     同时保持字面为空的组合，其余分支都必然至少往其中一个追加一项
+//   - 无 dev 环境/无运行中部署，跳过 running_dev blocker
+func TestTransferPreflight_AllClear_WireFormatUsesEmptyArraysNotNull(t *testing.T) {
+	app := newTestAppForPackage(t)
+	srv := newHTTPServerForPackage(t, app)
+	setTransferRemoteRunner(t, dirAbsentRunner)
+
+	dir := initTransferTestRepo(t)
+	project := addTransferTestProject(t, srv, dir)
+	// 注册项目会在仓库根目录落一份 .superdev/project.yaml（未纳入版本控制），
+	// 若不提交，status --porcelain 会因这个未跟踪文件判定仓库"脏"，
+	// 触发 uncommitted blocker，污染本用例要构造的"全绿"场景——
+	// 提交它才能让"全绿"真正只由 git 事实决定，而不是被测试基础设施的
+	// 副作用意外带出一个不相关的 blocker。
+	runTransferGit(t, dir, "add", "-A")
+	runTransferGit(t, dir, "commit", "-m", "add superdev config")
+	// 在提交完所有内容（含上面的配置文件提交）之后，再用同一提交上的另一个
+	// 本地分支充当追踪目标，使 Ahead=0；全程不配置 origin。顺序很重要：
+	// 若提前建 upstream-shadow，随后再提交配置文件会让 HEAD 领先它一个
+	// 提交，误触发 unpushed blocker。
+	runTransferGit(t, dir, "branch", "upstream-shadow")
+	runTransferGit(t, dir, "branch", "--set-upstream-to=upstream-shadow")
+
+	_, err := app.remoteStore.AddHost(model.Host{ID: "host-dev-all-clear", Name: "Dev Machine", DevMachineMode: true})
+	require.NoError(t, err)
+
+	reqBody := `{"host_id": "host-dev-all-clear"}`
+	resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer/preflight", "application/json", strings.NewReader(reqBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result transferPreflightResponse
+	bodyBytes := readAndDecode(t, resp, &result)
+
+	// 先用结构体断言确认场景本身真的是"全绿"（不是误配出了别的 blocker/ready）。
+	require.Empty(t, result.Blockers, "本用例要覆盖的就是全绿场景，实际 blockers=%+v", result.Blockers)
+	require.Empty(t, result.Ready, "本用例要覆盖的就是全绿场景，实际 ready=%+v", result.Ready)
+
+	// 核心断言：原始 JSON 必须是 `[]`，不能是 `null`。
+	body := string(bodyBytes)
+	assert.Contains(t, body, `"blockers":[]`, "全绿场景下 blockers 必须编码成 []，不能是 null，实际响应体=%s", body)
+	assert.Contains(t, body, `"ready":[]`, "全绿场景下 ready 必须编码成 []，不能是 null，实际响应体=%s", body)
+	assert.NotContains(t, body, `"blockers":null`, "回归：blockers 不应再编码成 null，实际响应体=%s", body)
+	assert.NotContains(t, body, `"ready":null`, "回归：ready 不应再编码成 null，实际响应体=%s", body)
+}
+
 // TestTransferPreflight_StartingDevDeployment_FlaggedAsRunningDev 覆盖审阅
 // FINDING #2（人工决策：running_dev 判定改用 IsDeploymentActive 而非字面
 // StatusRunning，starting 态也算活跃，宁可多报不漏报）。
