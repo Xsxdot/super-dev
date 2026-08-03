@@ -5,6 +5,8 @@
  *   - 拉取并缓存 /api/agents 返回的连接配置与运行态
  *   - 通过 Agent API 更新 transport，而不是复用 Host CRUD
  *   - 生成安装命令并保持命令结果不落入 Host 身份状态
+ *   - 转发纳管既有 agent 三步（发起接入请求/轮询状态/兑换凭据）与本机凭据落盘，
+ *     供 AgentConfigPanel 统一 mock；不缓存纳管进度本身
  *
  * 边界：
  *   - 不管理项目、deployment 或日志生命周期
@@ -15,6 +17,13 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   api,
+  exchangeAdoption as apiExchangeAdoption,
+  getAdoptionStatus as apiGetAdoptionStatus,
+  requestAdoption as apiRequestAdoption,
+  type AdoptionCreateResponse,
+  type AdoptionExchangeResponse,
+  type AdoptionStatusResponse,
+  type AgentAdoptResponse,
   type AgentDetachReason,
   type AgentDetachResponse,
   type AgentConfigUpdatePayload,
@@ -118,6 +127,26 @@ export const useAgentsStore = defineStore('agents', () => {
     return result
   }
 
+  // requestAdoption/getAdoptionStatus/exchangeAdoption 直连目标机（非本机 agent），
+  // 薄封装只为了让 AgentConfigPanel 用统一的 store mock 方式测试，本身不缓存
+  // 任何本地状态——纳管流程的进度全部由调用方（面板组件）自己的 ref 跟踪。
+  async function requestAdoption(hostUrl: string, name: string): Promise<AdoptionCreateResponse> {
+    return apiRequestAdoption(hostUrl, name)
+  }
+
+  async function getAdoptionStatus(hostUrl: string, id: string): Promise<AdoptionStatusResponse> {
+    return apiGetAdoptionStatus(hostUrl, id)
+  }
+
+  async function exchangeAdoption(hostUrl: string, id: string, adoptionToken: string): Promise<AdoptionExchangeResponse> {
+    return apiExchangeAdoption(hostUrl, id, adoptionToken)
+  }
+
+  /** adoptAgentCredential 把纳管换得的长期 token 落盘到本机 agents.json（同 provisionAgent 存储位）。 */
+  async function adoptAgentCredential(hostId: string, token: string): Promise<AgentAdoptResponse> {
+    return api.adoptAgent(hostId, token)
+  }
+
   function upsert(agent: AgentDTO) {
     const idx = agents.value.findIndex(item => item.host_id === agent.host_id)
     if (idx >= 0) agents.value[idx] = agent
@@ -148,6 +177,10 @@ export const useAgentsStore = defineStore('agents', () => {
     generateInstallCommand,
     testTransport,
     provisionAgent,
+    requestAdoption,
+    getAdoptionStatus,
+    exchangeAdoption,
+    adoptAgentCredential,
     upsert,
     agentOf,
   }

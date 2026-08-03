@@ -22,12 +22,13 @@ export function agentUninstallScriptURL(name: AgentUninstallScriptName): string 
 // AgentAPIErrorPayload 描述 agent 结构化错误响应。
 //
 // 参数：
-//   - code: 稳定错误码，例如 approval_required、approval_already_decided
+//   - code: 稳定错误码，例如 approval_required、approval_already_decided、existing_agent_detected
 //   - error: 可展示错误信息
 //   - stage: 生命周期操作的稳定失败阶段
 //   - plan: operation 预检计划
 //   - approval: 待处理审批请求
 //   - decided_by: code 为 approval_already_decided 时，服务端从裁决方凭据推导的展示名
+//   - version: code 为 existing_agent_detected 时，探测到的既有 agent 版本
 //   - data: 错误码特有的结构化副作用或恢复上下文
 //
 // 注意：
@@ -39,6 +40,7 @@ export interface AgentAPIErrorPayload {
   plan?: OperationPlan
   approval?: OperationApproval
   decided_by?: string
+  version?: string
   data?: unknown
 }
 
@@ -62,6 +64,7 @@ export class AgentAPIError extends Error {
   plan?: OperationPlan
   approval?: OperationApproval
   decided_by?: string
+  version?: string
   data?: unknown
 
   constructor(message: string, status: number, payload?: AgentAPIErrorPayload) {
@@ -73,6 +76,7 @@ export class AgentAPIError extends Error {
     this.plan = payload?.plan
     this.approval = payload?.approval
     this.decided_by = payload?.decided_by
+    this.version = payload?.version
     this.data = payload?.data
   }
 }
@@ -105,6 +109,22 @@ export function isApprovalRequiredError(error: unknown): error is AgentAPIError 
 //     调用方渲染时需与「有名字」区分，不要拼出「已由  处理」这种空洞文案
 export function isApprovalAlreadyDecidedError(error: unknown): error is AgentAPIError & { decided_by?: string } {
   return error instanceof AgentAPIError && error.code === 'approval_already_decided'
+}
+
+// isExistingAgentDetectedError 判断错误是否为「安装预探测守卫拦截」的响应（HTTP 409）。
+//
+// 参数：
+//   - error: 任意捕获到的异常值
+//
+// 返回：
+//   - true 表示 code 为 existing_agent_detected，version 携带探测到的既有 agent 版本
+//
+// 注意：
+//   - 命中时不应盲目重试安装——调用方需要引导用户在「纳管」（发起接入请求，
+//     经既有控制面审批换发独立凭据）与「强制重装」（显式确认、停掉对方在跑的
+//     agent）之间选择，见 AgentConfigPanel 的既有 agent 检测分支
+export function isExistingAgentDetectedError(error: unknown): error is AgentAPIError & { version?: string } {
+  return error instanceof AgentAPIError && error.code === 'existing_agent_detected'
 }
 
 // requestHeaders 组装请求公共头并注入本机 agent token。
@@ -1280,6 +1300,12 @@ export interface AgentInstallCommandPayload {
 
 export interface AgentInstallPayload {
   method: 'push_over_ssh'
+  /**
+   * force_reinstall 为 true 时跳过后端「既有 agent 探测守卫」，用户显式确认要
+   * 盲目重装（会停掉对方在跑的 agent、覆盖其凭据）。省略/false 时，探测到既有
+   * provisioned agent 会收到 409 existing_agent_detected，调用方应引导改走纳管。
+   */
+  force_reinstall?: boolean
 }
 
 export interface AgentUninstallPayload {
@@ -1633,6 +1659,107 @@ export interface TransferStatusResponse {
   error?: string
 }
 
+// ===== 纳管既有 agent（agent adoption） =====
+//
+// 与本文件其余类型不同：这三个端点的请求目标是「目标机 agent」本身，不是本机
+// agent（BASE）——目标机此刻被别的控制面管着，本控制面手上没有它的任何凭据，
+// 三个端点全部在目标机的 bypass 白名单内（无需凭据即可访问）。调用方（
+// AgentConfigPanel）沿用「添加主机」表单里已知的目标地址拼出 hostUrl，见
+// desktop/src/lib/agentBind.ts 的 recommendedDirectAddress。
+
+/** AdoptionState 镜像 agent/security/adoption.go 的 AdoptionRequest 状态机。 */
+export type AdoptionState = 'pending' | 'approved' | 'rejected' | 'expired'
+
+/** AdoptionCreateResponse 是 POST .../adoption-requests 的成功响应。 */
+export interface AdoptionCreateResponse {
+  id: string
+  state: AdoptionState
+  expires_at: string
+}
+
+/**
+ * AdoptionStatusResponse 是 GET .../adoption-requests/{id} 的响应。
+ *
+ * 注意：
+ *   - adoption_token 只在 state=='approved' 且本次是首次领取时非空——目标机侧
+ *     一次性发放，领取后立即置为已消费，此后再 GET 恒不再带出，调用方拿到就
+ *     必须立刻兑换，不能缓存等下次用
+ */
+export interface AdoptionStatusResponse {
+  state: AdoptionState
+  adoption_token?: string
+}
+
+/** TokenRecord 镜像 agent/security/store.go 的 TokenRecord（hash 已脱敏，非明文）。 */
+export interface TokenRecord {
+  id: string
+  name: string
+  hash: string
+  issued_at: string
+}
+
+/** AdoptionExchangeResponse 是 POST .../exchange 的成功响应；token 是本控制面的长期凭据。 */
+export interface AdoptionExchangeResponse {
+  token: string
+  record: TokenRecord
+}
+
+/** AgentAdoptResponse 是本机 POST /api/agents/{host_id}/adopt 的响应（落盘凭据的本机端点）。 */
+export interface AgentAdoptResponse {
+  status: string
+}
+
+// adoptionRequest 是纳管三端点专用的裸 fetch：不经 request()/BASE/本机 token，
+// 直连调用方传入的目标机地址（同 ensureCollector 的例外，理由同上文注释）。
+async function adoptionRequest<T>(hostUrl: string, path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${hostUrl}${path}`, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options?.headers as Record<string, string> | undefined) },
+  })
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch {
+      /* 非 JSON 错误体 */
+    }
+    throw new AgentAPIError(message, res.status)
+  }
+  return res.json() as Promise<T>
+}
+
+/**
+ * requestAdoption 向目标机发起一次无凭据接入请求。
+ *
+ * 参数：
+ *   - hostUrl: 目标机地址（含协议，如 http://1.2.3.4:57017）
+ *   - name: 本控制面自报的展示名，供目标机审批列表和审计展示
+ *
+ * 注意：
+ *   - 目标机对 30s 内的 pending 请求数限流（超限 429），调用方需把该失败态
+ *     可视化，不能静默重试刷屏
+ */
+export function requestAdoption(hostUrl: string, name: string): Promise<AdoptionCreateResponse> {
+  return adoptionRequest<AdoptionCreateResponse>(hostUrl, '/api/security/adoption-requests', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+}
+
+/** getAdoptionStatus 轮询接入请求的当前状态；approved 时可能一次性附带 adoption_token。 */
+export function getAdoptionStatus(hostUrl: string, id: string): Promise<AdoptionStatusResponse> {
+  return adoptionRequest<AdoptionStatusResponse>(hostUrl, `/api/security/adoption-requests/${encodeURIComponent(id)}`)
+}
+
+/** exchangeAdoption 用一次性 adoption_token 兑换本控制面的长期凭据；只能成功兑换一次。 */
+export function exchangeAdoption(hostUrl: string, id: string, adoptionToken: string): Promise<AdoptionExchangeResponse> {
+  return adoptionRequest<AdoptionExchangeResponse>(hostUrl, `/api/security/adoption-requests/${encodeURIComponent(id)}/exchange`, {
+    method: 'POST',
+    body: JSON.stringify({ adoption_token: adoptionToken }),
+  })
+}
+
 export const api = {
   // 项目
   listProjects: () => request<Project[]>('/api/projects'),
@@ -1730,6 +1857,19 @@ export const api = {
     request<AgentProvisionResponse>(`/api/agents/${encodeURIComponent(hostId)}/provision`, {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+  /**
+   * adoptAgent 把纳管流程（exchangeAdoption）换得的长期 token 落盘到本机 agents.json。
+   *
+   * 注意：
+   *   - 这是本机 agent 的端点（走 request()/BASE/本机 token），与上面纳管三端点
+   *     直连目标机不同——token 已经在目标机侧确认有效，这一步只是记到本地
+   *   - 该端点只更新已存在的 Agent 记录，不创建；token 不会出现在响应体里
+   */
+  adoptAgent: (hostId: string, token: string) =>
+    request<AgentAdoptResponse>(`/api/agents/${encodeURIComponent(hostId)}/adopt`, {
+      method: 'POST',
+      body: JSON.stringify({ token }),
     }),
 
   // 设置

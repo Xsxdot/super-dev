@@ -5,10 +5,14 @@ AgentConfigPanel：统一管理单台 Host Agent 的监听、安全、安装、�
   - 将原先分散的安全配置、安装命令、连接链编辑收敛到一个四步面板
   - 保证监听端口、TLS 模式只有一个编辑入口，bind 地址由连接链推导
   - 通过 agents store 调用现有 Agent API 完成保存、下发、生成命令和探测
+  - SSH 直推安装遇到「既有 agent 已被其他控制面管理」（409）时，引导用户在
+    纳管（发起接入请求 → 等待对方审批 → 兑换凭据 → 落盘 → 连接）与强制重装
+    （显式确认后果）之间选择，纳管请求直连目标机地址，不经本机 agent 转发
 
 边界：
   - 不创建或编辑 Host 身份信息
-  - 不直接调用 fetch 或底层 HTTP API
+  - 不直接调用 fetch 或底层 HTTP API（纳管三端点的裸 fetch 封装在 agent.ts，
+    本组件只调用 agents store 暴露的方法）
   - 不修改后端 DTO 结构
 -->
 <script setup lang="ts">
@@ -23,6 +27,7 @@ import {
   recommendedDirectAddress,
   resolveBindAddressFromChain,
 } from '@/lib/agentBind'
+import { isExistingAgentDetectedError } from '@/api/agent'
 import type {
   AgentConfigUpdatePayload,
   AgentCreatePayload,
@@ -83,6 +88,22 @@ const hostID = ref('')
 const localAgent = ref<AgentDTO | null>(null)
 let panelRunID = 0
 
+// ===== 纳管既有 agent（安装 409 existing_agent_detected 分支） =====
+// existingAgentDetected 为 true 时，安装 tab 的 phase-start 区域整体切换成
+// 「检测到既有 agent」分支（纳管/强制重装二选一），不再展示常规安装内容。
+const existingAgentDetected = ref(false)
+const existingAgentVersion = ref('')
+const forceReinstallConfirmed = ref(false)
+// adoptPhase 只覆盖「发起请求 → 等待批准 → 兑换凭据」这段纳管专属流程；
+// 兑换成功后交棒给既有的 installStartStatus/installSecurityStatus 流水线
+// （checkConnectedAgent 等），不重复造一套连接确认 UI。
+const adoptPhase = ref<'idle' | 'requesting' | 'waiting' | 'exchanging'>('idle')
+const adoptFailureMessage = ref('')
+const ADOPTION_POLL_INTERVAL_MS = 2000
+// 与 requestHeaders() 里桌面端上报给本机 agent 的展示名保持一致的语义：
+// 纳管请求同样是「这台桌面在向目标机自报身份」，用同一个可读名称。
+const ADOPTION_REQUESTER_NAME = 'SuperDev Desktop'
+
 const securityForm = reactive({
   listenPort: 57017,
   tlsMode: 'auto' as AgentTLSMode,
@@ -134,6 +155,14 @@ const bindAddress = computed(() => resolveBindAddressFromChain(chain.value))
 const bindReason = computed(() => bindReasonFromChain(chain.value))
 const bindReasonKey = computed(() => bindReason.value === 'direct' ? 'settings.agents.bindReasonDirect' : 'settings.agents.bindReasonLoopback')
 const directOptions = computed(() => directAddressOptions(currentHost.value, bindPort.value))
+// adoptionTargetURL 是纳管三端点直连的目标机地址：沿用「添加主机」表单里
+// 已知的目标地址（public_ip/private_ip/ssh_host 优先级同 direct 连接候选），
+// 拼上当前监听端口配置——目标机此刻没有任何凭据可用来告诉我们它的真实端口，
+// 这是唯一可复用的已知信息，不发明新的探测。
+const adoptionTargetURL = computed(() => {
+  const address = recommendedDirectAddress(currentHost.value, bindPort.value)
+  return address ? `http://${address}` : ''
+})
 const hasPublicIP = computed(() => Boolean(currentHost.value?.public_ip?.trim()))
 const installTransportType = computed(() => chain.value[0]?.type ?? 'tunnel')
 const transportDirty = computed(() => chainSignature(chain.value) !== chainSignature(savedChain.value))
@@ -454,6 +483,11 @@ function resetInstallPhases() {
   checkingGeneratedInstall.value = false
   checkingRestart.value = false
   restartRequired.value = false
+  existingAgentDetected.value = false
+  existingAgentVersion.value = ''
+  forceReinstallConfirmed.value = false
+  adoptPhase.value = 'idle'
+  adoptFailureMessage.value = ''
 }
 
 function firstProvisionIndex(): number {
@@ -585,7 +619,17 @@ async function confirmGeneratedInstallExecuted() {
   }
 }
 
-async function pushInstall() {
+// pushInstall 发起 SSH 直推安装。
+//
+// 参数：
+//   - forceReinstall: 用户在「检测到既有 agent」分支显式勾选确认后传 true，
+//     跳过后端探测守卫盲目重装；省略/false 为常规首装路径
+//
+// 注意：
+//   - 模板绑定必须写成 pushInstall() / pushInstall(true) 的显式调用形式，
+//     不能写裸方法引用 @click="pushInstall"——Vue 会把原生 MouseEvent 当成
+//     第一个参数传入，等价于每次点击都被强制解读成 forceReinstall=true
+async function pushInstall(forceReinstall = false) {
   const agent = persistedAgent.value
   // Push 安装必须与后端 fail-closed 的 SSH 身份合同保持一致，不能先发起必然失败的远程操作。
   if (!agent || pushSSHBlocked.value) return
@@ -599,13 +643,25 @@ async function pushInstall() {
   installSecurityStatus.value = 'waiting'
   installSecurityMessage.value = t('settings.agents.installSecurityWaitingForStart')
   try {
-    pushInstallResult.value = await agentsStore.installAgent(agent.host_id, { method: 'push_over_ssh' })
+    pushInstallResult.value = await agentsStore.installAgent(agent.host_id, { method: 'push_over_ssh', force_reinstall: forceReinstall })
     if (!isPanelRunActive(runID)) return
     installStartStatus.value = 'success'
     installStartMessage.value = t('settings.agents.installStarted')
     await provisionAndConnect(runID)
   } catch (err) {
     if (!isPanelRunActive(runID)) return
+    if (isExistingAgentDetectedError(err)) {
+      // 守卫拦截：不是普通安装失败，是需要用户在纳管/强制重装之间做选择——
+      // 清空常规安装态（避免同时展示"安装出错"和"检测到既有 agent"两套矛盾文案），
+      // 转到既有 agent 检测分支。
+      installStartStatus.value = 'idle'
+      installStartMessage.value = ''
+      installSecurityStatus.value = 'idle'
+      installSecurityMessage.value = ''
+      existingAgentDetected.value = true
+      existingAgentVersion.value = err.version ?? ''
+      return
+    }
     if (installStartStatus.value !== 'success') {
       installStartStatus.value = 'error'
       installStartMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
@@ -617,6 +673,133 @@ async function pushInstall() {
   } finally {
     if (isPanelRunActive(runID)) installingPush.value = false
   }
+}
+
+// startAdoption 发起一次纳管流程：Create → 2s 轮询 → approved 自动 Exchange →
+// 凭据落盘 → 走既有 connect 流程（checkConnectedAgent）。
+//
+// 注意：
+//   - 全程用 isPanelRunActive(runID) 做终止判定，与面板其余异步链路同一套
+//     机制——用户取消（cancelAdoption）、面板关闭/重置（reset/requestClose）
+//     都会推进 panelRunID，让本函数的后续步骤在下一次检查点自然退出
+//   - TTL 终止条件不完全依赖服务端：expires_at 在客户端也做一次绝对时间判断，
+//     防止服务端因为某种原因迟迟不把 state 翻成 expired 时轮询永动
+async function startAdoption() {
+  const agent = persistedAgent.value
+  if (!agent) return
+  if (!adoptionTargetURL.value) {
+    adoptFailureMessage.value = t('agentInstall.adoptTargetUnknown')
+    return
+  }
+  const runID = panelRunID
+  adoptFailureMessage.value = ''
+  adoptPhase.value = 'requesting'
+  try {
+    const created = await agentsStore.requestAdoption(adoptionTargetURL.value, ADOPTION_REQUESTER_NAME)
+    if (!isPanelRunActive(runID)) return
+    adoptPhase.value = 'waiting'
+    await pollAdoptionStatus(agent.host_id, created.id, created.expires_at, runID)
+  } catch (err) {
+    if (!isPanelRunActive(runID)) return
+    adoptPhase.value = 'idle'
+    adoptFailureMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
+  }
+}
+
+// pollAdoptionStatus 每 2 秒查询一次接入请求状态，直到进入终态或被取消/关闭/超时。
+async function pollAdoptionStatus(hostId: string, requestId: string, expiresAt: string, runID: number) {
+  const parsedDeadline = Date.parse(expiresAt)
+  const deadline = Number.isFinite(parsedDeadline) ? parsedDeadline : Number.POSITIVE_INFINITY
+  for (;;) {
+    if (!isPanelRunActive(runID)) return
+    if (Date.now() >= deadline) {
+      adoptPhase.value = 'idle'
+      adoptFailureMessage.value = t('agentInstall.adoptExpired')
+      return
+    }
+    let status
+    try {
+      status = await agentsStore.getAdoptionStatus(adoptionTargetURL.value, requestId)
+    } catch (err) {
+      if (!isPanelRunActive(runID)) return
+      adoptPhase.value = 'idle'
+      adoptFailureMessage.value = err instanceof Error ? err.message : t('common.requestFailed')
+      return
+    }
+    if (!isPanelRunActive(runID)) return
+    if (status.state === 'approved') {
+      if (!status.adoption_token) {
+        // 一次性 token 已在别处被领取（例如面板曾经关闭又重新打开过一轮）——
+        // 没有 token 就无法兑换，只能引导用户重新发起，不能在这里假装成功。
+        adoptPhase.value = 'idle'
+        adoptFailureMessage.value = t('agentInstall.adoptTokenLost')
+        return
+      }
+      await completeAdoption(hostId, requestId, status.adoption_token, runID)
+      return
+    }
+    if (status.state === 'rejected') {
+      adoptPhase.value = 'idle'
+      adoptFailureMessage.value = t('agentInstall.adoptRejected')
+      return
+    }
+    if (status.state === 'expired') {
+      adoptPhase.value = 'idle'
+      adoptFailureMessage.value = t('agentInstall.adoptExpired')
+      return
+    }
+    // pending：继续轮询。
+    await sleep(ADOPTION_POLL_INTERVAL_MS)
+    if (!isPanelRunActive(runID)) return
+  }
+}
+
+// completeAdoption 用一次性 adoption_token 兑换长期凭据、落盘到本机 agents.json，
+// 再走既有 checkConnectedAgent 连接确认流程（同 provisionAndConnect 尾段）。
+async function completeAdoption(hostId: string, requestId: string, adoptionToken: string, runID: number) {
+  adoptPhase.value = 'exchanging'
+  try {
+    const exchanged = await agentsStore.exchangeAdoption(adoptionTargetURL.value, requestId, adoptionToken)
+    if (!isPanelRunActive(runID)) return
+    await agentsStore.adoptAgentCredential(hostId, exchanged.token)
+    if (!isPanelRunActive(runID)) return
+    // 凭据已落盘：纳管流程本身完成，切回既有安装阶段流水线展示连接确认进度，
+    // 复用它已有的失败/重试 UI（agent-install-security-retry），不重复造一套。
+    existingAgentDetected.value = false
+    adoptPhase.value = 'idle'
+    adoptFailureMessage.value = ''
+    installStartStatus.value = 'success'
+    installStartMessage.value = t('settings.agents.installStarted')
+    installSecurityStatus.value = 'running'
+    installSecurityMessage.value = t('settings.agents.installSecurityRunning')
+    await checkConnectedAgent(hostId, true, 'settings.agents.installRestartCheckFailed', true, runID)
+  } catch (err) {
+    if (!isPanelRunActive(runID)) return
+    const message = err instanceof Error ? err.message : t('common.requestFailed')
+    if (existingAgentDetected.value) {
+      // 还没切回既有流水线（exchange 或 adoptAgentCredential 本身失败）：
+      // 留在纳管分支报错，不能悄悄回到「安装并启动」的常规文案。
+      adoptPhase.value = 'idle'
+      adoptFailureMessage.value = message
+    } else {
+      // 凭据已落盘，只是随后的连接确认失败：交给既有安装阶段的错误态和重试按钮。
+      installSecurityStatus.value = 'error'
+      installSecurityMessage.value = message
+    }
+    actionError.value = message
+  }
+}
+
+// cancelAdoption 停止纳管轮询并回到「检测到既有 agent」的初始选择态。
+//
+// 注意：
+//   - invalidatePanelRun 让所有仍在途的 isPanelRunActive(runID) 检查在下一个
+//     检查点失败退出，是本组件唯一的后台异步终止机制，纳管轮询复用它，
+//     不需要额外的 AbortController
+function cancelAdoption() {
+  invalidatePanelRun()
+  adoptPhase.value = 'idle'
+  adoptFailureMessage.value = ''
 }
 
 async function probeAll() {
@@ -784,7 +967,54 @@ onBeforeUnmount(() => {
               <p class="step-note" data-test="agent-bind-reason">{{ t(bindReasonKey) }}</p>
 
               <div class="install-phases">
-                <section class="install-phase" :class="`phase-${installStartStatus}`" data-test="install-phase-start">
+                <!-- 安装守卫 409：整段 phase-start 换成「检测到既有 agent」分支，纳管/强制重装二选一。 -->
+                <section v-if="existingAgentDetected" class="install-phase phase-error" data-test="install-phase-start">
+                  <div class="settings-alert settings-alert-warning" data-test="agent-install-existing-detected">
+                    {{ t('agentInstall.existingDetected', { version: existingAgentVersion || '?' }) }}
+                  </div>
+
+                  <template v-if="adoptPhase === 'idle'">
+                    <p v-if="adoptFailureMessage" class="install-note warning" data-test="agent-adopt-failed">{{ adoptFailureMessage }}</p>
+
+                    <div class="step-actions step-actions-left">
+                      <button class="settings-btn settings-btn-primary" type="button" data-test="agent-adopt-start" @click="startAdoption">
+                        {{ t('agentInstall.adopt') }}
+                      </button>
+                    </div>
+
+                    <div class="force-reinstall-block">
+                      <label class="force-reinstall-consent">
+                        <input v-model="forceReinstallConfirmed" type="checkbox" data-test="agent-force-reinstall-confirm" />
+                        {{ t('agentInstall.forceReinstallConfirm') }}
+                      </label>
+                      <div v-if="forceReinstallConfirmed" class="settings-alert settings-alert-danger" data-test="agent-force-reinstall-warning">
+                        {{ t('agentInstall.forceReinstallWarning') }}
+                      </div>
+                      <button
+                        class="settings-btn settings-btn-danger"
+                        type="button"
+                        :disabled="!forceReinstallConfirmed || installingPush"
+                        data-test="agent-force-reinstall"
+                        @click="pushInstall(true)"
+                      >
+                        {{ t('agentInstall.forceReinstall') }}
+                      </button>
+                    </div>
+                  </template>
+
+                  <template v-else>
+                    <p class="step-note" data-test="agent-adopt-waiting">
+                      {{ adoptPhase === 'exchanging' ? t('agentInstall.adoptExchanging') : adoptPhase === 'requesting' ? t('agentInstall.adoptRequesting') : t('agentInstall.adoptWaiting') }}
+                    </p>
+                    <div class="step-actions step-actions-left">
+                      <button class="settings-btn settings-btn-secondary" type="button" data-test="agent-adopt-cancel" @click="cancelAdoption">
+                        {{ t('agentInstall.adoptCancel') }}
+                      </button>
+                    </div>
+                  </template>
+                </section>
+
+                <section v-else class="install-phase" :class="`phase-${installStartStatus}`" data-test="install-phase-start">
                   <header class="install-phase-head">
                     <strong>{{ t('settings.agents.installPhaseStart') }}</strong>
                     <span class="phase-state">
@@ -824,7 +1054,7 @@ onBeforeUnmount(() => {
                   <template v-else>
                     <p class="install-note">{{ t('settings.agents.pushOverSSHNote') }}</p>
                     <p v-if="pushSSHBlocked" class="install-note warning" data-test="agent-install-push-blocker">{{ t('settings.agents.pushOverSSHBlocked') }}</p>
-                    <button class="settings-btn settings-btn-primary" type="button" :disabled="installingPush || pushSSHBlocked" data-test="agent-install-push" @click="pushInstall">
+                    <button class="settings-btn settings-btn-primary" type="button" :disabled="installingPush || pushSSHBlocked" data-test="agent-install-push" @click="pushInstall()">
                       {{ installingPush ? t('common.loading') : t('settings.agents.installStartNow') }}
                     </button>
                     <p v-if="pushInstallResult" class="install-note" data-test="agent-install-push-result">{{ pushInstallResult.message }}</p>
@@ -1038,6 +1268,22 @@ onBeforeUnmount(() => {
   min-height: 120px;
   font-family: var(--font-mono, monospace);
   resize: vertical;
+}
+.force-reinstall-block {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 7px;
+  background: var(--bg-primary);
+}
+.force-reinstall-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .step-actions {
   justify-content: flex-end;

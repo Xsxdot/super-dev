@@ -966,6 +966,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/agent-uninstall-scripts/{name}", a.serveAgentUninstallScript)
 	mux.HandleFunc("POST /api/agents/{host_id}/transports/test", a.testAgentTransport)
 	mux.HandleFunc("POST /api/agents/{host_id}/provision", a.provisionAgent)
+	// adopt 是纳管流程（Task 7 exchange）的落盘终点：把目标机侧已生成、已经过审批
+	// 换发的长期 token 写回本机 agents.json；与其余写路径同样受 withSecurity 保护，
+	// 不在任何 bypass 白名单内（见 handler_agent_adopt.go 头注释）。
+	mux.HandleFunc("POST /api/agents/{host_id}/adopt", a.adoptAgent)
 	mux.HandleFunc("GET /api/agents/{host_id}/direct-exposure", a.getAgentDirectExposure)
 	mux.HandleFunc("GET /api/hosts/{id}/managed-deployments/status", a.getHostManagedDeploymentsStatus)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)
