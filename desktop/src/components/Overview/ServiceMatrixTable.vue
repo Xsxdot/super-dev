@@ -13,7 +13,10 @@ ServiceMatrixTable：项目概览运行状态页的服务矩阵。
   - 不打开日志、不执行启停操作
   - 不改变项目概览外层 Tab
   - 不判断项目是否归属远端——归属信息由父组件透传 homeHostName，本组件只按
-    节点所属环境是否为 dev 环境（matrix.devEnvironments）决定要不要标注
+    节点点位自带的 isDev 标记（buildServiceMatrix() 已按 env.is_dev 写好，
+    不是 matrix.devEnvironments——那个数组在 dev-only 项目回退场景下恒为空，
+    2026-08-03 review 曾指出用它反推会让标注对任何真实数据都不生效）决定
+    要不要叠加标注
 -->
 <script setup lang="ts">
 import type { NodeHealthBead, ServiceMatrix, ServiceMatrixRow } from '@/lib/runtimeServiceMatrix'
@@ -40,8 +43,15 @@ function pick(row: ServiceMatrixRow) {
 // isDevNode 判断某个节点点位是否属于 dev 环境。只有 dev 环境的节点可能来自
 // 「项目归属」的远端开发机（端口镜像）；非 dev 环境走独立的 host_ids 声明，
 // 与归属语义无关，不应被一并标注。
+//
+// 必须读 node.isDev（buildServiceMatrix() 构造时按 env.is_dev 显式写入），
+// 不能用 matrix.devEnvironments.includes(node.envName) 反推——devEnvironments
+// 是「被隔离出主矩阵的 dev 环境名单」，只有项目同时存在非 dev 环境时才非空；
+// 只有 dev 环境的项目（唯一会让 dev 节点出现在本组件 node-bead 里的场景）
+// 回退时 devEnvironments 恒为空数组，用它判断会让标注对任何真实数据都失效
+// （2026-08-03 review 发现的死代码，已改用显式字段修复）。
 function isDevNode(node: NodeHealthBead): boolean {
-  return props.matrix.devEnvironments.includes(node.envName)
+  return node.isDev
 }
 
 // nodeBeadTitle 组装节点点位的 tooltip 文案，归属远端开发机的 dev 节点额外

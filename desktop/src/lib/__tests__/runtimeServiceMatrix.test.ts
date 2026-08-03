@@ -5,6 +5,9 @@
  *   - Verify project overview runtime aggregation is production-first
  *   - Verify local dev instances stay out of primary critical counts
  *   - Verify multi-node service detail data remains available
+ *   - Verify NodeHealthBead.isDev is set from the original env.is_dev, not
+ *     derived from devEnvironments (Task 12 fix, 2026-08-03: devEnvironments
+ *     is empty for dev-only projects even though their beads ARE dev beads)
  *
  * Boundaries:
  *   - Does not render Vue components
@@ -140,6 +143,36 @@ describe('buildServiceMatrix', () => {
     expect(server.cpuPercent).toBe(3)
     expect(server.memBytes).toBe(250 * 1024 * 1024)
     expect(server.instances).toHaveLength(3)
+  })
+
+  // 修复回归（Task 12，2026-08-03）：devEnvironments 在 dev-only 项目回退场景下
+  // 恒为空数组（见上面 "falls back to dev columns for dev-only projects" 用例），
+  // 但 nodeHealths 里的节点确确实实来自 dev 环境。isDev 必须直接从 env.is_dev
+  // 写入，不能靠 devEnvironments.includes(envName) 反推——否则任何依赖它判断
+  // 「是不是 dev 节点」的上层功能（如矩阵归属标注）都会对这个场景永久失效。
+  it('marks dev-only project node beads as isDev even though devEnvironments is empty', () => {
+    const matrix = buildServiceMatrix(devOnlyProject(), [
+      inst({
+        service_id: 'svc-server',
+        service_name: 'server',
+        env_name: 'dev',
+        node_id: 'local',
+        node_name: 'MacBook-Pro.local',
+      }),
+    ])
+
+    expect(matrix.devEnvironments).toEqual([])
+    expect(matrix.rows[0].nodeHealths).toHaveLength(1)
+    expect(matrix.rows[0].nodeHealths[0].isDev).toBe(true)
+  })
+
+  it('marks primary (non-dev) node beads as isDev: false in a mixed-environment project', () => {
+    const matrix = buildServiceMatrix(project(), [
+      inst({ service_id: 'svc-server', service_name: 'server', env_name: 'prod', node_id: 'n1', node_name: 'node-01' }),
+    ])
+
+    expect(matrix.rows[0].nodeHealths).toHaveLength(1)
+    expect(matrix.rows[0].nodeHealths[0].isDev).toBe(false)
   })
 
   it('labels attached debugger instances without changing runtime health', () => {

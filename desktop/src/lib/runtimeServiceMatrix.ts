@@ -5,6 +5,8 @@
  *   - 将运行态实例按服务和环境聚合为项目概览矩阵
  *   - 默认把开发环境移出主矩阵，避免本机开发状态污染项目态势
  *   - 计算 KPI、环境健康计数、节点健康点和服务级资源摘要
+ *   - 给每个节点健康点显式标注是否属于 dev 环境（NodeHealthBead.isDev），供
+ *     ServiceMatrixTable 判断要不要叠加项目归属标注（Task 12）
  *
  * 边界：
  *   - 不读取 Pinia store
@@ -32,6 +34,20 @@ export interface NodeHealthBead {
   nodeName: string
   envName: string
   health: Health
+  /**
+   * isDev 标记该节点所属环境是否为 dev 环境（project.environments 里的 is_dev）。
+   *
+   * 注意：
+   *   - 必须在 buildServiceMatrix() 构造时按原始 env.isDev 显式写入，不能靠
+   *     调用方拿 envName 去 matrix.devEnvironments.includes(envName) 反推——
+   *     devEnvironments 是「被隔离出主矩阵的 dev 环境名单」，只在项目同时存在
+   *     非 dev 环境时才非空；只有 dev 环境的项目会回退把 dev 环境本身当作主
+   *     矩阵列，这种回退分支下 devEnvironments 恒为空数组，即便这里的节点
+   *     确确实实来自 dev 环境。用 devEnvironments 反推会让「dev-only 项目」
+   *     这个 nodeHealths 里唯一会出现 dev 节点的场景永远判不出来（Task 12
+   *     矩阵归属标注曾经踩过这个坑：标注对任何真实数据都不生效）。
+   */
+  isDev: boolean
 }
 
 export interface ServiceMatrixRow {
@@ -132,7 +148,11 @@ function envCell(envName: string, instances: RuntimeInstanceStatus[]): EnvMatrix
   }
 }
 
-function nodeHealths(instances: RuntimeInstanceStatus[]): NodeHealthBead[] {
+// nodeHealths 把实例列表投影为节点点位。envIsDev 是 envName -> is_dev 的原始
+// 查找表（在 orderedEnvironments() 解析出的环境元数据上直接建立），isDev 必须
+// 从这里写入，而不是事后用 devEnvironments 数组反推——理由见 NodeHealthBead.isDev
+// 的类型注释。
+function nodeHealths(instances: RuntimeInstanceStatus[], envIsDev: Map<string, boolean>): NodeHealthBead[] {
   return [...instances]
     .sort((a, b) => {
       const byHealth = HEALTH_PRIORITY[b.metrics.health] - HEALTH_PRIORITY[a.metrics.health]
@@ -144,6 +164,7 @@ function nodeHealths(instances: RuntimeInstanceStatus[]): NodeHealthBead[] {
       nodeName: instance.node_name,
       envName: instance.env_name,
       health: instance.metrics.health,
+      isDev: envIsDev.get(instance.env_name) ?? false,
     }))
 }
 
@@ -167,6 +188,10 @@ function valuesFor(
 //   - 只有 dev 环境的项目回退用 dev 作为主矩阵，避免空白
 export function buildServiceMatrix(project: Project, instances: RuntimeInstanceStatus[]): ServiceMatrix {
   const envs = orderedEnvironments(project)
+  // envIsDev 保留每个环境名到 is_dev 的原始映射，供 nodeHealths() 直接写入
+  // NodeHealthBead.isDev——devEnvironments（下面几行）是派生出来的「主矩阵之外
+  // 的 dev 环境名单」，语义不同，不能拿来反推单个节点是否属于 dev 环境。
+  const envIsDev = new Map(envs.map(env => [env.name, env.isDev]))
   const nonDevEnvs = envs.filter(env => !env.isDev).map(env => env.name)
   const primaryEnvironments = nonDevEnvs.length > 0 ? nonDevEnvs : envs.map(env => env.name)
   const devEnvironments = nonDevEnvs.length > 0 ? envs.filter(env => env.isDev).map(env => env.name) : []
@@ -194,7 +219,7 @@ export function buildServiceMatrix(project: Project, instances: RuntimeInstanceS
         envs: envCells,
         devEnvs: devCells,
         instances: serviceInstances,
-        nodeHealths: nodeHealths(primaryServiceInstances),
+        nodeHealths: nodeHealths(primaryServiceInstances, envIsDev),
         abnormal,
         total: primaryServiceInstances.length,
         cpuPercent: average(valuesFor(primaryServiceInstances, instance => instance.metrics.cpu_percent)),
