@@ -155,10 +155,18 @@ func (a *App) transferPreflight(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case !remoteProbe.DirExists:
-		ready = append(ready, transferCheckItem{
-			Code:   "checkout_clone",
-			Detail: "目标目录不存在，转移执行时将 git clone 到该路径",
-		})
+		// 只有本机确实有 RemoteURL 可供 clone 时才报 ready=checkout_clone——
+		// 本机非仓库（not_a_git_repo）或没配上游（no_upstream）时 local.RemoteURL
+		// 同样可能为空，此时已有对应的硬 blocker 覆盖根因，若还照样报
+		// "目标可以直接 clone" 会自相矛盾（一边红一边绿，Task 5 也没有
+		// URL 可 clone）。此处刻意不落入 default 追加 remote_url_mismatch：
+		// 目标目录本就不存在，谈不上"地址不一致"，只是"当前不能判定 ready"。
+		if local.RemoteURL != "" {
+			ready = append(ready, transferCheckItem{
+				Code:   "checkout_clone",
+				Detail: "目标目录不存在，转移执行时将 git clone 到该路径",
+			})
+		}
 	case remoteProbe.IsRepo && local.RemoteURL != "" && remoteProbe.RemoteURL == local.RemoteURL:
 		// 要求本机/目标机的 RemoteURL 都非空才判定"同源"：两边都为空时无法证明
 		// 目标目录检出的就是同一个仓库，冒着复用错误代码库的风险不如让人工确认，
@@ -262,10 +270,18 @@ func localGitBlockers(local gitinfo.Snapshot) []transferCheckItem {
 	return blockers
 }
 
-// runningDevBlockers 汇总项目在 dev 环境下仍在运行的 deployment。
+// runningDevBlockers 汇总项目在 dev 环境下仍处于活跃态（运行中或刚启动、
+// 就绪探测尚未走完）的 deployment。
 //
-// 转移执行阶段会自动先停止这些 deployment 再切换归属，预检只负责如实报告
-// 现状供人工确认，不在预检阶段做任何停止操作（纯只读契约）。
+// 用 mgr.IsDeploymentActive 而非字面的 DeploymentStatus==running：
+// StatusStarting 是"进程已经拉起、就绪探测还没过"的中间态，此时进程已经
+// 占用端口/资源，转移执行阶段一样需要先停掉它——若只认 StatusRunning，
+// 一个刚启动尚在探测中的 dev 部署会被预检漏报，用户会在"预检通过"之后
+// 才发现执行阶段替他停了一个他不知道在跑的东西。宁可预检多报一个即将
+// 转正的活跃部署（安全方向），也不要漏报一个真实占用中的进程
+// （IsDeploymentActive 语义见 agent/process/manager.go:IsActive：
+// status 为 starting/running，或 runner 仍在 runners 表里即视为活跃，
+// 与 handler_services.go 用于状态展示归一化的同一个信号来源一致）。
 func runningDevBlockers(project model.Project, mgr *process.Manager, hasMgr bool) []transferCheckItem {
 	if !hasMgr {
 		return nil
@@ -286,7 +302,7 @@ func runningDevBlockers(project model.Project, mgr *process.Manager, hasMgr bool
 			if !devEnvs[dep.EnvName] {
 				continue
 			}
-			if mgr.DeploymentStatus(dep.ID) == model.StatusRunning {
+			if mgr.IsDeploymentActive(dep.ID) {
 				running = append(running, svc.Name+"("+dep.EnvName+")")
 			}
 		}

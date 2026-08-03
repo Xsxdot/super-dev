@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -130,15 +131,17 @@ func TestTransferPreflight_DirtyRepo_BlockersContainUncommitted(t *testing.T) {
 	assert.Contains(t, codes, "uncommitted", "脏仓库应触发 uncommitted blocker，实际 blockers=%v", codes)
 }
 
-// TestTransferPreflight_CleanRepo_ReadyContainsCheckoutClone 验证干净仓库 +
-// 假 Runner 返回目标目录不存在时，ready 包含 checkout_clone 且 TargetDir
-// 使用正确的默认值 "~/workspace/<项目目录名>"。
+// TestTransferPreflight_CleanRepo_ReadyContainsCheckoutClone 验证干净仓库
+// （且配置了 origin，local.RemoteURL 非空——checkout_clone 现在要求这一点，
+// 见 FINDING #1 修复）+ 假 Runner 返回目标目录不存在时，ready 包含
+// checkout_clone 且 TargetDir 使用正确的默认值 "~/workspace/<项目目录名>"。
 func TestTransferPreflight_CleanRepo_ReadyContainsCheckoutClone(t *testing.T) {
 	app := newTestAppForPackage(t)
 	srv := newHTTPServerForPackage(t, app)
 	setTransferRemoteRunner(t, dirAbsentRunner)
 
 	dir := initTransferTestRepo(t)
+	runTransferGit(t, dir, "remote", "add", "origin", "https://example.com/clean-repo.git")
 	project := addTransferTestProject(t, srv, dir)
 
 	_, err := app.remoteStore.AddHost(model.Host{ID: "host-dev-2", Name: "Dev Machine 2", DevMachineMode: true})
@@ -161,4 +164,130 @@ func TestTransferPreflight_CleanRepo_ReadyContainsCheckoutClone(t *testing.T) {
 
 	wantTargetDir := "~/workspace/" + filepath.Base(dir)
 	assert.Equal(t, wantTargetDir, result.TargetDir, "target_dir 留空时应取默认值")
+}
+
+// TestTransferPreflight_NoLocalOrigin_ReadyExcludesCheckoutClone 覆盖审阅
+// FINDING #1：本机仓库没有配置 origin（local.RemoteURL==""）时，即便目标机
+// 目录不存在，也不应该报 ready=checkout_clone——本机根本没有可供 clone 的
+// 源地址，报 ready 会和已经存在的 no_upstream blocker 自相矛盾（一边说
+// "不能转"，一边说"目标已就绪可以直接 clone"）。
+func TestTransferPreflight_NoLocalOrigin_ReadyExcludesCheckoutClone(t *testing.T) {
+	app := newTestAppForPackage(t)
+	srv := newHTTPServerForPackage(t, app)
+	setTransferRemoteRunner(t, dirAbsentRunner)
+
+	// initTransferTestRepo 只 init+commit，不添加 origin，local.RemoteURL 因此为空；
+	// 新仓库也没有配置 upstream 分支，Ahead==-1，天然带出 no_upstream blocker。
+	dir := initTransferTestRepo(t)
+	project := addTransferTestProject(t, srv, dir)
+
+	_, err := app.remoteStore.AddHost(model.Host{ID: "host-dev-no-origin", Name: "Dev Machine", DevMachineMode: true})
+	require.NoError(t, err)
+
+	reqBody := `{"host_id": "host-dev-no-origin"}`
+	resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer/preflight", "application/json", strings.NewReader(reqBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result transferPreflightResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+
+	var readyCodes, blockerCodes []string
+	for _, r := range result.Ready {
+		readyCodes = append(readyCodes, r.Code)
+	}
+	for _, b := range result.Blockers {
+		blockerCodes = append(blockerCodes, b.Code)
+	}
+	assert.NotContains(t, readyCodes, "checkout_clone", "本机无 origin 时不应报 ready=checkout_clone，实际 ready=%v", readyCodes)
+	assert.Contains(t, blockerCodes, "no_upstream", "根因 blocker 应仍然存在，实际 blockers=%v", blockerCodes)
+}
+
+// TestTransferPreflight_StartingDevDeployment_FlaggedAsRunningDev 覆盖审阅
+// FINDING #2（人工决策：running_dev 判定改用 IsDeploymentActive 而非字面
+// StatusRunning，starting 态也算活跃，宁可多报不漏报）。
+//
+// 复现手法与 process/manager_test.go 的 TestStartDeploymentStaysStartingUntilReady
+// 完全一致：就绪探测目标先返回 503 卡住 readiness，deployment 停在 starting
+// 一段可观察的窗口期，在这个窗口期内调用预检，断言 running_dev 命中——
+// 如果没有这次修复（还在用字面 StatusRunning 比较），这里必然断言失败，
+// 是一个会真正失败的负向验证，不是重言式空测试。
+func TestTransferPreflight_StartingDevDeployment_FlaggedAsRunningDev(t *testing.T) {
+	app := newTestAppForPackage(t)
+	httpSrv := newHTTPServerForPackage(t, app)
+	setTransferRemoteRunner(t, dirAbsentRunner)
+
+	dir := initTransferTestRepo(t)
+
+	// readiness 探测目标：在测试主动放行前恒定返回 503，让 deployment 卡在
+	// starting，不进 running，也不因超时转 failed（TimeoutSeconds 留足余量）。
+	ready := make(chan struct{})
+	readinessSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-ready:
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	t.Cleanup(readinessSrv.Close)
+
+	const projectID = "proj-transfer-starting-dev"
+	const depID = "dep-transfer-starting"
+	project := model.Project{
+		ID:       projectID,
+		Name:     "starting-dev-demo",
+		RootPath: dir,
+		Environments: []model.Environment{
+			{ID: "env-dev", Name: "dev", IsDev: true, Order: 0},
+		},
+		Services: []model.Service{{
+			ID:        "svc-web",
+			ProjectID: projectID,
+			Name:      "web",
+			Deployments: []model.Deployment{{
+				ID:          depID,
+				EnvName:     "dev",
+				Location:    model.LocationLocal,
+				ControlMode: model.ControlModeManaged,
+				Command:     "sleep 5",
+				WorkDir:     t.TempDir(),
+				Readiness:   &model.ReadinessProbe{Type: "http", Target: readinessSrv.URL, TimeoutSeconds: 10},
+			}},
+		}},
+	}
+	app.mu.Lock()
+	app.appendProjectLocked(project)
+	app.mu.Unlock()
+
+	mgr := app.getOrCreateManager(projectID)
+	require.NoError(t, mgr.StartDeployment(project.Services[0].Deployments[0]))
+	t.Cleanup(func() {
+		close(ready) // 避免遗留 goroutine 永远卡在 503 轮询上
+		mgr.StopDeployment(depID)
+	})
+
+	// 与 manager_test.go 同款等待窗口：给 readiness 探测一次失败轮询的时间，
+	// 确认此刻确实还在 starting（而不是运气好已经翻成了别的状态）。
+	time.Sleep(700 * time.Millisecond)
+	require.Equal(t, model.StatusStarting, mgr.DeploymentStatus(depID), "本用例要覆盖的就是 starting 这个中间态，必须先确认真的停在这里")
+
+	_, err := app.remoteStore.AddHost(model.Host{ID: "host-dev-starting", Name: "Dev Machine", DevMachineMode: true})
+	require.NoError(t, err)
+
+	reqBody := `{"host_id": "host-dev-starting"}`
+	resp, err := http.Post(httpSrv.URL+"/api/projects/"+projectID+"/transfer/preflight", "application/json", strings.NewReader(reqBody))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result transferPreflightResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+
+	var codes []string
+	for _, b := range result.Blockers {
+		codes = append(codes, b.Code)
+	}
+	assert.Contains(t, codes, "running_dev", "starting 态的 dev deployment 也应触发 running_dev，实际 blockers=%v", codes)
 }
