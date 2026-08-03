@@ -27,6 +27,10 @@ import (
 type ApprovalStore interface {
 	FindOrCreatePending(context.Context, Plan, string, string) (Approval, error)
 	List(context.Context, ApprovalFilter) ([]Approval, error)
+	// ListDecided 查询已裁决（非 pending）的审批请求，供 /ws/operation-approvals
+	// 快照的 decided 段使用：since 为零值表示不限制起始时间，limit<=0 表示不限制条数，
+	// 返回按 UpdatedAt 降序排列。
+	ListDecided(ctx context.Context, since time.Time, limit int) ([]Approval, error)
 	Get(context.Context, string) (Approval, error)
 	Approve(context.Context, string, string, string) (Approval, error)
 	Reject(context.Context, string, string, string) (Approval, error)
@@ -194,6 +198,52 @@ func (s *ApprovalFileStore) List(ctx context.Context, filter ApprovalFilter) ([]
 	})
 	if filter.Limit > 0 && len(out) > filter.Limit {
 		out = out[:filter.Limit]
+	}
+	return out, nil
+}
+
+// ListDecided 查询已裁决（非 pending）的审批请求，供 /ws/operation-approvals
+// 快照的 decided 段使用。
+//
+// 参数：
+//   - ctx: 上下文，当前文件 Store 不阻塞外部 I/O，仅保留接口一致性
+//   - since: 只返回 UpdatedAt 晚于该时间的记录；零值表示不限制起始时间
+//   - limit: 最多返回条数；<=0 表示不限制
+//
+// 返回：
+//   - 按更新时间倒序排列的已裁决审批请求（含 approved/rejected/expired/used）
+//   - 错误信息
+//
+// 注意：
+//   - 与 List 一样在读路径做懒过期（withEffectiveExpiry），但不持久化状态翻转——
+//     这里只是「已决」的读时口径，本身也刻意排除仍处于 pending 的记录
+func (s *ApprovalFileStore) ListDecided(ctx context.Context, since time.Time, limit int) ([]Approval, error) {
+	_ = ctx
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	st, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	out := make([]Approval, 0, len(st.Approvals))
+	for _, approval := range st.Approvals {
+		approval = withEffectiveExpiry(approval, now)
+		if approval.Status == ApprovalPending {
+			continue
+		}
+		if !since.IsZero() && approval.UpdatedAt.Before(since) {
+			continue
+		}
+		out = append(out, approval)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

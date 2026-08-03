@@ -153,6 +153,9 @@ func (a *App) approveOperationApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[SuperDev] approval 裁决 id=%s action=approve by=%s(%s)", approval.ID, decidedByName, principalType)
+	// 广播给所有在线控制面：这条单在其余订阅方眼里应该立刻从 pending 变成灰化的
+	// 「已由 X 处理」（decided 段），不必等它们各自的下一次轮询。
+	a.signalApprovalsPublishers()
 	a.appendOperationAudit(r.Context(), operation.AuditEvent{
 		Kind:       approval.Plan.Kind,
 		Action:     operation.AuditApproved,
@@ -205,6 +208,8 @@ func (a *App) rejectOperationApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[SuperDev] approval 裁决 id=%s action=reject by=%s(%s)", approval.ID, decidedByName, principalType)
+	// 广播给所有在线控制面，语义同 approve 分支。
+	a.signalApprovalsPublishers()
 	a.appendOperationAudit(r.Context(), operation.AuditEvent{
 		Kind:       approval.Plan.Kind,
 		Action:     operation.AuditRejected,
@@ -532,6 +537,11 @@ func (a *App) authorizeOperation(w http.ResponseWriter, r *http.Request, plan op
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return false, nil
 	}
+	// 广播给所有在线控制面：新建的 pending 单（或 FindOrCreatePending 内部顺带
+	// 过期的旧单）必须立刻出现在每个订阅方的快照里，不必等它们各自的下一次轮询——
+	// 这也是「expire 没有独立 signal 点」的落点：过期只在这条读路径内懒发生，
+	// 这一次 signal 已经覆盖了它，不为此另建定时器。
+	a.signalApprovalsPublishers()
 	a.appendOperationAudit(r.Context(), operation.AuditEvent{
 		Kind:       plan.Kind,
 		Action:     operation.AuditApprovalRequired,

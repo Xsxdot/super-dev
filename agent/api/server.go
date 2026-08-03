@@ -185,7 +185,10 @@ type App struct {
 	// nodeStatusPublishers 保存当前 /ws/node-status 连接，供 managed 状态变化即时推送。
 	nodeStatusPublisherMu sync.Mutex
 	nodeStatusPublishers  map[*nodeStatusPublisher]struct{}
-	remoteStore           *remote.Store
+	// approvalsPublishers 保存当前 /ws/operation-approvals 连接，供审批创建/裁决即时推送。
+	approvalsPublisherMu sync.Mutex
+	approvalsPublishers  map[*approvalsPublisher]struct{}
+	remoteStore          *remote.Store
 	// projectHomeStore 持久化「项目 → 归属主机」本地路由标记，供 listProjects
 	// DTO 组装、后续归属路由/转移任务复用。归属是控制面本地设置，不下发节点。
 	projectHomeStore *projecthome.Store
@@ -534,6 +537,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		logCleanupCancel:            logCleanupCancel,
 		logCleanupDone:              logCleanupDone,
 		nodeStatusPublishers:        map[*nodeStatusPublisher]struct{}{},
+		approvalsPublishers:         map[*approvalsPublisher]struct{}{},
 		remoteStore:                 remoteStore,
 		projectHomeStore:            projectHomeStore,
 		hostAssembler:               apiassembler.NewHostAssembler(),
@@ -893,6 +897,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/operation-approvals/{id}/approve", a.approveOperationApproval)
 	mux.HandleFunc("POST /api/operation-approvals/{id}/reject", a.rejectOperationApproval)
 	mux.HandleFunc("GET /api/operation-audit", a.listOperationAudit)
+	mux.HandleFunc("GET /ws/operation-approvals", a.wsOperationApprovals)
 
 	// 服务管理（service 级启停/选择已下线，统一走 deployment 级接口）
 	mux.HandleFunc("GET /api/services", a.listServices)
