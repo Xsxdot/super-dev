@@ -179,6 +179,19 @@ export const useOperationApprovalStore = defineStore('operationApproval', () => 
   //     （与 portMirror store 的 applySnapshot 同一套契约）
   function applySnapshot(snapshot: OperationApprovalsSnapshot) {
     decided.value = snapshot.decided ?? []
+    // 主动灰化在场通知：另一侧控制面已裁决时，本侧还挂着的审批弹窗必须被推流帧
+    // 直接置灰成「已由 X 处理」（OperationApprovalNotice 的 isConflict 路径），
+    // 而不是停留在可操作态、等用户点击撞 409 才知道——「先裁决者生效」的事实
+    // 应该 ≤2s 主动呈现，点击后才发现是被动兜底。
+    // notice.approved 为 true 表示本侧用户自己已批准成功（本地确认态），该单出现
+    // 在 decided 段是自己裁决的回声，不是冲突，不覆盖。
+    const inFlight = notice.value
+    if (inFlight && !inFlight.approved) {
+      const decidedMatch = decided.value.find(item => item.id === inFlight.approval_id)
+      if (decidedMatch) {
+        conflictNotice.value = { id: decidedMatch.id, decidedBy: decidedMatch.decided_by ?? '' }
+      }
+    }
     void applyPendingSnapshot(snapshot.pending ?? [])
   }
 

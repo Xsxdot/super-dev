@@ -529,6 +529,48 @@ describe('operationApproval store', () => {
       expect(store.decided).toEqual([{ id: 'opa_new', status: 'approved', decided_by: '本机' }])
       expect(store.pendingCount).toBe(0)
     })
+
+    // 「先裁决者生效」必须主动呈现：另一侧裁决后，本侧还挂着的通知弹窗要被
+    // 推流帧直接置灰成「已由 X 处理」，不能停在可操作态等用户点击撞 409。
+    it('grays out the in-flight notice when a snapshot shows it was decided elsewhere', async () => {
+      const store = useOperationApprovalStore()
+      store.applySnapshot({ pending: [], decided: [] })
+      await flushMicrotasks()
+      store.applySnapshot({ pending: [pendingApproval('opa_race')], decided: [] })
+      await flushMicrotasks()
+      expect(store.notice?.approval_id).toBe('opa_race')
+
+      store.applySnapshot({
+        pending: [],
+        decided: [{ id: 'opa_race', status: 'approved', decided_by: 'CP-B' } as any],
+      })
+      await flushMicrotasks()
+
+      expect(store.conflictNotice).toEqual({ id: 'opa_race', decidedBy: 'CP-B' })
+      // notice 本体保留：OperationApprovalNotice 的 isConflict 需要
+      // conflictNotice.id === notice.approval_id 才切换到灰化文案。
+      expect(store.notice?.approval_id).toBe('opa_race')
+    })
+
+    // 自己的裁决回声不是冲突：本侧批准成功后 notice 进入 approved 确认态，
+    // 随后帧里该单出现在 decided 段不该把确认态覆盖成「已由本机处理」灰化。
+    it('does not treat the echo of our own approval as a conflict', async () => {
+      const store = useOperationApprovalStore()
+      store.applySnapshot({ pending: [], decided: [] })
+      await flushMicrotasks()
+      store.applySnapshot({ pending: [pendingApproval('opa_mine')], decided: [] })
+      await flushMicrotasks()
+      expect(store.notice).not.toBeNull()
+      store.notice!.approved = true
+
+      store.applySnapshot({
+        pending: [],
+        decided: [{ id: 'opa_mine', status: 'approved', decided_by: '本机' } as any],
+      })
+      await flushMicrotasks()
+
+      expect(store.conflictNotice).toBeNull()
+    })
   })
 
   describe('websocket subscription', () => {
