@@ -837,6 +837,77 @@ fn merge_codex_config(existing: Option<&str>, entry: &McpEntry) -> Result<MergeR
     Ok(MergeResult { content, changed })
 }
 
+/// ConfigStatus 是配置文件里 SuperDev MCP 条目的只读快照。
+///
+/// 边界：
+///   - 只描述「读到了什么」，不判断「这份配置对不对」——对不对取决于调用方期望的
+///     启动规格（本机 / 某台远端机器各不相同），由 [`ConfigStatus::matches_launch`] 回答
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ConfigStatus {
+    /// exists 表示配置文件本身是否存在。
+    pub exists: bool,
+    /// configured 表示配置里是否有 superdev 这一项 MCP server。
+    ///
+    /// 注意：**只表示「有没有这一项」**，不表示「这一项是否指向当前期望的 agent」。
+    /// 远端场景下这两件事会分叉（目标机可能残留一条指向本机 127.0.0.1 的旧条目），
+    /// 想知道后者请用 [`ConfigStatus::matches_launch`]。
+    pub configured: bool,
+    /// command 是条目里的可执行文件路径；键缺失时为空串（沿用改造前语义）。
+    pub command: Option<String>,
+    /// args 是条目里的启动参数；键缺失等价于空列表。
+    pub args: Vec<String>,
+    /// agent_url 是条目里的 SUPERDEV_AGENT_URL；键缺失时为空串（沿用改造前语义）。
+    pub agent_url: Option<String>,
+    /// error 是解析失败的说明。
+    pub error: Option<String>,
+}
+
+impl ConfigStatus {
+    /// missing 构造「配置文件不存在」的快照。
+    fn missing() -> Self {
+        Self::default()
+    }
+
+    /// failed 构造「文件存在但读不出来 / 解析不了」的快照。
+    fn failed(exists: bool, error: String) -> Self {
+        Self {
+            exists,
+            error: Some(error),
+            ..Self::default()
+        }
+    }
+
+    /// absent 构造「文件能解析，但里面没有 superdev 这一项」的快照。
+    fn absent() -> Self {
+        Self {
+            exists: true,
+            ..Self::default()
+        }
+    }
+
+    /// matches_launch 判断已读到的条目是否与期望的启动规格完全一致。
+    ///
+    /// 参数：
+    ///   - launch: 期望的启动规格（本机是打包的 mcp 二进制，远端是目标机 agent）
+    ///
+    /// 返回：
+    ///   - command、args、agent_url 三者全部相同时为 true
+    ///
+    /// 注意：
+    ///   - 三项都要比，缺一不可：只比 command 会放过「URL 指向别的机器」，
+    ///     只比 command+URL 会放过「缺 `mcp` 子命令因而根本不进 MCP 模式」。
+    ///     远端场景下这两种残留配置都是真实存在的（目标机曾作为本地桌面机装过），
+    ///     报成"已安装"会让用户永远不去点安装，那台机器上的智能体永远连不上。
+    pub(crate) fn matches_launch(&self, launch: &McpLaunchSpec) -> bool {
+        if !self.configured {
+            return false;
+        }
+        self.command.as_deref() == Some(launch.command.to_string_lossy().as_ref())
+            && self.args == launch.args
+            && self.agent_url.as_deref() == Some(launch.agent_url.as_str())
+    }
+}
+
 /// read_config_status 只读地解析某个 Agent 配置文件里的 SuperDev MCP 状态。
 ///
 /// 参数：
@@ -845,27 +916,18 @@ fn merge_codex_config(existing: Option<&str>, entry: &McpEntry) -> Result<MergeR
 ///   - path: 配置文件路径
 ///
 /// 返回：
-///   - (配置文件是否存在, 是否已配置 superdev, command, agent_url, 错误说明)
+///   - 配置条目的只读快照；判断「是否符合期望」用 `ConfigStatus::matches_launch`
 ///
 /// 注意：
 ///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
-fn read_config_status(
-    fs_port: &dyn ConnectorFs,
-    kind: AgentKind,
-    path: &Path,
-) -> (bool, bool, Option<String>, Option<String>, Option<String>) {
+fn read_config_status(fs_port: &dyn ConnectorFs, kind: AgentKind, path: &Path) -> ConfigStatus {
     let existing = match fs_port.read_optional(path) {
         Ok(Some(content)) => content,
-        Ok(None) => {
-            return (false, false, None, None, None);
-        }
+        Ok(None) => return ConfigStatus::missing(),
         Err(err) => {
-            return (
+            return ConfigStatus::failed(
                 port_path_exists(fs_port, path),
-                false,
-                None,
-                None,
-                Some(format!("读取配置文件失败: {err}")),
+                format!("读取配置文件失败: {err}"),
             );
         }
     };
@@ -875,19 +937,11 @@ fn read_config_status(
     }
 }
 
-fn read_json_config_status(
-    content: &str,
-) -> (bool, bool, Option<String>, Option<String>, Option<String>) {
+fn read_json_config_status(content: &str) -> ConfigStatus {
     let root = match serde_json::from_str::<serde_json::Value>(content) {
         Ok(value) => value,
         Err(err) => {
-            return (
-                true,
-                false,
-                None,
-                None,
-                Some(format!("配置文件格式异常(JSON): {err}")),
-            );
+            return ConfigStatus::failed(true, format!("配置文件格式异常(JSON): {err}"));
         }
     };
     let Some(server) = root
@@ -895,35 +949,44 @@ fn read_json_config_status(
         .and_then(|servers| servers.get("superdev"))
         .and_then(|server| server.as_object())
     else {
-        return (true, false, None, None, None);
+        return ConfigStatus::absent();
     };
     let command = server
         .get("command")
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
         .or_else(|| Some(String::new()));
+    let args = server
+        .get("args")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
     let agent_url = server
         .get("env")
         .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
         .or_else(|| Some(String::new()));
-    (true, true, command, agent_url, None)
+    ConfigStatus {
+        exists: true,
+        configured: true,
+        command,
+        args,
+        agent_url,
+        error: None,
+    }
 }
 
-fn read_codex_config_status(
-    content: &str,
-) -> (bool, bool, Option<String>, Option<String>, Option<String>) {
+fn read_codex_config_status(content: &str) -> ConfigStatus {
     let root = match toml::from_str::<toml::Value>(content) {
         Ok(value) => value,
         Err(err) => {
-            return (
-                true,
-                false,
-                None,
-                None,
-                Some(format!("配置文件格式异常(TOML): {err}")),
-            );
+            return ConfigStatus::failed(true, format!("配置文件格式异常(TOML): {err}"));
         }
     };
     let Some(server) = root
@@ -931,20 +994,37 @@ fn read_codex_config_status(
         .and_then(|servers| servers.get("superdev"))
         .and_then(|server| server.as_table())
     else {
-        return (true, false, None, None, None);
+        return ConfigStatus::absent();
     };
     let command = server
         .get("command")
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
         .or_else(|| Some(String::new()));
+    let args = server
+        .get("args")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
     let agent_url = server
         .get("env")
         .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
         .and_then(|value| value.as_str())
         .map(|value| value.to_string())
         .or_else(|| Some(String::new()));
-    (true, true, command, agent_url, None)
+    ConfigStatus {
+        exists: true,
+        configured: true,
+        command,
+        args,
+        agent_url,
+        error: None,
+    }
 }
 
 fn remove_json_superdev_config(existing: Option<&str>) -> Result<MergeResult, String> {
@@ -2464,8 +2544,17 @@ pub fn mcp_status_for_kind(
     // 本机状态读取：文件操作统一经 LocalFs 端口；远端状态由 Task 9 传入
     // RemoteAgentFs 复用同一套解析逻辑。
     let fs_port = &LocalFs;
-    let (config_exists, mcp_configured, mcp_command, agent_url, config_error) =
-        read_config_status(fs_port, kind, &config_path);
+    // 本机 McpStatus 的语义不变：`mcp_configured` 仍只表示「有没有 superdev 这一项」，
+    // 而把 `mcp_command`/`agent_url` 一并交给前端，由前端展示「装的是不是这一个」。
+    // 远端面板拿不到这两个字段就只能红绿两态，所以那边改用 `matches_launch` 判定。
+    let config = read_config_status(fs_port, kind, &config_path);
+    let (config_exists, mcp_configured, mcp_command, agent_url, config_error) = (
+        config.exists,
+        config.configured,
+        config.command,
+        config.agent_url,
+        config.error,
+    );
     let (skill_installed, skill_matches_bundled, skill_error) = skill_status_for_target(
         fs_port,
         skill_source,

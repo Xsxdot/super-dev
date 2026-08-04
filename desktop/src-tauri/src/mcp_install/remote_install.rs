@@ -27,9 +27,9 @@ use super::remote_fs::RemoteAgentFs;
 use super::{AgentKind, McpLaunchSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 #[cfg(test)]
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -74,8 +74,21 @@ pub struct RemoteAgentStatus {
     pub display_name: String,
     /// cli_present 表示目标机上是否存在该智能体的 CLI（来自 detect 端点，不是本机扫描）。
     pub cli_present: bool,
-    /// mcp_installed 表示目标机配置里是否已有 superdev 这项 MCP server。
+    /// mcp_installed 表示目标机的 superdev MCP 条目**是否指向这台机器自己的 agent**。
+    ///
+    /// 判据是 command / args / SUPERDEV_AGENT_URL 三者与 detect 返回的启动规格完全一致，
+    /// 而**不是**「有没有 superdev 这一项」。差别在远端是真实会发生的：目标机可能残留
+    /// 一条曾作为本地桌面机装出来的旧条目（`command` 指向 `superdev-mcp`、URL 是
+    /// `http://127.0.0.1:57017`）。只判「有没有」会给出绿灯，用户不会去点安装，
+    /// 那台机器上的智能体永远连不上。
     pub mcp_installed: bool,
+    /// mcp_command 是目标机配置里读到的可执行文件路径（没有该条目时为 None）。
+    ///
+    /// 与 `agent_url` 一起暴露，是为了让前端能区分「没装」和「装了但指向别处」——
+    /// 本机 `McpStatus` 一直有这两个字段，远端面板缺了它们就只剩红绿两态。
+    pub mcp_command: Option<String>,
+    /// agent_url 是目标机配置里读到的 SUPERDEV_AGENT_URL（没有该条目时为 None）。
+    pub agent_url: Option<String>,
     /// skill_installed 表示目标机上 superdev skill 目录是否已存在。
     pub skill_installed: bool,
     /// hook_installed 表示目标机配置里是否已有 SuperDev 的 SessionStart hook。
@@ -201,8 +214,18 @@ impl RemoteIntegrationDetector for AgentProxyDetector {
 ///   - 判据是「这家连接器的读写是否全程经 `ConnectorFs` 端口」。当前只有
 ///     claude-code / codex / cursor 满足；其余五家的结构性阻碍见
 ///     [`RemoteAgentStatus::remote_supported`] 的文档
+///   - 这里刻意**逐个列出** ID，而不是写 `AgentKind::parse(id).ok()`：后者是拿
+///     「有没有内置方言」代理「安装是否全程经端口」，两者今天恰好重合，但将来若
+///     新增一个 `AgentKind` 变体而它的安装路径没有全程端口化，代理判据会**静默**
+///     把它算进远端支持集合。列举式判据下，新增变体默认落到 `_ => None`，要支持
+///     远端必须有人显式加一行——同时会被下面那条正面断言逼着更新
 fn remote_supported_kind(connector_id: &str) -> Option<AgentKind> {
-    AgentKind::parse(connector_id).ok()
+    match connector_id {
+        "claude-code" => Some(AgentKind::ClaudeCode),
+        "codex" => Some(AgentKind::Codex),
+        "cursor" => Some(AgentKind::Cursor),
+        _ => None,
+    }
 }
 
 /// detect_command_union 汇总全部连接器要探测的 CLI 命令名。
@@ -252,6 +275,58 @@ fn is_valid_detect_command(command: &str) -> bool {
         return false;
     }
     chars.all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '-')
+}
+
+/// validate_detect_response 校验 detect 响应里编排真正依赖的三个字段非空。
+///
+/// 参数：
+///   - host_id: 目标机器 ID，仅用于错误文案
+///   - detect: detect 端点响应
+///
+/// 返回：
+///   - 校验通过返回 Ok(())
+///
+/// 注意：
+///   - Go 侧不会返回空值（解析不出 HOME/agent 路径时直接 500），但空串能被 serde
+///     无声接受，然后一路写成 `"command": ""` 落到目标机配置里——那份配置永远启动
+///     不了，且错误发生的位置离根因很远。宁可在这里就明确失败
+fn validate_detect_response(host_id: &str, detect: &RemoteDetectResponse) -> Result<(), String> {
+    for (field, value) in [
+        ("home", detect.home.as_str()),
+        ("agent.command", detect.agent.command.as_str()),
+        ("agent.url", detect.agent.url.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(format!(
+                "远端机器 {host_id} 的 detect 响应缺少 {field}，无法构造远端安装上下文"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// detect_once 完成一次「算合集 → 调 detect → 校验响应」的完整前置。
+///
+/// 参数：
+///   - detector: detect 端点客户端
+///   - connectors: 按注册顺序排列的连接器列表
+///   - host_id: 目标机器 ID，仅用于错误文案
+///
+/// 返回：
+///   - 已校验非空的 detect 响应
+///
+/// 注意：
+///   - 三个对外入口（detect / install / uninstall）都经这一条路径，保证「一次调用、
+///     带去重合集、响应必校验」这三件事不会在某个入口上被漏掉
+fn detect_once(
+    detector: &dyn RemoteIntegrationDetector,
+    connectors: &[Arc<dyn AgentConnector>],
+    host_id: &str,
+) -> Result<RemoteDetectResponse, String> {
+    let commands = detect_command_union(connectors)?;
+    let detected = detector.detect(&commands)?;
+    validate_detect_response(host_id, &detected)?;
+    Ok(detected)
 }
 
 /// build_remote_context 用 detect 结果构造远端连接器运行上下文。
@@ -319,6 +394,8 @@ pub fn remote_status_for(
         display_name: descriptor.display_name().to_string(),
         cli_present,
         mcp_installed: false,
+        mcp_command: None,
+        agent_url: None,
         skill_installed: false,
         hook_installed: false,
         remote_supported: kind.is_some(),
@@ -330,9 +407,8 @@ pub fn remote_status_for(
         return base;
     }
     let home = ctx.home_dir();
-    let (_, mcp_installed, _, _, config_error) =
-        super::read_config_status(fs_port, kind, &kind.config_path(home));
-    if let Some(error) = config_error.as_ref() {
+    let config = super::read_config_status(fs_port, kind, &kind.config_path(home));
+    if let Some(error) = config.error.as_ref() {
         // 配置读不出来（格式坏了 / 远端拒绝）时不把它伪装成"未安装"——记一条 warn，
         // 让排障能在桌面端日志里找到线索；返回值仍是 false，但用户看到的是
         // 「远端读取失败」而不是「配置没了」这类误导，因为 install 会立刻复报同一错误。
@@ -340,6 +416,17 @@ pub fn remote_status_for(
             connector_id = descriptor.id(),
             error = %error,
             "remote connector config status unavailable"
+        );
+    }
+    // 判「是否指向这台机器自己的 agent」，不是判「有没有 superdev 这一项」——
+    // 理由见 RemoteAgentStatus::mcp_installed 的文档。
+    let mcp_installed = config.matches_launch(ctx.mcp_launch());
+    if config.configured && !mcp_installed {
+        // 有条目但不匹配是最需要留痕的一类：面板会显示红灯，用户却可能觉得"明明装过"。
+        // 只记结论不记路径与 URL 值，避免把用户环境写进日志。
+        tracing::info!(
+            connector_id = descriptor.id(),
+            "remote connector has a superdev entry that points elsewhere"
         );
     }
     let (skill_installed, _, _) = super::skill_status_for_target(
@@ -352,6 +439,8 @@ pub fn remote_status_for(
         super::session_hook_status_with_fs(fs_port, kind, &kind.session_hook_path(home));
     RemoteAgentStatus {
         mcp_installed,
+        mcp_command: config.command,
+        agent_url: config.agent_url,
         skill_installed,
         hook_installed,
         ..base
@@ -375,11 +464,11 @@ pub fn detect_remote_agents(
     detector: &dyn RemoteIntegrationDetector,
     fs_port: &dyn ConnectorFs,
     connectors: &[Arc<dyn AgentConnector>],
+    host_id: &str,
     skill_source: Option<PathBuf>,
     skill_source_error: Option<String>,
 ) -> Result<Vec<RemoteAgentStatus>, String> {
-    let commands = detect_command_union(connectors)?;
-    let detected = detector.detect(&commands)?;
+    let detected = detect_once(detector, connectors, host_id)?;
     let ctx = build_remote_context(&detected, skill_source, skill_source_error);
     Ok(connectors
         .iter()
@@ -432,8 +521,7 @@ pub fn install_remote_connector(
     skill_source_error: Option<String>,
 ) -> Result<ConnectorOperationOutcome, String> {
     let kind = require_remote_kind(connectors, host_id, connector_id)?;
-    let commands = detect_command_union(connectors)?;
-    let detected = detector.detect(&commands)?;
+    let detected = detect_once(detector, connectors, host_id)?;
     let ctx = build_remote_context(&detected, skill_source, skill_source_error);
     let outcome = super::install_mcp_for_paths_with_fs(
         fs_port,
@@ -462,8 +550,7 @@ pub fn uninstall_remote_connector(
     skill_source_error: Option<String>,
 ) -> Result<ConnectorOperationOutcome, String> {
     let kind = require_remote_kind(connectors, host_id, connector_id)?;
-    let commands = detect_command_union(connectors)?;
-    let detected = detector.detect(&commands)?;
+    let detected = detect_once(detector, connectors, host_id)?;
     let ctx = build_remote_context(&detected, skill_source, skill_source_error);
     let outcome = super::uninstall_mcp_for_paths_with_fs(fs_port, kind.label(), ctx.home_dir())
         .map_err(|error| format!("远端机器 {host_id} 卸载 {connector_id} 失败: {error}"))?;
@@ -854,6 +941,202 @@ mod tests {
         assert!(fs_port.calls() >= 3, "三项状态各自至少读一次目标机");
     }
 
+    /// claude_code_connector 取生产工厂里的 claude-code，避免测试里另造一个假连接器。
+    fn claude_code_connector() -> Arc<dyn AgentConnector> {
+        connectors::builtin()
+            .into_iter()
+            .find(|connector| connector.descriptor().id() == "claude-code")
+            .expect("claude-code connector")
+    }
+
+    #[test]
+    fn a_stale_superdev_entry_pointing_at_another_agent_is_not_reported_as_installed() {
+        // 目标机曾作为本地桌面机装过：command 指向 superdev-mcp、URL 是本机默认端口。
+        // 而 detect 返回的是 /opt/superdev/superdev-agent + ["mcp"] + 该机实际端口。
+        let fs_port = RecordingFs::new().with_file(
+            "/home/remote/.claude.json",
+            r#"{"mcpServers":{"superdev":{"command":"/Applications/SuperDev.app/Contents/MacOS/superdev-mcp","env":{"SUPERDEV_AGENT_URL":"http://127.0.0.1:57017"}}}}"#,
+        );
+        let ctx = build_remote_context(&detect_fixture(), None, None);
+
+        let status = remote_status_for(claude_code_connector().as_ref(), &ctx, &fs_port, true);
+
+        assert!(
+            !status.mcp_installed,
+            "残留的旧 superdev 条目指向别的 agent，报成「已安装」会让用户永远不去点安装，\
+             那台机器上的 claude-code 永远连不上"
+        );
+        assert_eq!(
+            status.mcp_command.as_deref(),
+            Some("/Applications/SuperDev.app/Contents/MacOS/superdev-mcp"),
+            "读到的 command 要如实回给前端，前端才能显示「装了但指向别处」"
+        );
+        assert_eq!(status.agent_url.as_deref(), Some("http://127.0.0.1:57017"));
+    }
+
+    #[test]
+    fn a_superdev_entry_missing_the_mcp_subcommand_is_not_reported_as_installed() {
+        // command 与 URL 都对，唯独缺 args：目标机上的 superdev-agent 不会进入 MCP
+        // 模式。只比 command+URL 的判据会放过这一种。
+        let fs_port = RecordingFs::new().with_file(
+            "/home/remote/.claude.json",
+            r#"{"mcpServers":{"superdev":{"command":"/opt/superdev/superdev-agent","env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}}}"#,
+        );
+        let ctx = build_remote_context(&detect_fixture(), None, None);
+
+        let status = remote_status_for(claude_code_connector().as_ref(), &ctx, &fs_port, true);
+
+        assert!(
+            !status.mcp_installed,
+            "缺 args 的条目启动不了 MCP，不能报成已安装"
+        );
+    }
+
+    #[test]
+    fn a_codex_entry_pointing_elsewhere_is_not_reported_as_installed() {
+        // TOML 方言走的是另一条解析分支，同一条性质要单独钉一次。
+        let fs_port = RecordingFs::new().with_file(
+            "/home/remote/.codex/config.toml",
+            "[mcp_servers.superdev]\ncommand = \"/usr/local/bin/superdev-mcp\"\n\
+             [mcp_servers.superdev.env]\nSUPERDEV_AGENT_URL = \"http://127.0.0.1:57017\"\n",
+        );
+        let ctx = build_remote_context(&detect_fixture(), None, None);
+        let codex = connectors::builtin()
+            .into_iter()
+            .find(|connector| connector.descriptor().id() == "codex")
+            .expect("codex connector");
+
+        let status = remote_status_for(codex.as_ref(), &ctx, &fs_port, true);
+
+        assert!(!status.mcp_installed);
+        assert_eq!(
+            status.mcp_command.as_deref(),
+            Some("/usr/local/bin/superdev-mcp")
+        );
+    }
+
+    #[test]
+    fn remote_support_is_pinned_to_the_three_fully_ported_connectors() {
+        // 正面钉死支持集合：`remote_supported_kind` 用的是列举式判据，将来若有人
+        // 新增一个 AgentKind 变体而其安装未全程端口化，这条断言会先失败，
+        // 而不是让那家 connector 静默进入远端支持集合。
+        let supported: Vec<String> = connectors::builtin()
+            .iter()
+            .filter(|connector| remote_supported_kind(connector.descriptor().id()).is_some())
+            .map(|connector| connector.descriptor().id().to_string())
+            .collect();
+
+        assert_eq!(
+            supported,
+            vec![
+                "claude-code".to_string(),
+                "codex".to_string(),
+                "cursor".to_string()
+            ],
+            "远端支持集合只能是「安装/卸载/状态读取全程经 ConnectorFs 端口」的那三家"
+        );
+        assert!(remote_supported_kind("not-a-connector").is_none());
+    }
+
+    #[test]
+    fn detect_response_with_blank_required_fields_is_rejected_before_anything_is_written() {
+        let blank_home = RemoteDetectResponse {
+            home: "  ".to_string(),
+            ..detect_fixture()
+        };
+        let blank_command = RemoteDetectResponse {
+            agent: RemoteAgentLaunch {
+                command: String::new(),
+                ..detect_fixture().agent
+            },
+            ..detect_fixture()
+        };
+        let blank_url = RemoteDetectResponse {
+            agent: RemoteAgentLaunch {
+                url: String::new(),
+                ..detect_fixture().agent
+            },
+            ..detect_fixture()
+        };
+
+        for (label, response) in [
+            ("home", blank_home),
+            ("agent.command", blank_command),
+            ("agent.url", blank_url),
+        ] {
+            let error = validate_detect_response("host-42", &response)
+                .expect_err("空字段必须被拒绝，否则会写出一份永远启动不了的配置");
+            assert!(
+                error.contains("host-42") && error.contains(label),
+                "{error}"
+            );
+        }
+        assert!(validate_detect_response("host-42", &detect_fixture()).is_ok());
+    }
+
+    /// BlankFieldDetector 回一份 `agent.command` 为空串的响应（Go 侧不会这样回，
+    /// 但 serde 会无声接受，所以编排必须自己挡住）。
+    struct BlankFieldDetector;
+
+    impl RemoteIntegrationDetector for BlankFieldDetector {
+        fn detect(&self, commands: &[String]) -> Result<RemoteDetectResponse, String> {
+            Ok(RemoteDetectResponse {
+                commands: commands.iter().map(|name| (name.clone(), true)).collect(),
+                agent: RemoteAgentLaunch {
+                    command: String::new(),
+                    ..detect_fixture().agent
+                },
+                ..detect_fixture()
+            })
+        }
+    }
+
+    #[test]
+    fn every_entry_point_rejects_a_blank_detect_response_before_writing_anything() {
+        // 单测 validate_detect_response 只证明「校验函数本身对」，证明不了「三个入口
+        // 真的调了它」。这条测试驱动全部三个对外入口，把接线本身钉住。
+        let fs_port = RecordingFs::new();
+        let connectors = connectors::builtin();
+
+        let detect_error = detect_remote_agents(
+            &BlankFieldDetector,
+            &fs_port,
+            &connectors,
+            "host-42",
+            None,
+            None,
+        )
+        .expect_err("detect 入口必须挡住空字段");
+        let install_error = install_remote_connector(
+            &BlankFieldDetector,
+            &fs_port,
+            &connectors,
+            "host-42",
+            "claude-code",
+            None,
+            None,
+        )
+        .expect_err("install 入口必须挡住空字段");
+        let uninstall_error = uninstall_remote_connector(
+            &BlankFieldDetector,
+            &fs_port,
+            &connectors,
+            "host-42",
+            "claude-code",
+            None,
+            None,
+        )
+        .expect_err("uninstall 入口必须挡住空字段");
+
+        for error in [&detect_error, &install_error, &uninstall_error] {
+            assert!(
+                error.contains("host-42") && error.contains("agent.command"),
+                "{error}"
+            );
+        }
+        assert_eq!(fs_port.calls(), 0, "校验失败时不得对目标机产生任何副作用");
+    }
+
     #[test]
     fn detect_is_called_once_with_the_deduplicated_union_of_all_connector_commands() {
         let fs_port = RecordingFs::new();
@@ -861,7 +1144,8 @@ mod tests {
         let connectors = connectors::builtin();
 
         let statuses =
-            detect_remote_agents(&detector, &fs_port, &connectors, None, None).expect("detect");
+            detect_remote_agents(&detector, &fs_port, &connectors, "host-42", None, None)
+                .expect("detect");
 
         assert_eq!(detector.call_count(), 1, "detect 只能调用一次");
         let requested = detector.last_request();

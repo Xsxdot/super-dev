@@ -254,6 +254,7 @@ fn detect_remote_coding_agents(
             &detector,
             &fs_port,
             &mcp_install::remote_install::remote_connectors(),
+            &host_id,
             skill_source,
             skill_source_error,
         )
@@ -973,11 +974,16 @@ mod tests {
                 "远端接入命令必须注册进 invoke handler: {command}"
             );
         }
+        // 三个远端命令都必须经统一的日志包装，且各自带稳定的操作名。
+        // 断言「包装调用次数 == 3」而不是「源码里出现过这个字符串」：后者三次迭代
+        // 结果相同，等于只断言了一次。
+        assert_eq!(
+            MAIN_RS.matches("run_remote_connector_command(").count(),
+            // 1 处定义 + 3 处调用 + 2 处测试内调用（本测试与结果透传测试各一）
+            6,
+            "三个远端命令都必须走统一的日志包装"
+        );
         for operation in ["\"remote_detect\"", "\"remote_install\"", "\"remote_uninstall\""] {
-            assert!(
-                MAIN_RS.contains(&format!("run_remote_connector_command(")),
-                "三个远端命令都必须走统一的日志包装"
-            );
             assert!(
                 MAIN_RS.contains(operation),
                 "远端命令必须带稳定的操作名: {operation}"
@@ -985,16 +991,29 @@ mod tests {
         }
         // host_id 必须进日志：远端失败时用户手上通常同时开着多台机器，
         // 不带 host_id 的日志无法定位是哪台机器出的问题。
-        for level in ["tracing::info!(", "tracing::error!("] {
-            let anchor = MAIN_RS
-                .find("fn run_remote_connector_command")
-                .expect("main.rs should define the remote logging wrapper");
-            let body = &MAIN_RS[anchor..];
-            let position = body.find(level).expect("wrapper should log at this level");
-            let window = &body[position..position + 260];
+        //
+        // 检查窗口必须**限制在包装函数体内**：早先的写法用固定偏移切片，越界会 panic；
+        // 改成「找下一个 `);`」之后更糟——`as_millis() as u64` 里没有 `);`，窗口一路
+        // 滑到函数外面，随便撞上别处的 host_id 就通过了，成了空转断言。
+        // 这里先把函数体切出来，再按 tracing:: 分段逐条检查。
+        let anchor = MAIN_RS
+            .find("fn run_remote_connector_command")
+            .expect("main.rs should define the remote logging wrapper");
+        let rest = &MAIN_RS[anchor..];
+        let wrapper = &rest[..rest
+            .find("\n#[tauri::command]")
+            .expect("wrapper should be followed by a Tauri command")];
+        let sites: Vec<&str> = wrapper.split("tracing::").skip(1).collect();
+        assert_eq!(
+            sites.len(),
+            3,
+            "远端日志包装必须有 started/finished/failed 三条，实际 {}",
+            sites.len()
+        );
+        for site in sites {
             assert!(
-                window.contains("host_id"),
-                "{level} 必须带 host_id 字段: {window}"
+                site.contains("host_id"),
+                "每条远端日志都必须带 host_id 字段: tracing::{site}"
             );
         }
     }
