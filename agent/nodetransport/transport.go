@@ -62,8 +62,13 @@ type NodeStatus struct {
 	Managed     *model.ManagedDeploymentStatus `json:"managed,omitempty"`
 	System      *remoteobservation.SystemFacts `json:"system,omitempty"`
 	Route       *RouteStatus                   `json:"route,omitempty"`
-	UpdatedAt   time.Time                      `json:"updated_at"`
-	Error       string                         `json:"error,omitempty"`
+	// DesktopOnline 表示该 agent 本机是否有活跃 /ws/nodes 订阅——即该机器上是否也
+	// 开着桌面端在场。用 /ws/nodes 订阅数当信号，是因为桌面主界面常驻这条订阅，
+	// 它自带 5s 心跳帧（见 api.nodeStatusReportInterval），因此免费获得 ≤5s 时效，
+	// 不需要额外的心跳/探活机制。
+	DesktopOnline bool      `json:"desktop_online"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	Error         string    `json:"error,omitempty"`
 }
 
 // NodeTarget 是一次节点通信所需的完整目标信息。
@@ -94,28 +99,30 @@ func (s NodeStatus) MarshalJSON() ([]byte, error) {
 		deployments = []model.InstanceStatus{}
 	}
 	type nodeStatusJSON struct {
-		HostID      string                         `json:"host_id"`
-		Name        string                         `json:"name,omitempty"`
-		Reachable   bool                           `json:"reachable"`
-		Agent       model.AgentRuntime             `json:"agent"`
-		Deployments []model.InstanceStatus         `json:"deployments"`
-		Managed     *model.ManagedDeploymentStatus `json:"managed,omitempty"`
-		System      *remoteobservation.SystemFacts `json:"system,omitempty"`
-		Route       *RouteStatus                   `json:"route,omitempty"`
-		UpdatedAt   time.Time                      `json:"updated_at"`
-		Error       string                         `json:"error,omitempty"`
+		HostID        string                         `json:"host_id"`
+		Name          string                         `json:"name,omitempty"`
+		Reachable     bool                           `json:"reachable"`
+		Agent         model.AgentRuntime             `json:"agent"`
+		Deployments   []model.InstanceStatus         `json:"deployments"`
+		Managed       *model.ManagedDeploymentStatus `json:"managed,omitempty"`
+		System        *remoteobservation.SystemFacts `json:"system,omitempty"`
+		Route         *RouteStatus                   `json:"route,omitempty"`
+		DesktopOnline bool                           `json:"desktop_online"`
+		UpdatedAt     time.Time                      `json:"updated_at"`
+		Error         string                         `json:"error,omitempty"`
 	}
 	return json.Marshal(nodeStatusJSON{
-		HostID:      s.HostID,
-		Name:        s.Name,
-		Reachable:   s.Reachable,
-		Agent:       s.Agent,
-		Deployments: deployments,
-		Managed:     s.Managed,
-		System:      s.System,
-		Route:       s.Route,
-		UpdatedAt:   s.UpdatedAt,
-		Error:       s.Error,
+		HostID:        s.HostID,
+		Name:          s.Name,
+		Reachable:     s.Reachable,
+		Agent:         s.Agent,
+		Deployments:   deployments,
+		Managed:       s.Managed,
+		System:        s.System,
+		Route:         s.Route,
+		DesktopOnline: s.DesktopOnline,
+		UpdatedAt:     s.UpdatedAt,
+		Error:         s.Error,
 	})
 }
 

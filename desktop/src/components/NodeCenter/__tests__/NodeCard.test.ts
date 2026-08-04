@@ -73,6 +73,7 @@ function card(overrides: Partial<NodeCenterNode> = {}): NodeCenterNode {
     configured: true,
     mirrors: [],
     devMachine: false,
+    desktopOnline: false,
     ...overrides,
   }
 }
@@ -341,6 +342,34 @@ describe('NodeCard', () => {
 
       expect(wrapper.find('[data-test="node-mirror-row-9300"]').text()).toContain('建立中')
       expect(wrapper.find('[data-test="node-mirror-row-9400"]').text()).toContain('镜像失败')
+    })
+  })
+
+  // 桌面端在线徽标（Task 10）：本组件不判定/不持有 host 是否为本机——「仅远程节点
+  // 显示」完全由上游 buildNodeCenterNodes()（desktop/src/lib/nodeCenter.ts）的
+  // remote-only 过滤保证（is_self host 与 host_id === 'local' 的快照恒不产出节点卡，
+  // 见 nodeCenter.test.ts「本机 (is_self) host 不会产出节点卡」用例），本组件只需
+  // 无条件服从 props.node.desktopOnline，不重复判定，同端口镜像区的既有约定。
+  describe('桌面端在线徽标（Task 10）', () => {
+    it('desktopOnline 为 true 时渲染徽标，复用原型样式类 node-route-badge desktop-online', () => {
+      const wrapper = mount(NodeCard, {
+        props: { node: card({ desktopOnline: true }) },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      const badge = wrapper.find('[data-test="node-desktop-online-badge"]')
+      expect(badge.exists()).toBe(true)
+      expect(badge.classes()).toEqual(expect.arrayContaining(['node-route-badge', 'desktop-online']))
+      expect(badge.text()).toBe('桌面端在线')
+    })
+
+    it('desktopOnline 为 false 时不渲染徽标', () => {
+      const wrapper = mount(NodeCard, {
+        props: { node: card({ desktopOnline: false }) },
+        global: { plugins: [installTestI18n('zh-CN')] },
+      })
+
+      expect(wrapper.find('[data-test="node-desktop-online-badge"]').exists()).toBe(false)
     })
   })
 })

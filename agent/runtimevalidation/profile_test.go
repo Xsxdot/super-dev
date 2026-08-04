@@ -101,6 +101,25 @@ func TestFoundationAllowsLocalTokenAuthInOpenState(t *testing.T) {
 	require.Equal(t, StatusPass, result.Status)
 }
 
+// 多凭据改造后现役控制面凭据落在 token_records 里、token_hash 在 load 时被清空。
+// 一份 provision_state=open 却带着 token_records 的 security.json 是「被篡改或
+// 历史遗留」的典型形态，fail-closed 校验器必须显式挡住，而不是只查已退役的
+// token_hash 就放行。
+func TestFoundationRejectsPopulatedTokenRecordsInOpenState(t *testing.T) {
+	t.Parallel()
+
+	foundation := createValidFoundation(t)
+	writeJSONFile(t, filepath.Join(foundation, "security.json"), FoundationSecurityState{
+		RequireAuth: true, ProvisionState: "open", TLSMode: "off",
+		TokenRecords: []FoundationTokenRecordProjection{{ID: "cp-a", Name: "CP-A"}},
+	})
+
+	result, err := ValidateFoundation(foundation, "profile-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Equal(t, "foundation_security_incompatible", result.Cause.Code)
+}
+
 func createValidFoundation(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

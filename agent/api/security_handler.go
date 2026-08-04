@@ -94,6 +94,9 @@ func (a *App) provisionSecurity(w http.ResponseWriter, r *http.Request) {
 func (a *App) withSecurity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.securityStore == nil || securityBypassPath(r.URL.Path) {
+			// bypass 白名单路径不校验凭据，也就无从推导「谁在请求」——不注入
+			// Principal，让下游经 security.PrincipalFrom 读到的是「无主体」，
+			// 而不是伪造一个身份掩盖「这条路径本来就没做鉴权」的事实。
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -101,7 +104,21 @@ func (a *App) withSecurity(next http.Handler) http.Handler {
 		if token == "" && strings.HasPrefix(r.URL.Path, "/ws/") {
 			token = strings.TrimSpace(r.URL.Query().Get("access_token"))
 		}
-		if a.securityStore.VerifyToken(token) || a.securityStore.VerifyLocalToken(token) {
+		if a.securityStore.VerifyLocalToken(token) {
+			r = r.WithContext(security.WithPrincipal(r.Context(), security.Principal{
+				Type: security.PrincipalLocal,
+				ID:   "local",
+				Name: "本机",
+			}))
+			next.ServeHTTP(w, r)
+			return
+		}
+		if rec, ok := a.securityStore.VerifyTokenPrincipal(token); ok {
+			r = r.WithContext(security.WithPrincipal(r.Context(), security.Principal{
+				Type: security.PrincipalRemote,
+				ID:   rec.ID,
+				Name: rec.Name,
+			}))
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -109,9 +126,19 @@ func (a *App) withSecurity(next http.Handler) http.Handler {
 	})
 }
 
+// securityBypassPath 判定路径是否豁免 Bearer 校验。
+//
+// 新增的两条纳管路径（Task 7）与 /api/security/provision 同理：接入方此刻
+// 手上没有任何凭据（既没有 bootstrap token，也没有长期 token），若不 bypass
+// 就无法发起接入请求，也无法轮询审批结果——真正的门不在这两个端点本身，而在
+// FindOrCreatePending 落的那条审批单：只有既有控制面点击批准，adoption token
+// 才会生成，Exchange 才可能兑换出长期凭据。exchange 端点同样 bypass：它的
+// 准入凭证就是一次性 adoption token 本身（POST body 校验），不是 Bearer 头。
 func securityBypassPath(path string) bool {
 	return path == "/api/security/health" ||
 		path == "/api/security/provision" ||
+		path == "/api/security/adoption-requests" ||
+		strings.HasPrefix(path, "/api/security/adoption-requests/") ||
 		path == "/api/agents/install.sh" ||
 		path == "/api/agents/install-binary"
 }

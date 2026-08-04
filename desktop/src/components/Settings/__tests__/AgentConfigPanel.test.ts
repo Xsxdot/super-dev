@@ -16,7 +16,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentConfigPanel from '../AgentConfigPanel.vue'
 import { useAgentsStore } from '@/stores/agents'
 import { installTestI18n } from '@/test-utils/i18n'
+import { AgentAPIError } from '@/api/agent'
 import type { AgentDTO, Host, NodeStatus } from '@/api/agent'
+
+// existingAgentDetectedError 构造安装守卫 409 响应对应的结构化错误，
+// 供纳管相关用例复用（避免每个用例重复拼 payload）。
+function existingAgentDetectedError(version = '1.4.0'): AgentAPIError {
+  return new AgentAPIError('existing agent detected', 409, { code: 'existing_agent_detected', version })
+}
 
 function agent(overrides: Partial<AgentDTO> = {}): AgentDTO {
   return {
@@ -254,7 +261,7 @@ describe('AgentConfigPanel', () => {
     await wrapper.find('[data-test="agent-install-push"]').trigger('click')
     await flushPromises()
 
-    expect(store.installAgent).toHaveBeenCalledWith('h1', { method: 'push_over_ssh' })
+    expect(store.installAgent).toHaveBeenCalledWith('h1', { method: 'push_over_ssh', force_reinstall: false })
     expect(store.provisionAgent).toHaveBeenCalledWith('h1', { index: 0, tls_mode: 'auto' })
     expect(store.checkAgent).toHaveBeenCalledWith('h1')
     expect(wrapper.find('[data-test="install-phase-security"]').text()).toContain('已连接')
@@ -770,5 +777,228 @@ describe('AgentConfigPanel', () => {
     expect(store.checkAgent).toHaveBeenCalledWith('h1')
     expect(wrapper.find('[data-test="agent-probe-result-1"]').text()).toContain('Tunnel · :57017')
     expect(wrapper.find('[data-test="agent-probe-result-1"]').text()).toContain('reachable')
+  })
+
+  describe('existing agent detected (adoption)', () => {
+    async function mountAtInstallBlockedByExistingAgent() {
+      const store = useAgentsStore()
+      const installAgent = vi.spyOn(store, 'installAgent').mockRejectedValueOnce(existingAgentDetectedError('1.4.0'))
+      const wrapper = mount(AgentConfigPanel, {
+        props: {
+          visible: true,
+          agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+          host: hosts[0],
+          initialTab: 'install',
+        },
+        global: { plugins: [installTestI18n()] },
+      })
+      await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+      await wrapper.find('[data-test="agent-install-push"]').trigger('click')
+      await flushPromises()
+      return { store, wrapper, installAgent }
+    }
+
+    it('shows the existing-agent branch with version and offers adopt/force-reinstall on 409', async () => {
+      const { wrapper } = await mountAtInstallBlockedByExistingAgent()
+
+      expect(wrapper.find('[data-test="agent-install-existing-detected"]').text()).toContain('1.4.0')
+      expect(wrapper.find('[data-test="agent-adopt-start"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="agent-force-reinstall"]').exists()).toBe(true)
+      // 正常安装/启动阶段的文案不应该同时出现，避免用户误以为安装仍在正常推进。
+      expect(wrapper.find('[data-test="install-phase-start"]').text()).not.toContain('安装并启动 Agent')
+    })
+
+    it('adopts: request → 2s poll → approved → exchange → save credential → connect', async () => {
+      vi.useFakeTimers()
+      const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
+
+      const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({
+        id: 'req-1',
+        pairing_code: 'K7QM4X',
+        state: 'pending',
+        expires_at: '2099-01-01T00:00:00Z',
+      })
+      const getAdoptionStatus = vi.spyOn(store, 'getAdoptionStatus')
+        .mockResolvedValueOnce({ state: 'pending' })
+        .mockResolvedValueOnce({ state: 'approved', adoption_token: 'one-time-token' })
+      const exchangeAdoption = vi.spyOn(store, 'exchangeAdoption').mockResolvedValue({
+        token: 'long-term-token',
+        record: { id: 'rec-1', name: 'CP-New', hash: 'h', issued_at: '2026-01-01T00:00:00Z' },
+      })
+      const adoptAgentCredential = vi.spyOn(store, 'adoptAgentCredential').mockResolvedValue({ status: 'provisioned' })
+      const checkAgent = vi.spyOn(store, 'checkAgent').mockResolvedValue(agent())
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+
+      expect(requestAdoption).toHaveBeenCalledWith('http://203.0.113.10:57017', expect.any(String))
+      expect(getAdoptionStatus).toHaveBeenCalledTimes(1)
+      expect(getAdoptionStatus).toHaveBeenCalledWith('http://203.0.113.10:57017', 'req-1')
+      expect(wrapper.find('[data-test="agent-adopt-waiting"]').exists()).toBe(true)
+      expect(exchangeAdoption).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2000)
+      await flushPromises()
+
+      expect(getAdoptionStatus).toHaveBeenCalledTimes(2)
+      expect(exchangeAdoption).toHaveBeenCalledWith('http://203.0.113.10:57017', 'req-1', 'one-time-token')
+      expect(adoptAgentCredential).toHaveBeenCalledWith('h1', 'long-term-token')
+      expect(checkAgent).toHaveBeenCalledWith('h1')
+      expect(wrapper.find('[data-test="agent-install-existing-detected"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="agent-panel-tab-probe"]').classes()).toContain('active')
+    })
+
+    // 配对码必须在「等待对方批准」态可见：目标机的审批列表里可能同时躺着多条
+    // 自报同名的接入请求，发起人要能把码念给批准人核对。
+    it('shows the pairing code while waiting for approval', async () => {
+      const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="agent-adopt-pairing-code"]').text()).toContain('K7QM4X')
+      expect(wrapper.find('[data-test="agent-adopt-pairing-hint"]').exists()).toBe(true)
+    })
+
+    it('shows a clear, non-silent failure when the adoption request is rejected', async () => {
+      const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'rejected' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="agent-adopt-failed"]').text()).toContain('拒绝')
+      // 失败后必须能重新发起，不能卡死在轮询态。
+      expect(wrapper.find('[data-test="agent-adopt-start"]').exists()).toBe(true)
+    })
+
+    it('shows a clear, non-silent failure when the adoption request expires', async () => {
+      const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'expired' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="agent-adopt-failed"]').text()).toContain('过期')
+      expect(wrapper.find('[data-test="agent-adopt-start"]').exists()).toBe(true)
+    })
+
+    it('stops polling when the user cancels adoption (termination condition)', async () => {
+      vi.useFakeTimers()
+      const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      const getAdoptionStatus = vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+      expect(getAdoptionStatus).toHaveBeenCalledTimes(1)
+
+      await wrapper.find('[data-test="agent-adopt-cancel"]').trigger('click')
+      await vi.advanceTimersByTimeAsync(10000)
+      await flushPromises()
+
+      expect(getAdoptionStatus).toHaveBeenCalledTimes(1)
+      expect(wrapper.find('[data-test="agent-adopt-start"]').exists()).toBe(true)
+    })
+
+    it('stops polling when the panel is closed (termination condition)', async () => {
+      vi.useFakeTimers()
+      const { store, wrapper } = await mountAtInstallBlockedByExistingAgent()
+      vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      const getAdoptionStatus = vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+      expect(getAdoptionStatus).toHaveBeenCalledTimes(1)
+
+      await wrapper.setProps({ visible: false })
+      await vi.advanceTimersByTimeAsync(10000)
+      await flushPromises()
+
+      expect(getAdoptionStatus).toHaveBeenCalledTimes(1)
+    })
+
+    it('requires an explicit, non-understated confirmation before force-reinstalling', async () => {
+      const { store, wrapper, installAgent } = await mountAtInstallBlockedByExistingAgent()
+      installAgent.mockResolvedValueOnce({ ok: true, host_id: 'h1', platform: 'linux/amd64', message: 'installed' })
+      vi.spyOn(store, 'provisionAgent').mockResolvedValue({ status: 'provisioned' })
+      vi.spyOn(store, 'checkAgent').mockResolvedValue(agent())
+
+      expect(wrapper.get('[data-test="agent-force-reinstall"]').attributes('disabled')).toBeDefined()
+
+      await wrapper.find('[data-test="agent-force-reinstall-confirm"]').setValue(true)
+
+      expect(wrapper.find('[data-test="agent-force-reinstall-warning"]').text()).toContain('停止')
+      expect(wrapper.get('[data-test="agent-force-reinstall"]').attributes('disabled')).toBeUndefined()
+
+      await wrapper.find('[data-test="agent-force-reinstall"]').trigger('click')
+      await flushPromises()
+
+      expect(installAgent).toHaveBeenLastCalledWith('h1', { method: 'push_over_ssh', force_reinstall: true })
+      expect(wrapper.find('[data-test="agent-install-existing-detected"]').exists()).toBe(false)
+    })
+
+    it('uses the authoritative address from the 409 payload, not a guess from this control plane\'s own port', async () => {
+      const store = useAgentsStore()
+      // 用一个既不是 host 记录的公网 IP、也不是本控制面 bindPort 猜测结果的地址，
+      // 确保断言只可能在"确实用了 409 payload 里的权威地址"时才通过。
+      vi.spyOn(store, 'installAgent').mockRejectedValueOnce(
+        new AgentAPIError('existing agent detected', 409, { code: 'existing_agent_detected', version: '1.4.0', address: '198.51.100.7:9001' }),
+      )
+      const wrapper = mount(AgentConfigPanel, {
+        props: {
+          visible: true,
+          agent: agent({ runtime: { installed: false, health: 'unknown', reachable: false } }),
+          host: hosts[0],
+          initialTab: 'install',
+        },
+        global: { plugins: [installTestI18n()] },
+      })
+      await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+      await wrapper.find('[data-test="agent-install-push"]').trigger('click')
+      await flushPromises()
+
+      const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+
+      expect(requestAdoption).toHaveBeenCalledWith('http://198.51.100.7:9001', expect.any(String))
+    })
+
+    it('falls back to the host IP with the standard default port, not this control plane\'s own configured port, when 409 carries no address', async () => {
+      const store = useAgentsStore()
+      // agent 配置了一个非默认的 listen_port（9999）——旧实现会误用它拼纳管地址；
+      // 修复后即使 409 没带 address，兜底猜测也必须用标准默认端口 57017，不是 9999。
+      vi.spyOn(store, 'installAgent').mockRejectedValueOnce(existingAgentDetectedError('1.4.0'))
+      const wrapper = mount(AgentConfigPanel, {
+        props: {
+          visible: true,
+          agent: agent({
+            runtime: { installed: false, health: 'unknown', reachable: false },
+            config: { listen_address: '127.0.0.1', listen_port: 9999 },
+          }),
+          host: hosts[0],
+          initialTab: 'install',
+        },
+        global: { plugins: [installTestI18n()] },
+      })
+      await wrapper.find('input[value="push_over_ssh"]').setValue(true)
+      await wrapper.find('[data-test="agent-install-push"]').trigger('click')
+      await flushPromises()
+
+      const requestAdoption = vi.spyOn(store, 'requestAdoption').mockResolvedValue({ id: 'req-1', pairing_code: 'K7QM4X', state: 'pending', expires_at: '2099-01-01T00:00:00Z' })
+      vi.spyOn(store, 'getAdoptionStatus').mockResolvedValue({ state: 'pending' })
+
+      await wrapper.find('[data-test="agent-adopt-start"]').trigger('click')
+      await flushPromises()
+
+      expect(requestAdoption).toHaveBeenCalledWith('http://203.0.113.10:57017', expect.any(String))
+    })
   })
 })

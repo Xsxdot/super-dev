@@ -12,22 +12,113 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/xsxdot/super-dev/agent/installer"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
 const (
 	agentInstallMethodPushOverSSH = "push_over_ssh"
 )
 
+// installGuardProbeTimeout 限定安装前「既有 agent 探测守卫」的最长等待时间。
+//
+// 取 1.5 秒：留出一次跨网 HTTP 往返的余量，同时不能让「添加主机」这种交互式
+// 操作被一台无响应的目标机拖住几十秒——探测失败本就直接放行（见下方
+// guardAgainstExistingProvisionedAgent 的注释），拖长超时只会拖慢正常的
+// “这台机器确实还没装 agent”路径，对守卫本身的正确性没有帮助。
+const installGuardProbeTimeout = 1500 * time.Millisecond
+
+// existingAgentDetectedErrorCode 是安装预探测守卫拦截时返回的稳定错误码，
+// 供桌面端识别并引导用户改走纳管（接入请求）流程。
+const existingAgentDetectedErrorCode = "existing_agent_detected"
+
 type agentInstallRequest struct {
 	Method string `json:"method"`
+	// ForceReinstall 为 true 时跳过「既有 agent 探测守卫」，用户显式确认要
+	// 盲目重装（例如确实要接管一台失联旧控制面的机器）。
+	ForceReinstall bool `json:"force_reinstall"`
+}
+
+// existingAgentGuardResult 是安装预探测守卫一次探测的结论。
+type existingAgentGuardResult struct {
+	Blocked bool
+	Version string
+}
+
+// guardAgainstExistingProvisionedAgent 在真正执行安装前，直接探测目标机的
+// /api/security/health，判断它是否已经被某个（也许是别人的）控制面完整纳管过。
+//
+// 参数：
+//   - ctx: 上层请求上下文；本方法会派生出带 installGuardProbeTimeout 短超时的
+//     子 ctx，探测本身绝不拖住调用方太久
+//   - hostID: 待探测的目标 host，经 App.nodeTransport 按 host_id 寻址
+//
+// 返回：
+//   - existingAgentGuardResult.Blocked 为 true 时表示探到既有 provisioned
+//     agent，应阻断本次盲目重装；Version 是探到的远端 agent 版本
+//
+// 注意：
+//   - 探测走不通、超时或响应不含 provisioned 状态，一律返回 Blocked=false
+//     放行安装：这条守卫是尽力而为的安全网，不是安装的前置门。连不通目标机，
+//     大概率就是这台机器还没装 agent，不该反而拦住正常的首次安装。
+func (a *App) guardAgainstExistingProvisionedAgent(ctx context.Context, hostID string) existingAgentGuardResult {
+	probeCtx, cancel := context.WithTimeout(ctx, installGuardProbeTimeout)
+	defer cancel()
+	resp, err := a.nodeTransport.Do(probeCtx, hostID, nodetransport.NodeRequest{
+		Method: http.MethodGet,
+		Path:   nodetransport.SecurityHealthPath,
+	})
+	if err != nil {
+		// 探不通（未装 agent / 网络不可达 / 超时）：尽力而为，直接放行。
+		return existingAgentGuardResult{}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return existingAgentGuardResult{}
+	}
+	var body nodetransport.SecurityHealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return existingAgentGuardResult{}
+	}
+	if body.ProvisionState != string(model.AgentProvisionStateProvisioned) {
+		return existingAgentGuardResult{}
+	}
+	return existingAgentGuardResult{Blocked: true, Version: body.Version}
+}
+
+// existingAgentDirectAddress 返回既有 agent 探测守卫拦截时可回给桌面端的权威
+// 直连地址。
+//
+// 参数：
+//   - agent: 触发 409 的这条本机 Agent 配置（installAgent 已经查过、在作用域内）
+//
+// 返回：
+//   - agent.Transport.Chain 中 direct 链项的 host:port（用户在"添加主机"连接链
+//     步骤里填写、agent.DirectParams() 已封装的取值逻辑）；链上没有 direct 项
+//     （纯 tunnel）时返回空字符串
+//
+// 注意：
+//   - 只有 direct 地址对浏览器发起的裸 fetch 有意义——tunnel 项是走 SSH 转发，
+//     桌面端纳管三端点的直连请求够不到它，所以不尝试从 tunnel 参数拼地址
+//   - 不使用本控制面当前正在编辑的监听端口（securityForm.listenPort 对应的
+//     agent.Config.ListenPort）：那是"这次准备装的新 agent 打算监听的端口"，
+//     与目标机既有 agent 实际监听的端口毫无关系，用它拼地址是纯粹的误导
+func existingAgentDirectAddress(agent model.Agent) string {
+	direct, ok := agent.DirectParams()
+	if !ok || direct == nil {
+		return ""
+	}
+	return strings.TrimSpace(direct.Address)
 }
 
 type agentUpdateTargetResponse struct {
@@ -74,6 +165,26 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Method != agentInstallMethodPushOverSSH {
 		jsonError(w, http.StatusBadRequest, "unsupported install method")
+		return
+	}
+
+	if req.ForceReinstall {
+		// 用户显式确认要盲目重装（例如确实要接管一台失联旧控制面的机器），
+		// 跳过探测守卫，直接走原安装路径。
+		log.Printf("[SuperDev] installAgent 用户强制重装：host=%s 跳过既有 agent 探测守卫", host.ID)
+	} else if guard := a.guardAgainstExistingProvisionedAgent(r.Context(), host.ID); guard.Blocked {
+		address := existingAgentDirectAddress(agent)
+		log.Printf("[SuperDev] installAgent 守卫拦截：探到既有 provisioned agent host=%s version=%s，阻断盲目重装，请走纳管或显式 force_reinstall", host.ID, guard.Version)
+		jsonWrite(w, http.StatusConflict, map[string]string{
+			"code":    existingAgentDetectedErrorCode,
+			"version": guard.Version,
+			// address 是权威目标地址（agent.Transport.Chain 里配置的 direct
+			// 直连地址，不是这次安装表单里正在编辑的本控制面自身监听端口）：
+			// 桌面端纳管流程据此直连目标机，不再靠"目标机端口 == 我方配置的
+			// 端口"这种猜测——两者本来就毫无关系。链上没有 direct 项（纯
+			// tunnel）时留空，桌面端据此判断"当前配置下无法直连纳管"。
+			"address": address,
+		})
 		return
 	}
 

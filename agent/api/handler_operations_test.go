@@ -65,6 +65,62 @@ func TestOperationAPI_PreflightApproveRejectAndAudit(t *testing.T) {
 	assert.GreaterOrEqual(t, len(audit.Events), 2)
 }
 
+// 裁决身份必须服务器侧从已验证凭据推导，绝不信任请求体自报的 decided_by；
+// 且 approved 是终态，第二条凭据再次裁决（无论 approve 还是 reject）必须收到
+// 稳定的 409 approval_already_decided，而不是静默覆盖第一个裁决者的身份。
+func TestOperationAPI_DecidedByServerSideAndConflict409(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	app.mu.Lock()
+	app.appendProjectLocked(operationAPIProject(false, false))
+	app.mu.Unlock()
+
+	// 追加一条独立于本机 local-access-token 的远程凭据记录，模拟第二个控制面。
+	_, err = app.securityStore.AppendTokenRecord("CP-B", "remote-secret-token")
+	require.NoError(t, err)
+
+	srv := httptest.NewServer(testServerHandler(app))
+	t.Cleanup(srv.Close)
+
+	// testServerHandler 在请求未显式带 Authorization 时默认注入本机 token，
+	// 这里借此触发一条待审批请求。
+	required := postJSONForRawTest(t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, http.StatusForbidden)
+	approvalID := required["approval"].(map[string]any)["id"].(string)
+
+	// 本机凭据 approve；请求体里乱填 decided_by，服务器侧必须忽略它，
+	// 改用 security.PrincipalFrom 从已验证凭据推导出的展示名「本机」。
+	approveResp := postJSONForTest[operationApprovalDecisionResponse](t, srv.URL+"/api/operation-approvals/"+approvalID+"/approve", map[string]any{
+		"decided_by": "totally-fake-name",
+		"note":       "approved via local",
+	}, http.StatusOK)
+	assert.Equal(t, "本机", approveResp.Approval.DecidedBy)
+
+	audit := getJSONForTest[operationAuditListResponse](t, srv.URL+"/api/operation-audit?approval_id="+approvalID, http.StatusOK)
+	var approvedEvent *operation.AuditEvent
+	for i := range audit.Events {
+		if audit.Events[i].Action == operation.AuditApproved {
+			approvedEvent = &audit.Events[i]
+			break
+		}
+	}
+	require.NotNil(t, approvedEvent, "expected an approved audit event")
+	assert.Equal(t, "本机", approvedEvent.Data["decided_by"])
+	assert.Equal(t, "local", approvedEvent.Data["principal_type"])
+
+	// 用另一条远程凭据尝试 reject 同一单：approved 已是终态，必须 409 而不是
+	// 覆盖或翻案第一个裁决者；请求体的 decided_by 同样被忽略，body.decided_by
+	// 必须是真正的胜者「本机」，而不是这次请求自报的值。
+	conflict := postJSONWithHeadersForTest[map[string]any](t, srv.URL+"/api/operation-approvals/"+approvalID+"/reject", map[string]any{
+		"decided_by": "someone-else",
+		"note":       "trying to override",
+	}, map[string]string{
+		"Authorization": "Bearer remote-secret-token",
+	}, http.StatusConflict)
+	assert.Equal(t, "approval_already_decided", conflict["code"])
+	assert.Equal(t, "本机", conflict["decided_by"])
+}
+
 func TestOperationAPI_ReissuesTokenForApprovedUnconsumedApproval(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
 	require.NoError(t, err)
@@ -273,6 +329,25 @@ func operationAPIProject(isDev bool, readOnly bool) model.Project {
 func getJSONForTest[T any](t *testing.T, url string, status int) T {
 	t.Helper()
 	resp, err := http.Get(url)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, status, resp.StatusCode)
+	var out T
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	return out
+}
+
+// getJSONWithHeadersForTest 同 getJSONForTest，但允许显式带请求头——用于绑定
+// 裸 app.Handler()（没有 testServerHandler 默认注入本机 token）的测试场景，
+// 调用方必须自己带凭据。
+func getJSONWithHeadersForTest[T any](t *testing.T, url string, headers map[string]string, status int) T {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, status, resp.StatusCode)

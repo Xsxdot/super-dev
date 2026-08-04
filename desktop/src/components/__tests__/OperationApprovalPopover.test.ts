@@ -114,4 +114,30 @@ describe('OperationApprovalPopover', () => {
     expect(wrapper.text()).toContain('load failed')
     expect(wrapper.find('[data-test="approval-popover-empty"]').exists()).toBe(true)
   })
+
+  // 浮层也能直接批准，纳管审批的防伪要素必须在这里同样可见。
+  it('shows the server-derived origin and pairing code for an adoption approval', () => {
+    const store = useOperationApprovalStore()
+    store.approvals = [{
+      id: 'opa_adopt',
+      status: 'pending',
+      requested_by: '203.0.113.9',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_adopt',
+        kind: 'agent.adopt',
+        target: { request_origin: '203.0.113.9', pairing_code: 'K7QM4X' },
+        target_summary: 'adopt request from 203.0.113.9',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'req-1',
+      },
+    } as any]
+
+    const wrapper = mount(OperationApprovalPopover, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    expect(wrapper.find('[data-test="approval-popover-origin-opa_adopt"]').text()).toContain('203.0.113.9')
+    expect(wrapper.find('[data-test="approval-popover-pairing-code-opa_adopt"]').text()).toContain('K7QM4X')
+  })
 })

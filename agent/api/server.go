@@ -95,6 +95,9 @@ type AppConfig struct {
 	TLSKeyFile string
 	// RemoteObservationOverride 注入安全远程观察模块，仅用于测试。
 	RemoteObservationOverride remoteobservation.Observer
+	// AdoptionNowOverride 仅用于测试注入 security.AdoptionManager 的时钟，控制
+	// 接入请求 10 分钟有效期窗口的推进；生产环境为 nil 时使用 time.Now。
+	AdoptionNowOverride func() time.Time
 }
 
 // HostAgentInstaller 安装、卸载、重启或原地更新远端 SuperDev agent。
@@ -185,7 +188,17 @@ type App struct {
 	// nodeStatusPublishers 保存当前 /ws/node-status 连接，供 managed 状态变化即时推送。
 	nodeStatusPublisherMu sync.Mutex
 	nodeStatusPublishers  map[*nodeStatusPublisher]struct{}
-	remoteStore           *remote.Store
+	// localWSClientsMu 保护 localWSClients 计数的并发读写。
+	localWSClientsMu sync.Mutex
+	// localWSClients 是当前本机 /ws/nodes 活跃连接数——桌面主界面常驻这条订阅，
+	// 故计数 >0 即视为本机有桌面端在场（DesktopOnline 信号源，见
+	// handler_node_status.go nodeStatusSnapshot）。wsNodes handler 进入 +1、
+	// 退出（含异常路径，defer 保证）-1，永远成对出现。
+	localWSClients int
+	// approvalsPublishers 保存当前 /ws/operation-approvals 连接，供审批创建/裁决即时推送。
+	approvalsPublisherMu sync.Mutex
+	approvalsPublishers  map[*approvalsPublisher]struct{}
+	remoteStore          *remote.Store
 	// projectHomeStore 持久化「项目 → 归属主机」本地路由标记，供 listProjects
 	// DTO 组装、后续归属路由/转移任务复用。归属是控制面本地设置，不下发节点。
 	projectHomeStore *projecthome.Store
@@ -217,6 +230,10 @@ type App struct {
 	browserControl browsercontrol.Controller
 	// securityStore 持久化 agent 安全自举与长期 token 状态。
 	securityStore *security.Store
+	// adoptions 是无凭据接入请求的进程内存态通道：接入方 Create → 既有控制面
+	// 审批 → 接入方凭一次性 adoption token Exchange 出独立长期凭据。重启即
+	// 丢失全部接入请求，接入方重发即可，不做持久化。
+	adoptions *security.AdoptionManager
 	// nodeTransport 统一承载按 hostID 访问远端 agent 的请求和流。
 	nodeTransport nodetransport.NodeTransport
 	// nodeTransportProviders 按 transport type 保存具体 provider，供 per-entry probe/provision 精确选路。
@@ -327,6 +344,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, fmt.Errorf("rotate local access token: %w", err)
 	}
 	securityStore.SetLocalToken(localToken)
+	// adoptions 依赖 securityStore 完成初始化后才能创建：Exchange 成功后需要
+	// 调用 securityStore.AppendTokenRecord 追加接入方的长期凭据记录。
+	adoptions := security.NewAdoptionManager(securityStore, security.AdoptionManagerOptions{Now: cfg.AdoptionNowOverride})
 
 	seqWatermarks, err := s.SeqWatermarks()
 	if err != nil {
@@ -534,6 +554,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		logCleanupCancel:            logCleanupCancel,
 		logCleanupDone:              logCleanupDone,
 		nodeStatusPublishers:        map[*nodeStatusPublisher]struct{}{},
+		approvalsPublishers:         map[*approvalsPublisher]struct{}{},
 		remoteStore:                 remoteStore,
 		projectHomeStore:            projectHomeStore,
 		hostAssembler:               apiassembler.NewHostAssembler(),
@@ -550,6 +571,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		debugBrowserCandidates:      cfg.DebugBrowserCandidates,
 		browserControl:              browserControl,
 		securityStore:               securityStore,
+		adoptions:                   adoptions,
 		nodeTransport:               nodeTransport,
 		nodeTransportProviders:      appNodeTransportProviders,
 		nodeRegistry:                nodeRegistry,
@@ -893,6 +915,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/operation-approvals/{id}/approve", a.approveOperationApproval)
 	mux.HandleFunc("POST /api/operation-approvals/{id}/reject", a.rejectOperationApproval)
 	mux.HandleFunc("GET /api/operation-audit", a.listOperationAudit)
+	mux.HandleFunc("GET /ws/operation-approvals", a.wsOperationApprovals)
 
 	// 服务管理（service 级启停/选择已下线，统一走 deployment 级接口）
 	mux.HandleFunc("GET /api/services", a.listServices)
@@ -910,6 +933,12 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exec/health", a.execHealth)
 	mux.HandleFunc("GET /api/security/health", a.securityHealth)
 	mux.HandleFunc("POST /api/security/provision", a.provisionSecurity)
+	// 纳管既有 agent（Task 7）：接入方此刻没有任何凭据，Create/Get 与
+	// provision 同理必须进 bypass 白名单；Exchange 校验一次性 adoption token
+	// 本身即准入凭证，也进白名单，见 security_handler.go securityBypassPath。
+	mux.HandleFunc("POST /api/security/adoption-requests", a.createAdoptionRequest)
+	mux.HandleFunc("GET /api/security/adoption-requests/{id}", a.getAdoptionRequest)
+	mux.HandleFunc("POST /api/security/adoption-requests/{id}/exchange", a.exchangeAdoptionRequest)
 	mux.HandleFunc("POST /api/transfer", a.transferFile)
 
 	// Collector 控制(远端 agent 接收本机隧道请求)
@@ -944,6 +973,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/agent-uninstall-scripts/{name}", a.serveAgentUninstallScript)
 	mux.HandleFunc("POST /api/agents/{host_id}/transports/test", a.testAgentTransport)
 	mux.HandleFunc("POST /api/agents/{host_id}/provision", a.provisionAgent)
+	// adopt 是纳管流程（Task 7 exchange）的落盘终点：把目标机侧已生成、已经过审批
+	// 换发的长期 token 写回本机 agents.json；与其余写路径同样受 withSecurity 保护，
+	// 不在任何 bypass 白名单内（见 handler_agent_adopt.go 头注释）。
+	mux.HandleFunc("POST /api/agents/{host_id}/adopt", a.adoptAgent)
 	mux.HandleFunc("GET /api/agents/{host_id}/direct-exposure", a.getAgentDirectExposure)
 	mux.HandleFunc("GET /api/hosts/{id}/managed-deployments/status", a.getHostManagedDeploymentsStatus)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)

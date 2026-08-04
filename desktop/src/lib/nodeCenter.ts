@@ -62,6 +62,12 @@ export interface NodeCenterNode {
    * 这类节点根本没有对应的 Host 记录，无从谈起。
    */
   devMachine: boolean
+  /**
+   * 该 host 对应 agent 本机是否有活跃 /ws/nodes 订阅——即该机器上是否也开着桌面端
+   * 在场（对应 NodeStatus.desktop_online）。尚无 node 快照（muted 占位态）时恒为
+   * false，与 devMachine 缺快照时的降级方式一致。
+   */
+  desktopOnline: boolean
 }
 
 const unknownAgent: AgentRuntime = {
@@ -162,6 +168,7 @@ function buildNodeFromHost(
       configured: true,
       mirrors: hostMirrors,
       devMachine,
+      desktopOnline: false,
     }
   }
   return {
@@ -179,6 +186,7 @@ function buildNodeFromHost(
     route: routeFromNode(node),
     mirrors: hostMirrors,
     devMachine,
+    desktopOnline: node.desktop_online === true,
   }
 }
 
@@ -205,6 +213,7 @@ function buildNodeFromSnapshot(
     // snapshot-only 节点没有对应的 Host 记录（未被配置），dev_machine_mode 是 Host 级
     // 字段，无从取值——恒为 false，与「只有已配置的 Host 才能勾选开发机模式」的产品语义一致。
     devMachine: false,
+    desktopOnline: node.desktop_online === true,
   }
 }
 

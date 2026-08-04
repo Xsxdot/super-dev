@@ -13,7 +13,9 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -279,4 +281,119 @@ func TestUpdateAgentBinaryRejectsUninstalledAgent(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, resp.Code)
 	assert.Contains(t, resp.Body.String(), "agent is not installed")
 	assert.Equal(t, 0, fake.updateCalls)
+}
+
+// --- Task 8: installAgent 预探测守卫 ---
+//
+// 场景：第二个控制面在桌面上「添加主机」指向一台已被别人管着的机器。这三个
+// 测试分别验证守卫的三条语义：探到 provisioned 就 409 拦截、force_reinstall
+// 显式放行、探测本身失败（不可达/超时）也放行——守卫是尽力而为，不是安装
+// 前置门。
+
+// newProvisionedSecurityHealthServer 起一个假的远端 agent，/api/security/health
+// 返回 provision_state=provisioned，模拟「已被某控制面纳管」的目标机。
+func newProvisionedSecurityHealthServer(t *testing.T, version string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"` + version + `","provision_state":"provisioned"}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestInstallAgentBlocksWhenExistingProvisionedAgentDetected(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.117.127.123:57019"}}]},
+	  "config":{"listen_address":"100.117.127.123","listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+	srv := newProvisionedSecurityHealthServer(t, "1.4.0")
+	app.nodeTransport = testNodeTransport{table: map[string]string{hostID: srv.URL}}
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install", bytes.NewBufferString(`{"method":"push_over_ssh"}`))
+
+	require.Equal(t, http.StatusConflict, resp.Code)
+	assert.Contains(t, resp.Body.String(), `"code":"existing_agent_detected"`)
+	assert.Contains(t, resp.Body.String(), `"version":"1.4.0"`)
+	// address 必须是本机配置的 direct 直连地址（目标机权威地址），不是探测
+	// 用的 fake health server 的随机端口——这是桌面端纳管流程唯一可信的目标地址来源。
+	assert.Contains(t, resp.Body.String(), `"address":"100.117.127.123:57019"`)
+	assert.Equal(t, 0, fake.calls)
+}
+
+// TestInstallAgentBlocksWithoutDirectAddressLeavesAddressEmpty 覆盖纯 tunnel
+// 链（无 direct 项）时守卫仍然拦截，但 address 字段留空——没有对浏览器可达的
+// HTTP 地址可回，桌面端据此判断"当前配置无法直连纳管"，不能瞎编一个。
+func TestInstallAgentBlocksWithoutDirectAddressLeavesAddressEmpty(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"tunnel","tunnel":{"remote_agent_port":57019}}]},
+	  "config":{"listen_address":"127.0.0.1","listen_port":57019},
+	  "security":{"tls":{"mode":"off"}}
+	`)
+	srv := newProvisionedSecurityHealthServer(t, "1.4.0")
+	app.nodeTransport = testNodeTransport{table: map[string]string{hostID: srv.URL}}
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install", bytes.NewBufferString(`{"method":"push_over_ssh"}`))
+
+	require.Equal(t, http.StatusConflict, resp.Code)
+	assert.Contains(t, resp.Body.String(), `"code":"existing_agent_detected"`)
+	assert.Contains(t, resp.Body.String(), `"address":""`)
+	assert.Equal(t, 0, fake.calls)
+}
+
+func TestInstallAgentForceReinstallBypassesGuard(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.117.127.123:57019"}}]},
+	  "config":{"listen_address":"100.117.127.123","listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+	srv := newProvisionedSecurityHealthServer(t, "1.4.0")
+	app.nodeTransport = testNodeTransport{table: map[string]string{hostID: srv.URL}}
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install", bytes.NewBufferString(`{"method":"push_over_ssh","force_reinstall":true}`))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Equal(t, 1, fake.calls)
+}
+
+func TestInstallAgentProceedsWhenGuardProbeTimesOut(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.117.127.123:57019"}}]},
+	  "config":{"listen_address":"100.117.127.123","listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+	slowSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer slowSrv.Close()
+	app.nodeTransport = testNodeTransport{table: map[string]string{hostID: slowSrv.URL}}
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install", bytes.NewBufferString(`{"method":"push_over_ssh"}`))
+
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Equal(t, 1, fake.calls)
 }

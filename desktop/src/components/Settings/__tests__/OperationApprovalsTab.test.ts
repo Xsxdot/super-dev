@@ -235,4 +235,114 @@ describe('OperationApprovalsTab', () => {
     expect(source).toMatch(/\.policy-toggle\s*\{[^}]*gap:\s*8px;/s)
     expect(source).not.toMatch(/\.policy-toggle,\s*\.policy-number\s*\{[^}]*justify-content:\s*space-between;/s)
   })
+
+  it('renders a grayed-out recently-decided section with the handler name', () => {
+    const store = useOperationApprovalStore()
+    store.decided = [{
+      id: 'opa_done',
+      status: 'approved',
+      decided_by: '远程控制面 A',
+      plan: {
+        id: 'op_done',
+        kind: 'runtime.restart',
+        target: { deployment_id: 'api-prod' },
+        target_summary: 'demo/prod/api',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'sha256:done',
+      },
+    } as any]
+    vi.spyOn(useOperationApprovalStore(), 'loadPending').mockResolvedValue(undefined)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    const item = wrapper.find('[data-test="approval-decided-item-opa_done"]')
+
+    expect(item.exists()).toBe(true)
+    expect(item.text()).toContain('已由 远程控制面 A 处理')
+  })
+
+  // 纳管审批的确认代理防线：自报名可以被攻击者填成真实桌面用的字符串，操作员
+  // 只能靠服务器侧推导的来源 + 配对码分辨该批哪一行。两者都必须出现在待审批行上，
+  // 且自报名必须被标注为不可信。
+  it('shows the server-derived origin and pairing code on an adoption approval row', () => {
+    const store = useOperationApprovalStore()
+    store.approvals = [{
+      id: 'opa_adopt',
+      status: 'pending',
+      requested_by: '203.0.113.9',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_adopt',
+        kind: 'agent.adopt',
+        target: { request_origin: '203.0.113.9', pairing_code: 'K7QM4X' },
+        target_summary: 'adopt request from 203.0.113.9 (pairing code K7QM4X, self-reported name: SuperDev Desktop)',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'req-1',
+      },
+    } as any]
+    vi.spyOn(store, 'loadPending').mockResolvedValue(undefined)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    expect(wrapper.find('[data-test="approval-origin-opa_adopt"]').text()).toContain('203.0.113.9')
+    expect(wrapper.find('[data-test="approval-pairing-code-opa_adopt"]').text()).toContain('K7QM4X')
+    const selfReported = wrapper.find('[data-test="approval-self-reported-opa_adopt"]')
+    expect(selfReported.text()).toContain('SuperDev Desktop')
+    expect(selfReported.text()).toContain('不可信')
+  })
+
+  it('shows the origin and pairing code on a decided adoption row too', () => {
+    const store = useOperationApprovalStore()
+    store.decided = [{
+      id: 'opa_adopt_done',
+      status: 'approved',
+      decided_by: '本机',
+      requester_label: 'SuperDev Desktop',
+      plan: {
+        id: 'op_adopt_done',
+        kind: 'agent.adopt',
+        target: { request_origin: '203.0.113.9', pairing_code: 'K7QM4X' },
+        target_summary: 'adopt request from 203.0.113.9',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'req-1',
+      },
+    } as any]
+    vi.spyOn(useOperationApprovalStore(), 'loadPending').mockResolvedValue(undefined)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+
+    expect(wrapper.find('[data-test="approval-decided-origin-opa_adopt_done"]').text()).toContain('203.0.113.9')
+    expect(wrapper.find('[data-test="approval-decided-pairing-code-opa_adopt_done"]').text()).toContain('K7QM4X')
+  })
+
+  it('shows an unnamed handled message when a decided entry has no decided_by (expired/used)', () => {
+    const store = useOperationApprovalStore()
+    store.decided = [{
+      id: 'opa_expired',
+      status: 'expired',
+      decided_by: '',
+      plan: {
+        id: 'op_expired',
+        kind: 'runtime.restart',
+        target: { deployment_id: 'api-prod' },
+        target_summary: 'demo/prod/api',
+        risk_level: 'high',
+        requires_approval: true,
+        denied: false,
+        fingerprint: 'sha256:expired',
+      },
+    } as any]
+    vi.spyOn(useOperationApprovalStore(), 'loadPending').mockResolvedValue(undefined)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    const item = wrapper.find('[data-test="approval-decided-item-opa_expired"]')
+
+    expect(item.text()).toContain('已处理')
+    expect(item.text()).not.toContain('已由')
+  })
 })

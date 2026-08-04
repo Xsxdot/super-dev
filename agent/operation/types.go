@@ -76,6 +76,17 @@ const (
 	//     靠这条审计链追溯，prepared 事件即失败恢复的 outbox
 	//   - 审计 Data 只承载步骤码/项目/host/结果，绝不携带任何秘密值或 git 凭据
 	KindProjectTransfer = "project.transfer"
+	// KindAgentAdopt 表示无凭据接入请求——已被其他控制面管理的 agent 收到新控制面的
+	// 纳管申请，经既有控制面审批后为接入方换发独立的长期凭据。
+	//
+	// 注意：
+	//   - 该 kind 恒为 RiskHigh 且必须审批，由 PlanAgentAdopt 直接置位，不放进
+	//     operation/policy.go 的 applyApprovalPolicy 覆盖表——发放的是能完全
+	//     控制这台 agent 的长期凭据，不能被 settings 审批开关意外调到自动放行档
+	//   - Plan.Fingerprint 固定取 security.AdoptionManager 生成的接入请求 ID
+	//     （不走 stableFingerprint 哈希），供 approve/reject 钩子从
+	//     approval.Plan.Fingerprint 直接反查对应的 AdoptionRequest
+	KindAgentAdopt = "agent.adopt"
 
 	// RiskLow 表示仅影响开发环境本机目标的低风险操作。
 	RiskLow = "low"
@@ -135,6 +146,10 @@ var (
 	ErrApprovalTokenInvalid = errors.New("operation approval token is invalid")
 	// ErrApprovalTokenConsumed 表示审批 token 已经被使用。
 	ErrApprovalTokenConsumed = errors.New("operation approval token is already used")
+	// ErrApprovalAlreadyDecided 表示审批请求已被裁决（approved 为终态）。
+	// 双控制面下先裁决者生效：approved 之后的任何再次 Approve/Reject 都会被此错误拒绝，
+	// 防止静默覆盖胜者身份（DecidedBy）或吊销胜者已领取的一次性 token。
+	ErrApprovalAlreadyDecided = errors.New("operation approval already decided")
 )
 
 // Target 描述一次 operation 解析后的稳定目标。
@@ -151,6 +166,18 @@ type Target struct {
 	PipelineID      string `json:"pipeline_id,omitempty"`
 	ArtifactVersion string `json:"artifact_version,omitempty"`
 	DebugSessionID  string `json:"debug_session_id,omitempty"`
+	// RequestOrigin 是服务器侧推导的请求来源（当前只有 agent.adopt 使用）。
+	//
+	// 为什么单列一个字段而不是塞进 TargetSummary：它是这条审批里唯一不可被
+	// 请求方伪造的事实（来自 net/http 的对端地址，不读任何请求头），前端必须
+	// 能把它和「接入方自报的名字」在视觉上区分开，否则操作员无从判断哪一行是
+	// 自己人发起的。
+	RequestOrigin string `json:"request_origin,omitempty"`
+	// PairingCode 是由请求 ID 确定性派生的短配对码（当前只有 agent.adopt 使用），
+	// 供发起方与批准方口头核对是不是同一次请求。
+	//
+	// 注意：它不是秘密、不是鉴权因子，只是匹配辅助（见 security.PairingCode）。
+	PairingCode string `json:"pairing_code,omitempty"`
 }
 
 // Check 描述预检中的一个可解释检查项。

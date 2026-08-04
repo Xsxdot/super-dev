@@ -226,6 +226,36 @@ func TestNodeStatusSnapshotCarriesPortsAndStoppedInstances(t *testing.T) {
 	assert.Equal(t, []int{9100}, afterInst.Ports)
 }
 
+// TestNodeStatusSnapshotDesktopOnlineTracksWsNodesConnections 验证「桌面端在线」信号链：
+// /ws/nodes 连接建立后 DesktopOnline 变 true，断开后变回 false。信号来源见
+// nodetransport.NodeStatus.DesktopOnline 字段注释——本机是否有活跃 /ws/nodes 订阅。
+func TestNodeStatusSnapshotDesktopOnlineTracksWsNodesConnections(t *testing.T) {
+	reg := noderegistry.New([]nodetransport.NodeTransport{}, noderegistry.Options{StaleAfter: time.Hour})
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), NodeRegistryOverride: reg})
+	require.NoError(t, err)
+	defer app.Close()
+
+	ctx := context.Background()
+	assert.False(t, app.nodeStatusSnapshot(ctx, "h1", "ali-01").DesktopOnline,
+		"没有任何 /ws/nodes 连接时 DesktopOnline 应为 false")
+
+	srv := httptest.NewServer(testServerHandler(app))
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/nodes"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return app.nodeStatusSnapshot(ctx, "h1", "ali-01").DesktopOnline
+	}, time.Second, 10*time.Millisecond, "/ws/nodes 连接建立后 DesktopOnline 应变为 true")
+
+	require.NoError(t, conn.Close())
+
+	require.Eventually(t, func() bool {
+		return !app.nodeStatusSnapshot(ctx, "h1", "ali-01").DesktopOnline
+	}, time.Second, 10*time.Millisecond, "/ws/nodes 断开后 DesktopOnline 应恢复为 false")
+}
+
 func TestNodeEndpointsExposeRegistrySnapshot(t *testing.T) {
 	reg := noderegistry.New([]nodetransport.NodeTransport{}, noderegistry.Options{StaleAfter: time.Hour})
 	app, err := NewApp(AppConfig{

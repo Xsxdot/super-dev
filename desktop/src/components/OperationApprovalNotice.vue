@@ -4,6 +4,9 @@
 职责：
   - 在桌面端运行态操作触发审批时弹出全局通知
   - 允许用户直接在通知中批准或拒绝审批
+  - 当当前通知对应的审批被其他控制面抢先裁决（conflictNotice）时，切换为
+    灰化的「已由 X 处理」提示，隐藏批准/拒绝按钮——这是双控制面并发裁决的
+    常态信息，不是错误
 
 边界：
   - 不计算审批策略
@@ -22,6 +25,9 @@ const settingsStore = useSettingsStore()
 const grantGrace = ref(false)
 const graceMinutes = computed(() => settingsStore.agentSettings.approval?.grace_minutes ?? 15)
 const canGrantGrace = computed(() => !!store.notice?.project_id && !store.notice?.approved)
+// isConflict：当前弹出的通知对应的审批已被其他控制面抢先裁决——只在 conflictNotice
+// 与当前 notice 指向同一个 approval_id 时成立，避免一个不相关的历史冲突误伤新通知。
+const isConflict = computed(() => !!store.conflictNotice && store.conflictNotice.id === store.notice?.approval_id)
 
 async function approveNotice() {
   const approvalID = store.notice?.approval_id
@@ -53,18 +59,36 @@ async function rejectNotice() {
       </header>
       <section class="notice-section notice-body" data-test="operation-approval-section-body">
         <p>{{ store.notice.target_summary || store.notice.kind }}</p>
-        <label v-if="canGrantGrace" class="notice-grace">
-          <input
-            v-model="grantGrace"
-            type="checkbox"
-            data-test="operation-approval-grace"
-            :disabled="store.loading"
-          >
-          <span>{{ t('settings.approvals.grantGrace', { minutes: graceMinutes }) }}</span>
-        </label>
-        <p v-if="store.error" class="notice-error" data-test="operation-approval-error">{{ store.error }}</p>
+        <!--
+          纳管审批的防伪要素：来源由 agent 从连接对端地址推导（不可伪造），配对码
+          由请求 ID 派生。自报名可以被填成真实桌面用的字符串，用户只能靠这两项
+          确认「弹出来的是不是我刚发起的那一条」。
+        -->
+        <p v-if="store.notice.request_origin" class="notice-origin" data-test="operation-approval-origin">
+          {{ t('settings.approvals.requestOrigin', { origin: store.notice.request_origin }) }}
+        </p>
+        <p v-if="store.notice.pairing_code" class="notice-pairing" data-test="operation-approval-pairing-code">
+          {{ t('settings.approvals.pairingCode', { code: store.notice.pairing_code }) }}
+        </p>
+        <p v-if="isConflict" class="notice-conflict" data-test="operation-approval-conflict">
+          {{ store.conflictNotice!.decidedBy
+            ? t('settings.approvals.decidedBy', { name: store.conflictNotice!.decidedBy })
+            : t('settings.approvals.decidedUnnamed') }}
+        </p>
+        <template v-else>
+          <label v-if="canGrantGrace" class="notice-grace">
+            <input
+              v-model="grantGrace"
+              type="checkbox"
+              data-test="operation-approval-grace"
+              :disabled="store.loading"
+            >
+            <span>{{ t('settings.approvals.grantGrace', { minutes: graceMinutes }) }}</span>
+          </label>
+          <p v-if="store.error" class="notice-error" data-test="operation-approval-error">{{ store.error }}</p>
+        </template>
       </section>
-      <footer class="notice-section notice-actions" data-test="operation-approval-section-actions">
+      <footer v-if="!isConflict" class="notice-section notice-actions" data-test="operation-approval-section-actions">
         <button
           type="button"
           class="notice-primary"
@@ -210,6 +234,26 @@ async function rejectNotice() {
   font-size: 12px;
   line-height: 1.4;
   word-break: break-word;
+}
+.notice-conflict {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.notice-origin {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.notice-pairing {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
 }
 @media (max-width: 560px) {
   .approval-notice {
