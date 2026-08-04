@@ -11,6 +11,7 @@
 //   - 不向日志写入配置路径或文件内容
 
 use crate::mcp_install::contracts::*;
+use crate::mcp_install::fs_port::LocalFs;
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{
     atomic_write_file, backup_path, install_skill_dir, remove_skill_dir, skill_status_for_target,
@@ -195,7 +196,9 @@ pub(super) fn manual_hook_result(target_path: Option<String>) -> IntegrationOper
 /// 返回：
 ///   - Skill 集成状态；路径仅出现在返回值中
 pub(super) fn skill_status(ctx: &ConnectorRuntimeContext, skill_path: &Path) -> IntegrationState {
+    // 本机连接器：文件操作统一经 LocalFs 端口（远端连接器由 Task 9 传入 RemoteAgentFs）。
     let (installed, matches, error) = skill_status_for_target(
+        &LocalFs,
         ctx.skill_source(),
         ctx.skill_source_error().map(str::to_string),
         skill_path,

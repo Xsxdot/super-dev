@@ -18,8 +18,10 @@
 pub mod compat;
 pub mod connectors;
 pub mod contracts;
+pub mod fs_port;
 pub mod registry;
 
+use fs_port::{BatchFile, ConnectorFs, LocalFs};
 use serde::Serialize;
 use serde_json::json;
 use std::ffi::{OsStr, OsString};
@@ -293,6 +295,21 @@ impl AgentKind {
     }
 }
 
+/// install_mcp_for_paths_with_skill 为单个 Agent 完成 MCP + skill + hook 安装。
+///
+/// 参数：
+///   - agent: Agent 标识，支持 claude-code、codex、cursor
+///   - home: 用于定位配置文件、skill 目录与 hook 配置的用户 HOME
+///   - mcp_path: superdev-mcp 可执行文件的绝对路径
+///   - skill_source: bundled superdev skill 源目录
+///   - skill_source_error: skill 源目录不可用时的错误说明
+///
+/// 返回：
+///   - MCP 配置、skill、session hook 三项的安装结果
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑；本函数是本机入口，固定绑定 LocalFs
+///   - skill 或 hook 失败不阻断 MCP 配置安装，失败原因回填到各自的结果里
 pub fn install_mcp_for_paths_with_skill(
     agent: &str,
     home: &Path,
@@ -300,21 +317,35 @@ pub fn install_mcp_for_paths_with_skill(
     skill_source: Option<&Path>,
     skill_source_error: Option<String>,
 ) -> Result<InstallOutcome, String> {
+    // 本机安装：文件操作统一经 LocalFs 端口；远端安装（Task 9）传入 RemoteAgentFs
+    // 复用下面完全相同的编排与方言逻辑。
+    let fs_port = &LocalFs;
     let kind = AgentKind::parse(agent)?;
     let entry = McpEntry {
         command: mcp_path.to_string_lossy().to_string(),
         agent_url: DEFAULT_AGENT_URL.to_string(),
     };
     let config_path = kind.config_path(home);
-    let config_outcome = match kind {
-        AgentKind::ClaudeCode | AgentKind::Cursor => {
-            install_json_kind_to_path(&config_path, &entry, agent)
-        }
-        AgentKind::Codex => install_toml_kind_to_path(&config_path, &entry, agent),
-    }?;
+    let merge: fn(Option<&str>, &McpEntry) -> Result<MergeResult, String> = match kind {
+        AgentKind::ClaudeCode | AgentKind::Cursor => merge_json_config,
+        AgentKind::Codex => merge_codex_config,
+    };
+    let config_outcome = install_to_path_with_fs(
+        fs_port,
+        &config_path,
+        &entry,
+        merge,
+        agent.to_string(),
+        kind.manual_config(&entry),
+    )?;
     let skill_target = kind.skill_dir(home);
     let skill = match skill_source {
-        Some(source) => install_skill_dir(source, &skill_target)
+        // skill 源目录恒在桌面端 resources，先在本地物化成文件集，再经端口写到目标机器。
+        Some(source) => materialize_skill_source(source)
+            .map_err(|err| format!("读取 skill 源目录失败: {err}"))
+            .and_then(|source_files| {
+                install_skill_dir_with_fs(fs_port, &source_files, &skill_target)
+            })
             .unwrap_or_else(|err| SkillInstallOutcome::failed(&skill_target, err)),
         None => SkillInstallOutcome::failed(
             &skill_target,
@@ -326,9 +357,9 @@ pub fn install_mcp_for_paths_with_skill(
     // hook 注册失败不阻断整体安装：降级后仍有 skill description 兜底触发。
     let hook_path = kind.session_hook_path(home);
     let session_hook = if skill_target.join("hooks").join("session-start").is_file() {
-        install_session_hook(kind, &hook_path, &skill_target).unwrap_or_else(|err| {
-            SessionHookOutcome::failed(&hook_path, kind.hook_needs_trust(), err)
-        })
+        install_session_hook_with_fs(fs_port, kind, &hook_path, &skill_target).unwrap_or_else(
+            |err| SessionHookOutcome::failed(&hook_path, kind.hook_needs_trust(), err),
+        )
     } else {
         SessionHookOutcome::failed(
             &hook_path,
@@ -532,6 +563,15 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
+/// port_path_exists 经端口判断路径是否存在。
+///
+/// 语义刻意与 `Path::exists()` 对齐：stat 失败（权限异常等）一律当作「不存在」，
+/// 而不是把一次探测升级成错误——改造前所有 `path.exists()` 判断都是这个语义，
+/// 收拢到端口后必须保持一致，否则本地安装会在边角场景里多出新的失败分支。
+fn port_path_exists(fs_port: &dyn ConnectorFs, path: &Path) -> bool {
+    fs_port.stat(path).map(|stat| stat.exists).unwrap_or(false)
+}
+
 fn merge_json_config(existing: Option<&str>, entry: &McpEntry) -> Result<MergeResult, String> {
     let mut root = match existing {
         Some(content) if !content.trim().is_empty() => {
@@ -593,18 +633,31 @@ fn merge_codex_config(existing: Option<&str>, entry: &McpEntry) -> Result<MergeR
     Ok(MergeResult { content, changed })
 }
 
+/// read_config_status 只读地解析某个 Agent 配置文件里的 SuperDev MCP 状态。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - kind: Agent 类型，决定按 JSON 还是 TOML 方言解析
+///   - path: 配置文件路径
+///
+/// 返回：
+///   - (配置文件是否存在, 是否已配置 superdev, command, agent_url, 错误说明)
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
 fn read_config_status(
+    fs_port: &dyn ConnectorFs,
     kind: AgentKind,
     path: &Path,
 ) -> (bool, bool, Option<String>, Option<String>, Option<String>) {
-    let existing = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+    let existing = match fs_port.read_optional(path) {
+        Ok(Some(content)) => content,
+        Ok(None) => {
             return (false, false, None, None, None);
         }
         Err(err) => {
             return (
-                path.exists(),
+                port_path_exists(fs_port, path),
                 false,
                 None,
                 None,
@@ -748,17 +801,17 @@ fn remove_codex_superdev_config(existing: Option<&str>) -> Result<MergeResult, S
 const TEMP_ARTIFACT_MARKER: &str = ".superdev-tmp-";
 static TEMP_ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+// TempArtifactKind 只剩临时文件一种：skill 临时目录端口化之后由
+// PortTempDirGuard 经 ConnectorFs 清理，不再走这里的本地 std::fs 清理。
 #[derive(Clone, Copy)]
 enum TempArtifactKind {
     File,
-    Directory,
 }
 
 impl TempArtifactKind {
     fn label(self) -> &'static str {
         match self {
             Self::File => "file",
-            Self::Directory => "directory",
         }
     }
 }
@@ -778,7 +831,6 @@ impl Drop for TempArtifactGuard {
     fn drop(&mut self) {
         let result = match self.kind {
             TempArtifactKind::File => fs::remove_file(&self.path),
-            TempArtifactKind::Directory => fs::remove_dir_all(&self.path),
         };
         if let Err(error) = result {
             if error.kind() != std::io::ErrorKind::NotFound {
@@ -852,21 +904,6 @@ fn apply_atomic_target_permissions(_target: &Path, _file: &fs::File) -> Result<(
     Ok(())
 }
 
-fn create_unique_temp_directory(target: &Path) -> Result<PathBuf, std::io::Error> {
-    for _ in 0..64 {
-        let temp = unique_temp_candidate(target);
-        match fs::create_dir(&temp) {
-            Ok(()) => return Ok(temp),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "无法分配唯一临时目录",
-    ))
-}
-
 #[cfg(unix)]
 fn sync_parent_directory(path: &Path) -> Result<(), std::io::Error> {
     fs::File::open(target_parent(path))?.sync_all()
@@ -928,23 +965,47 @@ fn atomic_write_file(target: &Path, content: &[u8], write_kind: &str) -> Result<
     result
 }
 
+/// uninstall_from_path 从配置文件里摘除 SuperDev 条目（本地默认绑定）。
+///
+/// 等价于 `uninstall_from_path_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有
+/// 调用点（含既有测试与 connectors 的测试夹具）零改动。
 fn uninstall_from_path(
     path: &Path,
     remove: fn(Option<&str>) -> Result<MergeResult, String>,
 ) -> Result<(bool, Option<String>), String> {
-    let existing = match fs::read_to_string(path) {
-        Ok(content) => Some(content),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok((false, None)),
+    uninstall_from_path_with_fs(&LocalFs, path, remove)
+}
+
+/// uninstall_from_path_with_fs 经端口从配置文件里摘除 SuperDev 条目。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - path: 配置文件路径
+///   - remove: 方言相关的删除变换（JSON / TOML）
+///
+/// 返回：
+///   - (是否确实发生删除, 备份文件路径)
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+///   - 文件不存在或没有 superdev 条目时不写盘，返回 (false, None)
+fn uninstall_from_path_with_fs(
+    fs_port: &dyn ConnectorFs,
+    path: &Path,
+    remove: fn(Option<&str>) -> Result<MergeResult, String>,
+) -> Result<(bool, Option<String>), String> {
+    let existing = match fs_port.read_optional(path) {
+        Ok(Some(content)) => Some(content),
+        Ok(None) => return Ok((false, None)),
         Err(err) => return Err(format!("读取配置文件失败: {err}")),
     };
     let removed = remove(existing.as_deref())?;
     if !removed.changed {
         return Ok((false, None));
     }
-    let backup = backup_path(path);
-    fs::copy(path, &backup).map_err(|err| format!("备份配置文件失败: {err}"))?;
-    atomic_write_file(path, removed.content.as_bytes(), "配置文件")?;
-    Ok((true, Some(backup.to_string_lossy().to_string())))
+    // 走到这里说明文件刚被读到过，write_atomic 必然备份并返回 Some。
+    let backup = fs_port.write_atomic(path, &removed.content, true)?;
+    Ok((true, backup))
 }
 
 pub(crate) fn install_json_kind_to_path(
@@ -975,6 +1036,10 @@ pub(crate) fn install_toml_kind_to_path(
     )
 }
 
+/// install_to_path 把 SuperDev MCP 条目合并进配置文件（本地默认绑定）。
+///
+/// 等价于 `install_to_path_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有调用点
+/// （含 connectors 的测试夹具）零改动。
 fn install_to_path(
     path: &Path,
     entry: &McpEntry,
@@ -982,11 +1047,36 @@ fn install_to_path(
     agent: String,
     manual_config: String,
 ) -> Result<ConfigInstallOutcome, String> {
-    let existing = match fs::read_to_string(path) {
-        Ok(content) => Some(content),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(format!("读取配置文件失败: {err}")),
-    };
+    install_to_path_with_fs(&LocalFs, path, entry, merge, agent, manual_config)
+}
+
+/// install_to_path_with_fs 经端口把 SuperDev MCP 条目合并进配置文件。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - path: 配置文件路径
+///   - entry: 要写入的 MCP 条目（命令 + Agent URL）
+///   - merge: 方言相关的合并变换（JSON / TOML）
+///   - agent: Agent 标识，仅用于回填结果
+///   - manual_config: 手动配置示例，仅用于回填结果
+///
+/// 返回：
+///   - 安装结果摘要（是否写入、是否已存在、备份路径等）
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+///   - 合并结果无变化时不写盘，也不产生备份
+fn install_to_path_with_fs(
+    fs_port: &dyn ConnectorFs,
+    path: &Path,
+    entry: &McpEntry,
+    merge: fn(Option<&str>, &McpEntry) -> Result<MergeResult, String>,
+    agent: String,
+    manual_config: String,
+) -> Result<ConfigInstallOutcome, String> {
+    let existing = fs_port
+        .read_optional(path)
+        .map_err(|err| format!("读取配置文件失败: {err}"))?;
     let merged = merge(existing.as_deref(), entry)?;
     if !merged.changed {
         return Ok(ConfigInstallOutcome {
@@ -999,16 +1089,11 @@ fn install_to_path(
         });
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| format!("创建配置目录失败: {err}"))?;
+        fs_port
+            .mkdir_all(parent)
+            .map_err(|err| format!("创建配置目录失败: {err}"))?;
     }
-    let backup_path = if path.exists() {
-        let backup = backup_path(path);
-        fs::copy(path, &backup).map_err(|err| format!("备份配置文件失败: {err}"))?;
-        Some(backup.to_string_lossy().to_string())
-    } else {
-        None
-    };
-    atomic_write_file(path, merged.content.as_bytes(), "配置文件")?;
+    let backup_path = fs_port.write_atomic(path, &merged.content, true)?;
     Ok(ConfigInstallOutcome {
         installed: true,
         already_present: false,
@@ -1019,12 +1104,50 @@ fn install_to_path(
     })
 }
 
+/// install_skill_dir 把 bundled skill 源目录安装到目标目录（本地默认绑定）。
+///
+/// 等价于「本地物化源目录 + `install_skill_dir_with_fs(&LocalFs, ..)`」；保留旧
+/// 签名是为了让既有调用点（connectors / 既有测试）零改动。
 fn install_skill_dir(source: &Path, target: &Path) -> Result<SkillInstallOutcome, String> {
-    install_skill_dir_with_ops(source, target, copy_dir_recursive, |temp, target| {
-        fs::rename(temp, target)
-    })
+    let source_files =
+        materialize_skill_source(source).map_err(|err| format!("读取 skill 源目录失败: {err}"))?;
+    install_skill_dir_with_fs(&LocalFs, &source_files, target)
 }
 
+/// install_skill_dir_with_fs 经端口把已物化的 skill 文件集安装到目标目录。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - source_files: 已在本地物化好的 skill 文件集（源永远在桌面端 resources）
+///   - target: 目标 skill 目录
+///
+/// 返回：
+///   - 安装结果摘要（是否写入、是否已一致、旧目录备份路径）
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+///   - 安装顺序为「临时目录 → 备份旧目录 → 改名替换」，替换失败会恢复旧目录
+fn install_skill_dir_with_fs(
+    fs_port: &dyn ConnectorFs,
+    source_files: &[BatchFile],
+    target: &Path,
+) -> Result<SkillInstallOutcome, String> {
+    install_skill_dir_core(
+        fs_port,
+        source_files,
+        target,
+        |temp| fs_port.write_batch(temp, source_files),
+        |from, to| fs_port.rename(from, to),
+    )
+}
+
+/// install_skill_dir_with_ops 保留「注入 copy/replace」的旧安装入口。
+///
+/// 这个缝在端口化之前就存在，唯一用途是让测试注入一个必然失败的 replace，
+/// 验证「备份 → 替换失败 → 恢复旧目录 → 清理临时目录」这条恢复链。端口化之后
+/// 生产路径已改走 install_skill_dir_with_fs，因此本函数只对测试可见；它与生产
+/// 路径共用同一个 install_skill_dir_core，注入的只是最外层两步文件动作。
+#[cfg(test)]
 fn install_skill_dir_with_ops<C, R>(
     source: &Path,
     target: &Path,
@@ -1036,11 +1159,46 @@ where
     R: FnOnce(&Path, &Path) -> Result<(), std::io::Error>,
 {
     let source_files =
-        collect_relative_files(source).map_err(|err| format!("读取 skill 源目录失败: {err}"))?;
+        materialize_skill_source(source).map_err(|err| format!("读取 skill 源目录失败: {err}"))?;
+    install_skill_dir_core(
+        &LocalFs,
+        &source_files,
+        target,
+        |temp| copy(source, temp),
+        |from, to| replace(from, to).map_err(|error| error.to_string()),
+    )
+}
+
+/// install_skill_dir_core 是 skill 目录安装的唯一实现。
+///
+/// 参数：
+///   - fs_port: 文件操作端口
+///   - source_files: 已物化的源文件集
+///   - target: 目标 skill 目录
+///   - copy_into_temp: 把源文件集写进临时目录（生产路径即 fs_port.write_batch）
+///   - replace: 把临时目录改名成目标目录（生产路径即 fs_port.rename）
+///
+/// 返回：
+///   - 安装结果摘要
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+///   - copy/replace 单独抽成参数只为保留既有的失败注入测试缝，生产路径两者都是端口调用
+fn install_skill_dir_core<C, R>(
+    fs_port: &dyn ConnectorFs,
+    source_files: &[BatchFile],
+    target: &Path,
+    copy_into_temp: C,
+    replace: R,
+) -> Result<SkillInstallOutcome, String>
+where
+    C: FnOnce(&Path) -> Result<(), String>,
+    R: FnOnce(&Path, &Path) -> Result<(), String>,
+{
     if source_files.is_empty() {
         return Err("skill 源目录为空".to_string());
     }
-    if target.exists() && directories_equal(source, target, &source_files)? {
+    if port_path_exists(fs_port, target) && skill_dir_matches(fs_port, source_files, target)? {
         return Ok(SkillInstallOutcome {
             installed: false,
             already_present: true,
@@ -1050,15 +1208,23 @@ where
         });
     }
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|err| format!("创建 skill 目录失败: {err}"))?;
+        fs_port
+            .mkdir_all(parent)
+            .map_err(|err| format!("创建 skill 目录失败: {err}"))?;
     }
-    let temp = create_unique_temp_directory(target)
+    // 临时目录名由客户端生成（进程号 + 纳秒 + 进程内自增计数器），两端通用；
+    // 端口只有 mkdir_all，没有「独占创建」原语，唯一性靠这三段组合保证。
+    let temp = unique_temp_candidate(target);
+    fs_port
+        .mkdir_all(&temp)
         .map_err(|error| format!("创建唯一 skill 临时目录失败: {error}"))?;
-    let _guard = TempArtifactGuard::new(temp.clone(), TempArtifactKind::Directory);
-    copy(source, &temp)?;
-    let backup = if target.exists() {
+    let mut guard = PortTempDirGuard::new(fs_port, temp.clone());
+    copy_into_temp(&temp)?;
+    let backup = if port_path_exists(fs_port, target) {
         let backup = backup_dir_path(target);
-        fs::rename(target, &backup).map_err(|err| format!("备份旧 skill 目录失败: {err}"))?;
+        fs_port
+            .rename(target, &backup)
+            .map_err(|err| format!("备份旧 skill 目录失败: {err}"))?;
         Some(backup)
     } else {
         None
@@ -1066,7 +1232,7 @@ where
     if let Err(error) = replace(&temp, target) {
         // 旧目录已经移动到备份位置；最终替换失败时必须先恢复它，避免用户看到半完成状态。
         if let Some(backup) = &backup {
-            if let Err(restore_error) = fs::rename(backup, target) {
+            if let Err(restore_error) = fs_port.rename(backup, target) {
                 return Err(format!(
                     "替换 skill 目录失败: {error}; 恢复旧 skill 目录失败: {restore_error}"
                 ));
@@ -1074,7 +1240,8 @@ where
         }
         return Err(format!("替换 skill 目录失败: {error}"));
     }
-    sync_parent_directory(target).map_err(|error| format!("同步 skill 目录失败: {error}"))?;
+    // 临时目录已被改名成目标目录，不再需要清理。
+    guard.disarm();
     let backup_path = backup.map(|path| path.to_string_lossy().to_string());
     Ok(SkillInstallOutcome {
         installed: true,
@@ -1085,18 +1252,71 @@ where
     })
 }
 
+/// PortTempDirGuard 在出错路径上经端口清理 skill 临时目录。
+///
+/// 端口化之前这里用的是直接调 std::fs 的 TempArtifactGuard；远端安装时临时目录
+/// 在远端机器上，只有经端口删除才有意义，因此清理动作必须跟着端口走。
+struct PortTempDirGuard<'a> {
+    fs_port: &'a dyn ConnectorFs,
+    path: PathBuf,
+    armed: bool,
+}
+
+impl<'a> PortTempDirGuard<'a> {
+    fn new(fs_port: &'a dyn ConnectorFs, path: PathBuf) -> Self {
+        Self {
+            fs_port,
+            path,
+            armed: true,
+        }
+    }
+
+    /// disarm 交出临时目录所有权（替换成功后调用），此后不再清理。
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PortTempDirGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Err(error) = self.fs_port.remove_dir_all(&self.path) {
+            tracing::warn!(
+                error = %error,
+                "failed to clean SuperDev temporary skill directory"
+            );
+        }
+    }
+}
+
+/// skill_status_for_target 只读地判断目标 skill 目录相对 bundled 源的状态。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - source: bundled skill 源目录（始终在桌面端本机）
+///   - source_error: 源目录不可用时的错误说明
+///   - target: 目标 skill 目录
+///
+/// 返回：
+///   - (目标是否存在, 是否与 bundled 源一致, 错误说明)
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑（源目录读取恒为本地）
 fn skill_status_for_target(
+    fs_port: &dyn ConnectorFs,
     source: Option<&Path>,
     source_error: Option<String>,
     target: &Path,
 ) -> (bool, Option<bool>, Option<String>) {
-    if !target.exists() {
+    if !port_path_exists(fs_port, target) {
         return (false, Some(false), source_error);
     }
     let Some(source) = source else {
         return (true, None, source_error);
     };
-    let source_files = match collect_relative_files(source) {
+    let source_files = match materialize_skill_source(source) {
         Ok(files) => files,
         Err(err) => {
             return (
@@ -1106,17 +1326,38 @@ fn skill_status_for_target(
             );
         }
     };
-    match directories_equal(source, target, &source_files) {
+    match skill_dir_matches(fs_port, &source_files, target) {
         Ok(equal) => (true, Some(equal), None),
         Err(err) => (true, None, Some(err)),
     }
 }
 
+/// remove_skill_dir 删除目标 skill 目录（本地默认绑定）。
+///
+/// 等价于 `remove_skill_dir_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有调用点
+/// （connectors / 既有测试）零改动。
 fn remove_skill_dir(target: &Path) -> Result<bool, String> {
-    if !target.exists() {
+    remove_skill_dir_with_fs(&LocalFs, target)
+}
+
+/// remove_skill_dir_with_fs 经端口删除目标 skill 目录。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - target: 目标 skill 目录
+///
+/// 返回：
+///   - 目录本来就不存在时为 false，确实删除时为 true
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+fn remove_skill_dir_with_fs(fs_port: &dyn ConnectorFs, target: &Path) -> Result<bool, String> {
+    if !port_path_exists(fs_port, target) {
         return Ok(false);
     }
-    fs::remove_dir_all(target).map_err(|err| format!("删除 skill 目录失败: {err}"))?;
+    fs_port
+        .remove_dir_all(target)
+        .map_err(|err| format!("删除 skill 目录失败: {err}"))?;
     Ok(true)
 }
 
@@ -1237,19 +1478,42 @@ fn merge_session_hook(
     })
 }
 
-// install_session_hook 将 SuperDev SessionStart hook 写入指定 Agent 的 settings 文件。
-// 沿用 MCP 配置一致的「备份 + 临时文件原子替换」策略；幂等：已存在则 already_present。
+/// install_session_hook 写入 SessionStart hook（本地默认绑定）。
+///
+/// 等价于 `install_session_hook_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有
+/// 调用点（connectors / 既有测试）零改动。
 fn install_session_hook(
     kind: AgentKind,
     hook_path: &Path,
     skill_dir: &Path,
 ) -> Result<SessionHookOutcome, String> {
+    install_session_hook_with_fs(&LocalFs, kind, hook_path, skill_dir)
+}
+
+/// install_session_hook_with_fs 经端口把 SuperDev SessionStart hook 写入 settings。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - kind: Agent 类型，决定事件名、matcher 与结构形态
+///   - hook_path: 该 Agent 存放 hook 的配置文件
+///   - skill_dir: 已安装的 skill 目录，用于生成 hook 命令绝对路径
+///
+/// 返回：
+///   - hook 安装结果（是否写入、是否已存在、备份路径、是否需用户手动信任）
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+///   - 沿用与 MCP 配置一致的「备份 + 临时文件原子替换」策略；幂等：已存在则 already_present
+fn install_session_hook_with_fs(
+    fs_port: &dyn ConnectorFs,
+    kind: AgentKind,
+    hook_path: &Path,
+    skill_dir: &Path,
+) -> Result<SessionHookOutcome, String> {
     let command = hook_command_for(skill_dir);
-    let existing = if hook_path.exists() {
-        Some(fs::read_to_string(hook_path).map_err(|err| format!("读取 hook 配置失败: {err}"))?)
-    } else {
-        None
-    };
+    let existing = fs_port
+        .read_optional(hook_path)
+        .map_err(|err| format!("读取 hook 配置失败: {err}"))?;
     let merged = merge_session_hook(existing.as_deref(), kind, &command)?;
     if !merged.changed {
         return Ok(SessionHookOutcome {
@@ -1262,16 +1526,11 @@ fn install_session_hook(
         });
     }
     if let Some(parent) = hook_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| format!("创建 hook 配置目录失败: {err}"))?;
+        fs_port
+            .mkdir_all(parent)
+            .map_err(|err| format!("创建 hook 配置目录失败: {err}"))?;
     }
-    let backup_path = if hook_path.exists() {
-        let backup = backup_path(hook_path);
-        fs::copy(hook_path, &backup).map_err(|err| format!("备份 hook 配置失败: {err}"))?;
-        Some(backup.to_string_lossy().to_string())
-    } else {
-        None
-    };
-    atomic_write_file(hook_path, merged.content.as_bytes(), "hook 配置文件")?;
+    let backup_path = fs_port.write_atomic(hook_path, &merged.content, true)?;
     Ok(SessionHookOutcome {
         installed: true,
         already_present: false,
@@ -1282,14 +1541,38 @@ fn install_session_hook(
     })
 }
 
-// remove_session_hook 从指定 Agent 的 settings 里精确摘除带 HOOK_MARKER 的 SuperDev hook 条目，
-// 不动用户的其它 hooks。返回是否确实移除了条目。
+/// remove_session_hook 摘除 SuperDev SessionStart hook（本地默认绑定）。
+///
+/// 等价于 `remove_session_hook_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有
+/// 调用点（既有测试）零改动。
 fn remove_session_hook(kind: AgentKind, hook_path: &Path) -> Result<bool, String> {
-    if !hook_path.exists() {
+    remove_session_hook_with_fs(&LocalFs, kind, hook_path)
+}
+
+/// remove_session_hook_with_fs 经端口精确摘除带 HOOK_MARKER 的 SuperDev hook 条目。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - kind: Agent 类型，决定读哪个事件数组
+///   - hook_path: 该 Agent 存放 hook 的配置文件
+///
+/// 返回：
+///   - 是否确实移除了条目
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+///   - 只摘除带 HOOK_MARKER 的条目，不动用户的其它 hooks
+fn remove_session_hook_with_fs(
+    fs_port: &dyn ConnectorFs,
+    kind: AgentKind,
+    hook_path: &Path,
+) -> Result<bool, String> {
+    let Some(content) = fs_port
+        .read_optional(hook_path)
+        .map_err(|err| format!("读取 hook 配置失败: {err}"))?
+    else {
         return Ok(false);
-    }
-    let content =
-        fs::read_to_string(hook_path).map_err(|err| format!("读取 hook 配置失败: {err}"))?;
+    };
     if content.trim().is_empty() {
         return Ok(false);
     }
@@ -1326,18 +1609,39 @@ fn remove_session_hook(kind: AgentKind, hook_path: &Path) -> Result<bool, String
     if arr.len() == before {
         return Ok(false);
     }
-    let backup = backup_path(hook_path);
-    fs::copy(hook_path, &backup).map_err(|err| format!("备份 hook 配置失败: {err}"))?;
     let out = serde_json::to_string_pretty(&root)
         .map_err(|err| format!("序列化配置失败(JSON): {err}"))?
         + "\n";
-    atomic_write_file(hook_path, out.as_bytes(), "hook 配置文件")?;
+    fs_port.write_atomic(hook_path, &out, true)?;
     Ok(true)
 }
 
-// session_hook_status 只读地判断指定 Agent 的 settings 里是否已装 SuperDev hook。
+/// session_hook_status 判断 settings 里是否已装 SuperDev hook（本地默认绑定）。
+///
+/// 等价于 `session_hook_status_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有
+/// 调用点（既有测试）零改动。
 fn session_hook_status(kind: AgentKind, hook_path: &Path) -> bool {
-    let Ok(content) = fs::read_to_string(hook_path) else {
+    session_hook_status_with_fs(&LocalFs, kind, hook_path)
+}
+
+/// session_hook_status_with_fs 经端口只读判断是否已装 SuperDev hook。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - kind: Agent 类型，决定读哪个事件数组
+///   - hook_path: 该 Agent 存放 hook 的配置文件
+///
+/// 返回：
+///   - 已存在带 HOOK_MARKER 的条目时为 true；读不到或解析失败一律为 false
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+fn session_hook_status_with_fs(
+    fs_port: &dyn ConnectorFs,
+    kind: AgentKind,
+    hook_path: &Path,
+) -> bool {
+    let Ok(Some(content)) = fs_port.read_optional(hook_path) else {
         return false;
     };
     if content.trim().is_empty() {
@@ -1564,31 +1868,103 @@ fn collect_relative_files_inner(
     Ok(())
 }
 
-fn directories_equal(
-    source: &Path,
+/// materialize_skill_source 把本地 skill 源目录读成可经端口批量写入的文件集。
+///
+/// 参数：
+///   - source: bundled skill 源目录（永远在桌面端本机 resources 里）
+///
+/// 返回：
+///   - 按相对路径稳定排序的文件集；错误为「裸原因串」，由调用方补业务前缀
+///
+/// 注意：
+///   - 源目录读取恒为本地操作，不经端口——远端安装时源仍在桌面端，只有目标在远端
+///   - executable 只保留「有没有执行位」，与远端 write-batch 端点的语义一致
+fn materialize_skill_source(source: &Path) -> Result<Vec<BatchFile>, String> {
+    let relatives = collect_relative_files(source).map_err(|err| err.to_string())?;
+    let mut files = Vec::with_capacity(relatives.len());
+    for rel_path in relatives {
+        let absolute = source.join(&rel_path);
+        let content =
+            fs::read(&absolute).map_err(|err| format!("{}: {err}", rel_path.display()))?;
+        files.push(BatchFile {
+            rel_path,
+            content,
+            executable: is_executable_file(&absolute),
+        });
+    }
+    Ok(files)
+}
+
+/// is_executable_file 判断本地文件是否带执行位（非 unix 平台恒为 false）。
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::metadata(path)
+        .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(_path: &Path) -> bool {
+    false
+}
+
+/// skill_dir_matches 判断目标 skill 目录内容是否与源文件集完全一致。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - source_files: 已物化的源文件集
+///   - target: 目标 skill 目录
+///
+/// 返回：
+///   - 文件清单与逐文件内容都一致时为 true
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+///   - 刻意用「逐文件读原文比对」而不是哈希：skill 是低频操作的小目录（十几个
+///     文本文件），逐文件读的成本可以忽略；而一旦引入哈希，本地 Rust 与远端 Go
+///     就各有一份哈希实现，任何一端的算法/换行/编码处理漂移都会让「已安装且一致」
+///     被误判成「需要重装」，反复覆盖用户目录。比对原文没有这个漂移面。
+fn skill_dir_matches(
+    fs_port: &dyn ConnectorFs,
+    source_files: &[BatchFile],
     target: &Path,
-    source_files: &[PathBuf],
 ) -> Result<bool, String> {
-    let target_files = match collect_relative_files(target) {
-        Ok(files) => files,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(err) => return Err(format!("读取目标 skill 目录失败: {err}")),
-    };
-    if source_files != target_files {
+    if !port_path_exists(fs_port, target) {
         return Ok(false);
     }
-    for relative in source_files {
-        let source_content = fs::read(source.join(relative))
-            .map_err(|err| format!("读取源 skill 文件失败 {}: {err}", relative.display()))?;
-        let target_content = fs::read(target.join(relative))
-            .map_err(|err| format!("读取目标 skill 文件失败 {}: {err}", relative.display()))?;
-        if source_content != target_content {
+    let target_files = fs_port
+        .list_relative_files(target)
+        .map_err(|err| format!("读取目标 skill 目录失败: {err}"))?;
+    let source_relatives = source_files
+        .iter()
+        .map(|file| file.rel_path.clone())
+        .collect::<Vec<_>>();
+    if source_relatives != target_files {
+        return Ok(false);
+    }
+    for file in source_files {
+        let target_content = fs_port
+            .read_optional(&target.join(&file.rel_path))
+            .map_err(|err| format!("读取目标 skill 文件失败 {}: {err}", file.rel_path.display()))?;
+        // 列表里刚出现过却读不到，说明目标目录正在被其它进程改动：按「不一致」
+        // 处理即可触发重装，不需要把一次竞态升级成安装失败。
+        let Some(target_content) = target_content else {
+            return Ok(false);
+        };
+        if target_content.as_bytes() != file.content.as_slice() {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
+/// copy_dir_recursive 递归复制目录。
+///
+/// 端口化之后生产路径的 skill 安装改走 `ConnectorFs::write_batch`，本函数只剩
+/// 既有失败注入测试在用（它需要一个「真的会复制」的 copy 实现）。
+#[cfg(test)]
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
     fs::create_dir_all(target).map_err(|err| format!("创建 skill 临时目录失败: {err}"))?;
     for entry in fs::read_dir(source).map_err(|err| format!("读取 skill 源目录失败: {err}"))?
@@ -1823,10 +2199,17 @@ pub fn mcp_status_for_kind(
     let config_path = kind.config_path(home);
     let skill_path = kind.skill_dir(home);
     let hook_path = kind.session_hook_path(home);
+    // 本机状态读取：文件操作统一经 LocalFs 端口；远端状态由 Task 9 传入
+    // RemoteAgentFs 复用同一套解析逻辑。
+    let fs_port = &LocalFs;
     let (config_exists, mcp_configured, mcp_command, agent_url, config_error) =
-        read_config_status(kind, &config_path);
-    let (skill_installed, skill_matches_bundled, skill_error) =
-        skill_status_for_target(skill_source, skill_source_error.clone(), &skill_path);
+        read_config_status(fs_port, kind, &config_path);
+    let (skill_installed, skill_matches_bundled, skill_error) = skill_status_for_target(
+        fs_port,
+        skill_source,
+        skill_source_error.clone(),
+        &skill_path,
+    );
     let hook_installed = session_hook_status(kind, &hook_path);
     McpStatus {
         agent,
@@ -2036,6 +2419,57 @@ pub fn detect_coding_agents(
 ) -> Result<Vec<CodingAgentAvailability>, String> {
     let context = connector_runtime_context(&app)?;
     Ok(compat::availability(registry.list(&context)))
+}
+
+/// skill_port_tests 覆盖 skill 安装端口化之后最容易静默失守的等价性属性。
+///
+/// 端口化之前 skill 目录是 `fs::copy` 逐文件复制（权限位随源文件继承）；改成
+/// 「批量写 + 按 executable 落权限」之后，一旦执行位丢失，SessionStart hook 会
+/// 静默不再触发——既有测试只比对内容，覆盖不到这一点，因此单独锁一条。
+#[cfg(test)]
+mod skill_port_tests {
+    use super::*;
+
+    #[test]
+    fn install_skill_dir_keeps_hook_scripts_executable_and_docs_readable() {
+        let dir = create_unique_test_dir("superdev-skill-port-test");
+        let source = dir.join("source");
+        let target = dir.join("target").join("superdev");
+        fs::create_dir_all(source.join("hooks")).expect("mkdir source hooks");
+        fs::write(source.join("SKILL.md"), "# SuperDev\n").expect("write skill doc");
+        let runner = source.join("hooks").join("run-hook.cmd");
+        fs::write(&runner, "#!/bin/sh\n").expect("write hook runner");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&runner, fs::Permissions::from_mode(0o755))
+                .expect("chmod hook runner");
+        }
+
+        let outcome = install_skill_dir(&source, &target).expect("install skill");
+
+        assert!(outcome.installed);
+        assert_eq!(
+            fs::read_to_string(target.join("hooks").join("run-hook.cmd")).expect("read hook"),
+            "#!/bin/sh\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode =
+                |path: PathBuf| fs::metadata(path).expect("metadata").permissions().mode() & 0o777;
+            assert_eq!(
+                mode(target.join("hooks").join("run-hook.cmd")),
+                0o755,
+                "hook 脚本必须保持可执行，否则 SessionStart hook 会静默失效"
+            );
+            assert_eq!(mode(target.join("SKILL.md")), 0o644);
+        }
+
+        // 装完立即复检必须判为「已一致」，否则每次状态查询都会触发重装。
+        let again = install_skill_dir(&source, &target).expect("install skill again");
+        assert!(again.already_present);
+    }
 }
 
 #[cfg(test)]
