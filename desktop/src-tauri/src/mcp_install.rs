@@ -33,6 +33,18 @@ use tauri::{AppHandle, Manager, State};
 
 const DEFAULT_AGENT_URL: &str = "http://127.0.0.1:57017";
 
+/// CONFIG_WRITE_LABEL 是 MCP 配置文件写入失败时出现在文案里的对象名词。
+///
+/// 这类名词是调用方的词汇（端口不知道自己在写哪一类业务文件），经
+/// `ConnectorFs::write_atomic` 的 label 参数传下去，让「备份配置文件失败」
+/// 「写入临时配置文件失败」这些改造前就有的文案保持不变。
+/// 第二波 connector 的 `connectors/common.rs` 直调 atomic_write_file 时用的是
+/// 同一个词，两族措辞必须一致，改这里请一并核对那边。
+const CONFIG_WRITE_LABEL: &str = "配置文件";
+
+/// HOOK_WRITE_LABEL 是 SessionStart hook 配置写入失败时的对象名词。
+const HOOK_WRITE_LABEL: &str = "hook 配置文件";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpEntry {
     pub command: String,
@@ -341,11 +353,7 @@ pub fn install_mcp_for_paths_with_skill(
     let skill_target = kind.skill_dir(home);
     let skill = match skill_source {
         // skill 源目录恒在桌面端 resources，先在本地物化成文件集，再经端口写到目标机器。
-        Some(source) => materialize_skill_source(source)
-            .map_err(|err| format!("读取 skill 源目录失败: {err}"))
-            .and_then(|source_files| {
-                install_skill_dir_with_fs(fs_port, &source_files, &skill_target)
-            })
+        Some(source) => install_skill_dir_from_source(fs_port, source, &skill_target)
             .unwrap_or_else(|err| SkillInstallOutcome::failed(&skill_target, err)),
         None => SkillInstallOutcome::failed(
             &skill_target,
@@ -356,7 +364,10 @@ pub fn install_mcp_for_paths_with_skill(
     // 因此仅在 skill 已就位（本次装好或先前已存在）时才注册 hook。
     // hook 注册失败不阻断整体安装：降级后仍有 skill description 兜底触发。
     let hook_path = kind.session_hook_path(home);
-    let session_hook = if skill_target.join("hooks").join("session-start").is_file() {
+    // hook 脚本是否就位必须查**目标机器**：远端安装时 skill 装在远端，直连本地
+    // fs 会读成桌面机的目录，从而对远端做出错误判断。
+    let hook_script = skill_target.join("hooks").join("session-start");
+    let session_hook = if port_path_is_file(fs_port, &hook_script) {
         install_session_hook_with_fs(fs_port, kind, &hook_path, &skill_target).unwrap_or_else(
             |err| SessionHookOutcome::failed(&hook_path, kind.hook_needs_trust(), err),
         )
@@ -570,6 +581,16 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
 /// 收拢到端口后必须保持一致，否则本地安装会在边角场景里多出新的失败分支。
 fn port_path_exists(fs_port: &dyn ConnectorFs, path: &Path) -> bool {
     fs_port.stat(path).map(|stat| stat.exists).unwrap_or(false)
+}
+
+/// port_path_is_file 经端口判断路径是否是普通文件。
+///
+/// 语义与 `Path::is_file()` 对齐：不存在、是目录、stat 失败一律为 false。
+fn port_path_is_file(fs_port: &dyn ConnectorFs, path: &Path) -> bool {
+    fs_port
+        .stat(path)
+        .map(|stat| stat.exists && !stat.is_dir)
+        .unwrap_or(false)
 }
 
 fn merge_json_config(existing: Option<&str>, entry: &McpEntry) -> Result<MergeResult, String> {
@@ -965,10 +986,11 @@ fn atomic_write_file(target: &Path, content: &[u8], write_kind: &str) -> Result<
     result
 }
 
-/// uninstall_from_path 从配置文件里摘除 SuperDev 条目（本地默认绑定）。
+/// uninstall_from_path 是 `uninstall_from_path_with_fs(&LocalFs, ..)` 的旧签名封装。
 ///
-/// 等价于 `uninstall_from_path_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有
-/// 调用点（含既有测试与 connectors 的测试夹具）零改动。
+/// **仅测试可见**：生产代码一律显式传端口，避免远端卸载误调本地绑定版本而静默
+/// 改到桌面机；保留它只是为了让既有测试与 connectors 的 cfg(test) 夹具零改动。
+#[cfg(test)]
 fn uninstall_from_path(
     path: &Path,
     remove: fn(Option<&str>) -> Result<MergeResult, String>,
@@ -1004,16 +1026,29 @@ fn uninstall_from_path_with_fs(
         return Ok((false, None));
     }
     // 走到这里说明文件刚被读到过，write_atomic 必然备份并返回 Some。
-    let backup = fs_port.write_atomic(path, &removed.content, true)?;
+    let backup = fs_port.write_atomic(path, &removed.content, true, CONFIG_WRITE_LABEL)?;
     Ok((true, backup))
 }
 
-pub(crate) fn install_json_kind_to_path(
+/// install_json_kind_to_path_with_fs 经端口写入 JSON 方言（Claude Code / Cursor）的 MCP 配置。
+///
+/// 参数：
+///   - fs_port: 文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - path / entry / agent: 配置路径、MCP 条目、Agent 标识
+///
+/// 返回：
+///   - MCP 配置安装结果摘要
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+pub(crate) fn install_json_kind_to_path_with_fs(
+    fs_port: &dyn ConnectorFs,
     path: &Path,
     entry: &McpEntry,
     agent: &str,
 ) -> Result<ConfigInstallOutcome, String> {
-    install_to_path(
+    install_to_path_with_fs(
+        fs_port,
         path,
         entry,
         merge_json_config,
@@ -1022,12 +1057,20 @@ pub(crate) fn install_json_kind_to_path(
     )
 }
 
-pub(crate) fn install_toml_kind_to_path(
+/// install_toml_kind_to_path_with_fs 经端口写入 TOML 方言（Codex）的 MCP 配置。
+///
+/// 参数与返回同 `install_json_kind_to_path_with_fs`，只是换成 Codex 的合并变换。
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+pub(crate) fn install_toml_kind_to_path_with_fs(
+    fs_port: &dyn ConnectorFs,
     path: &Path,
     entry: &McpEntry,
     agent: &str,
 ) -> Result<ConfigInstallOutcome, String> {
-    install_to_path(
+    install_to_path_with_fs(
+        fs_port,
         path,
         entry,
         merge_codex_config,
@@ -1036,10 +1079,24 @@ pub(crate) fn install_toml_kind_to_path(
     )
 }
 
-/// install_to_path 把 SuperDev MCP 条目合并进配置文件（本地默认绑定）。
+/// install_json_kind_to_path 是 `install_json_kind_to_path_with_fs(&LocalFs, ..)` 的旧签名封装。
 ///
-/// 等价于 `install_to_path_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有调用点
-/// （含 connectors 的测试夹具）零改动。
+/// **仅测试可见**：生产代码一律显式传端口，避免远端安装误调本地绑定版本而静默
+/// 写到桌面机；保留它只是为了让既有测试零改动。
+#[cfg(test)]
+pub(crate) fn install_json_kind_to_path(
+    path: &Path,
+    entry: &McpEntry,
+    agent: &str,
+) -> Result<ConfigInstallOutcome, String> {
+    install_json_kind_to_path_with_fs(&LocalFs, path, entry, agent)
+}
+
+/// install_to_path 是 `install_to_path_with_fs(&LocalFs, ..)` 的旧签名封装。
+///
+/// **仅测试可见**：理由同 `install_json_kind_to_path`；调用方是 connectors.rs 里
+/// 同样 `#[cfg(test)]` 的 StandardJsonConnector 夹具。
+#[cfg(test)]
 fn install_to_path(
     path: &Path,
     entry: &McpEntry,
@@ -1093,7 +1150,7 @@ fn install_to_path_with_fs(
             .mkdir_all(parent)
             .map_err(|err| format!("创建配置目录失败: {err}"))?;
     }
-    let backup_path = fs_port.write_atomic(path, &merged.content, true)?;
+    let backup_path = fs_port.write_atomic(path, &merged.content, true, CONFIG_WRITE_LABEL)?;
     Ok(ConfigInstallOutcome {
         installed: true,
         already_present: false,
@@ -1104,14 +1161,36 @@ fn install_to_path_with_fs(
     })
 }
 
-/// install_skill_dir 把 bundled skill 源目录安装到目标目录（本地默认绑定）。
+/// install_skill_dir_from_source 把 bundled skill 源目录经端口安装到目标目录。
 ///
-/// 等价于「本地物化源目录 + `install_skill_dir_with_fs(&LocalFs, ..)`」；保留旧
-/// 签名是为了让既有调用点（connectors / 既有测试）零改动。
-fn install_skill_dir(source: &Path, target: &Path) -> Result<SkillInstallOutcome, String> {
+/// 参数：
+///   - fs_port: 目标端文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - source: bundled skill 源目录（恒在桌面端本机，读取不经端口）
+///   - target: 目标 skill 目录（可能在远端机器上）
+///
+/// 返回：
+///   - 安装结果摘要
+///
+/// 注意：
+///   - 文件操作经 ConnectorFs 端口，本地/远端同一逻辑
+///   - 这是 connector 侧安装 skill 的常规入口：先本地物化，再经端口批量写
+fn install_skill_dir_from_source(
+    fs_port: &dyn ConnectorFs,
+    source: &Path,
+    target: &Path,
+) -> Result<SkillInstallOutcome, String> {
     let source_files =
         materialize_skill_source(source).map_err(|err| format!("读取 skill 源目录失败: {err}"))?;
-    install_skill_dir_with_fs(&LocalFs, &source_files, target)
+    install_skill_dir_with_fs(fs_port, &source_files, target)
+}
+
+/// install_skill_dir 是 `install_skill_dir_from_source(&LocalFs, ..)` 的旧签名封装。
+///
+/// **仅测试可见**：生产代码一律显式传端口，避免远端安装误调本地绑定版本而静默
+/// 写到桌面机；保留它只是为了让既有测试零改动。
+#[cfg(test)]
+fn install_skill_dir(source: &Path, target: &Path) -> Result<SkillInstallOutcome, String> {
+    install_skill_dir_from_source(&LocalFs, source, target)
 }
 
 /// install_skill_dir_with_fs 经端口把已物化的 skill 文件集安装到目标目录。
@@ -1332,10 +1411,10 @@ fn skill_status_for_target(
     }
 }
 
-/// remove_skill_dir 删除目标 skill 目录（本地默认绑定）。
+/// remove_skill_dir 是 `remove_skill_dir_with_fs(&LocalFs, ..)` 的旧签名封装。
 ///
-/// 等价于 `remove_skill_dir_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有调用点
-/// （connectors / 既有测试）零改动。
+/// **仅测试可见**：理由同 `install_skill_dir`。
+#[cfg(test)]
 fn remove_skill_dir(target: &Path) -> Result<bool, String> {
     remove_skill_dir_with_fs(&LocalFs, target)
 }
@@ -1478,10 +1557,10 @@ fn merge_session_hook(
     })
 }
 
-/// install_session_hook 写入 SessionStart hook（本地默认绑定）。
+/// install_session_hook 是 `install_session_hook_with_fs(&LocalFs, ..)` 的旧签名封装。
 ///
-/// 等价于 `install_session_hook_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有
-/// 调用点（connectors / 既有测试）零改动。
+/// **仅测试可见**：理由同 `install_skill_dir`。
+#[cfg(test)]
 fn install_session_hook(
     kind: AgentKind,
     hook_path: &Path,
@@ -1530,7 +1609,7 @@ fn install_session_hook_with_fs(
             .mkdir_all(parent)
             .map_err(|err| format!("创建 hook 配置目录失败: {err}"))?;
     }
-    let backup_path = fs_port.write_atomic(hook_path, &merged.content, true)?;
+    let backup_path = fs_port.write_atomic(hook_path, &merged.content, true, HOOK_WRITE_LABEL)?;
     Ok(SessionHookOutcome {
         installed: true,
         already_present: false,
@@ -1541,10 +1620,10 @@ fn install_session_hook_with_fs(
     })
 }
 
-/// remove_session_hook 摘除 SuperDev SessionStart hook（本地默认绑定）。
+/// remove_session_hook 是 `remove_session_hook_with_fs(&LocalFs, ..)` 的旧签名封装。
 ///
-/// 等价于 `remove_session_hook_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有
-/// 调用点（既有测试）零改动。
+/// **仅测试可见**：理由同 `install_skill_dir`。
+#[cfg(test)]
 fn remove_session_hook(kind: AgentKind, hook_path: &Path) -> Result<bool, String> {
     remove_session_hook_with_fs(&LocalFs, kind, hook_path)
 }
@@ -1612,14 +1691,14 @@ fn remove_session_hook_with_fs(
     let out = serde_json::to_string_pretty(&root)
         .map_err(|err| format!("序列化配置失败(JSON): {err}"))?
         + "\n";
-    fs_port.write_atomic(hook_path, &out, true)?;
+    fs_port.write_atomic(hook_path, &out, true, HOOK_WRITE_LABEL)?;
     Ok(true)
 }
 
-/// session_hook_status 判断 settings 里是否已装 SuperDev hook（本地默认绑定）。
+/// session_hook_status 是 `session_hook_status_with_fs(&LocalFs, ..)` 的旧签名封装。
 ///
-/// 等价于 `session_hook_status_with_fs(&LocalFs, ..)`；保留旧签名是为了让既有
-/// 调用点（既有测试）零改动。
+/// **仅测试可见**：理由同 `install_skill_dir`。
+#[cfg(test)]
 fn session_hook_status(kind: AgentKind, hook_path: &Path) -> bool {
     session_hook_status_with_fs(&LocalFs, kind, hook_path)
 }
@@ -2210,7 +2289,7 @@ pub fn mcp_status_for_kind(
         skill_source_error.clone(),
         &skill_path,
     );
-    let hook_installed = session_hook_status(kind, &hook_path);
+    let hook_installed = session_hook_status_with_fs(fs_port, kind, &hook_path);
     McpStatus {
         agent,
         agent_installed: availability.is_some(),
@@ -2244,18 +2323,23 @@ pub fn mcp_status_for_kind(
 ///   - 只删除 superdev 这一项 MCP server，不删除其他 MCP server
 ///   - 配置文件变更前会先备份原文件
 pub fn uninstall_mcp_for_paths(agent: &str, home: &Path) -> Result<UninstallOutcome, String> {
+    // 本机卸载：文件操作统一经 LocalFs 端口；远端卸载（Task 9）传入 RemoteAgentFs
+    // 复用下面完全相同的编排。
+    let fs_port = &LocalFs;
     let kind = AgentKind::parse(agent)?;
     let config_path = kind.config_path(home);
     let (removed_config, config_backup_path) = match kind {
         AgentKind::ClaudeCode | AgentKind::Cursor => {
-            uninstall_from_path(&config_path, remove_json_superdev_config)?
+            uninstall_from_path_with_fs(fs_port, &config_path, remove_json_superdev_config)?
         }
-        AgentKind::Codex => uninstall_from_path(&config_path, remove_codex_superdev_config)?,
+        AgentKind::Codex => {
+            uninstall_from_path_with_fs(fs_port, &config_path, remove_codex_superdev_config)?
+        }
     };
     let skill_path = kind.skill_dir(home);
-    let removed_skill = remove_skill_dir(&skill_path)?;
+    let removed_skill = remove_skill_dir_with_fs(fs_port, &skill_path)?;
     let hook_path = kind.session_hook_path(home);
-    let removed_hook = remove_session_hook(kind, &hook_path)?;
+    let removed_hook = remove_session_hook_with_fs(fs_port, kind, &hook_path)?;
     Ok(UninstallOutcome {
         agent: kind.label().to_string(),
         config_path: config_path.to_string_lossy().to_string(),
@@ -2469,6 +2553,56 @@ mod skill_port_tests {
         // 装完立即复检必须判为「已一致」，否则每次状态查询都会触发重装。
         let again = install_skill_dir(&source, &target).expect("install skill again");
         assert!(again.already_present);
+    }
+
+    /// bundled skill 资产必须落在端口能无损搬运的范围内。
+    ///
+    /// 这条是**守卫**，不是等价性证明：`BatchFile` 只带 executable 一个布尔量
+    /// （远端 write-batch 端点同样只收这一个量），所以安装产物的权限恒为
+    /// 0644/0755。只要 bundled 资产本身也只有这两种权限，产物就与改造前
+    /// `fs::copy` 继承源权限的结果逐位相同；一旦有人塞进 0600（会被放宽成
+    /// 0644）、0700（会被判成可执行并放宽成 0755）或 0444（会被放宽成 0644）
+    /// 的文件，等价性就断了——那时红的必须是这条测试，而不是用户的权限位。
+    ///
+    /// 同理，等价性检查经 `ConnectorFs::read_optional` 读 UTF-8 文本；一旦
+    /// bundled skill 里出现非 UTF-8 资产，首次安装之后每次状态查询与重装都会
+    /// 报「读取目标 skill 文件失败」。这里一并守住。
+    #[test]
+    fn bundled_skill_assets_stay_within_what_the_port_can_carry() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("skills")
+            .join("superdev");
+        let files = collect_relative_files(&root).expect("collect bundled skill files");
+        assert!(!files.is_empty(), "bundled skill 目录不应为空");
+
+        for relative in &files {
+            let absolute = root.join(relative);
+            let bytes = fs::read(&absolute)
+                .unwrap_or_else(|err| panic!("read {}: {err}", relative.display()));
+            assert!(
+                std::str::from_utf8(&bytes).is_ok(),
+                "bundled skill 资产必须是 UTF-8，否则安装后每次状态查询都会报读取失败: {}",
+                relative.display()
+            );
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                let mode = fs::metadata(&absolute)
+                    .unwrap_or_else(|err| panic!("stat {}: {err}", relative.display()))
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert!(
+                    mode == 0o644 || mode == 0o755,
+                    "bundled skill 资产权限必须是 0644 或 0755（端口只搬运 executable 一个布尔量，\
+                     其它权限会在安装时被改写）: {} 当前 {mode:o}",
+                    relative.display()
+                );
+            }
+        }
     }
 }
 

@@ -12,12 +12,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// LOCAL_WRITE_KIND 是 LocalFs 传给 atomic_write_file 的写入种类标签。
+/// BATCH_WRITE_LABEL 是批量写入时落到错误文案里的标签。
 ///
-/// 端口本身不知道自己在写「配置文件」还是「hook 配置文件」——那是调用方的
-/// 方言知识，不能泄漏进端口。因此本地实现统一用中性标签，具体是哪一类文件由
-/// 调用方在自己的日志/错误上下文里体现。
-const LOCAL_WRITE_KIND: &str = "文件";
+/// 批量写的调用方只有 skill 目录安装一处，失败文案本来就是端口化之后新增的，
+/// 不存在需要复原的旧文案，因此用固定中性词而不再多加一个参数。
+const BATCH_WRITE_LABEL: &str = "文件";
 
 /// FsStat 描述一个路径的存在性与类型。
 ///
@@ -63,11 +62,19 @@ pub trait ConnectorFs {
     ///
     /// 返回备份文件路径（未备份时为 None）。备份命名规则由 backup_path 决定，
     /// 两端必须逐字节一致，否则同一台机器上本地装与远端装会留下两套备份名。
+    ///
+    /// label 是**这次写的是什么文件**的中性名词（如「配置文件」「hook 配置文件」），
+    /// 由实现拼进自己产出的错误串。它存在的唯一理由是：一次 write_atomic 内部含
+    /// 「备份 → 写临时文件 → 权限 → flush → sync → 替换 → 同步父目录」七步，失败时
+    /// 只回一个字符串，调用方无从判断是哪一步，也就无法在外层补出「备份配置文件失败」
+    /// 这种改造前就有的、用户看得懂的文案。**不要因为觉得它多余而删掉**——删掉会让
+    /// 所有写失败退化成不带对象的通用报错，且同一产品里不同 connector 的措辞会分叉。
     fn write_atomic(
         &self,
         path: &Path,
         content: &str,
         backup: bool,
+        label: &str,
     ) -> Result<Option<String>, String>;
 
     /// mkdir_all 递归创建目录；已存在视为成功。
@@ -120,17 +127,18 @@ impl ConnectorFs for LocalFs {
         path: &Path,
         content: &str,
         backup: bool,
+        label: &str,
     ) -> Result<Option<String>, String> {
         // 只有目标已存在时才有旧内容可备份；与改造前 install_to_path /
         // install_session_hook 里的 `if path.exists()` 判断保持同一语义。
         let backup_path = if backup && path.exists() {
             let backup = super::backup_path(path);
-            fs::copy(path, &backup).map_err(|error| format!("备份文件失败: {error}"))?;
+            fs::copy(path, &backup).map_err(|error| format!("备份{label}失败: {error}"))?;
             Some(backup.to_string_lossy().to_string())
         } else {
             None
         };
-        super::atomic_write_file(path, content.as_bytes(), LOCAL_WRITE_KIND)?;
+        super::atomic_write_file(path, content.as_bytes(), label)?;
         Ok(backup_path)
     }
 
@@ -150,7 +158,7 @@ impl ConnectorFs for LocalFs {
                     format!("创建文件目录失败 {}: {error}", file.rel_path.display())
                 })?;
             }
-            super::atomic_write_file(&target, &file.content, LOCAL_WRITE_KIND)?;
+            super::atomic_write_file(&target, &file.content, BATCH_WRITE_LABEL)?;
             apply_batch_permissions(&target, file.executable)?;
         }
         Ok(())
@@ -232,7 +240,7 @@ mod tests {
         fs::write(&target, "old").expect("seed target");
 
         let backup = LocalFs
-            .write_atomic(&target, "new", true)
+            .write_atomic(&target, "new", true, "配置文件")
             .expect("write atomic");
 
         let backup = backup.expect("existing target must be backed up");
@@ -250,11 +258,27 @@ mod tests {
         let target = dir.join("fresh.json");
 
         let backup = LocalFs
-            .write_atomic(&target, "created", true)
+            .write_atomic(&target, "created", true, "配置文件")
             .expect("write atomic");
 
         assert_eq!(backup, None);
         assert_eq!(fs::read_to_string(&target).expect("read target"), "created");
+    }
+
+    #[test]
+    fn write_atomic_puts_the_label_into_failure_messages() {
+        let dir = temp_dir();
+        // 父目录不存在 → 连临时文件都建不出来，走 atomic_write_file 的失败分支。
+        let target = dir.join("missing-parent").join("config.json");
+
+        let error = LocalFs
+            .write_atomic(&target, "{}\n", true, "配置文件")
+            .expect_err("missing parent must fail");
+
+        assert!(
+            error.contains("配置文件"),
+            "写失败文案必须带上调用方给的对象名词，否则用户只看到通用报错: {error}"
+        );
     }
 
     #[test]
@@ -264,7 +288,7 @@ mod tests {
         fs::write(&target, "old").expect("seed target");
 
         let backup = LocalFs
-            .write_atomic(&target, "new", false)
+            .write_atomic(&target, "new", false, "配置文件")
             .expect("write atomic");
 
         assert_eq!(backup, None);

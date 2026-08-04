@@ -12,6 +12,7 @@ mod opencode;
 mod process;
 
 use super::contracts::*;
+use super::fs_port::LocalFs;
 use super::registry::*;
 use super::AgentKind;
 #[cfg(test)]
@@ -19,10 +20,12 @@ use super::{
     executable_file_names, install_to_path, merge_json_config, remove_json_superdev_config,
     uninstall_from_path,
 };
+// 一律用带 `_with_fs` 的端口版本并显式传 LocalFs：不带后缀的同名函数只对测试可见，
+// 生产代码里「忘记传端口」会是编译错误而不是静默写到本机。
 use super::{
-    install_hint_for_paths, install_json_kind_to_path, install_mcp_for_paths_with_skill,
-    install_session_hook, install_skill_dir, install_toml_kind_to_path, uninstall_mcp_for_paths,
-    McpEntry, DEFAULT_AGENT_URL,
+    install_hint_for_paths, install_json_kind_to_path_with_fs, install_mcp_for_paths_with_skill,
+    install_session_hook_with_fs, install_skill_dir_from_source, install_toml_kind_to_path_with_fs,
+    uninstall_mcp_for_paths, McpEntry, DEFAULT_AGENT_URL,
 };
 use std::sync::Arc;
 
@@ -227,7 +230,7 @@ impl AgentConnector for BuiltInConnector {
             if state.mcp_configured && request.capabilities.contains(&IntegrationCapability::Skill)
             {
                 match ctx.skill_source() {
-                    Some(src) => match install_skill_dir(src, &skill_path) {
+                    Some(src) => match install_skill_dir_from_source(&LocalFs, src, &skill_path) {
                         Ok(v) => {
                             skill_result = if v.installed {
                                 IntegrationResult::Installed
@@ -263,7 +266,7 @@ impl AgentConnector for BuiltInConnector {
                     .capabilities
                     .contains(&IntegrationCapability::SessionHook)
             {
-                match install_session_hook(self.kind, &hook_path, &skill_path) {
+                match install_session_hook_with_fs(&LocalFs, self.kind, &hook_path, &skill_path) {
                     Ok(v) => {
                         hook_result = if v.needs_trust {
                             IntegrationResult::NeedsAction
@@ -337,12 +340,18 @@ impl AgentConnector for BuiltInConnector {
                 agent_url: DEFAULT_AGENT_URL.into(),
             };
             let config = match self.kind {
-                AgentKind::ClaudeCode | AgentKind::Cursor => {
-                    install_json_kind_to_path(&config_path, &entry, self.kind.label())
-                }
-                AgentKind::Codex => {
-                    install_toml_kind_to_path(&config_path, &entry, self.kind.label())
-                }
+                AgentKind::ClaudeCode | AgentKind::Cursor => install_json_kind_to_path_with_fs(
+                    &LocalFs,
+                    &config_path,
+                    &entry,
+                    self.kind.label(),
+                ),
+                AgentKind::Codex => install_toml_kind_to_path_with_fs(
+                    &LocalFs,
+                    &config_path,
+                    &entry,
+                    self.kind.label(),
+                ),
             };
             let (mcp_result, mcp_backup, mcp_msg) = match config {
                 Ok(v) => (
@@ -366,7 +375,7 @@ impl AgentConnector for BuiltInConnector {
                 (IntegrationResult::Skipped, None, None)
             } else if request.capabilities.contains(&IntegrationCapability::Skill) {
                 match ctx.skill_source() {
-                    Some(src) => match install_skill_dir(src, &skill_path) {
+                    Some(src) => match install_skill_dir_from_source(&LocalFs, src, &skill_path) {
                         Ok(v) => (
                             if v.installed {
                                 IntegrationResult::Installed
@@ -394,7 +403,7 @@ impl AgentConnector for BuiltInConnector {
                 .capabilities
                 .contains(&IntegrationCapability::SessionHook)
             {
-                match install_session_hook(self.kind, &hook_path, &skill_path) {
+                match install_session_hook_with_fs(&LocalFs, self.kind, &hook_path, &skill_path) {
                     Ok(v) => (
                         if v.needs_trust {
                             IntegrationResult::NeedsAction

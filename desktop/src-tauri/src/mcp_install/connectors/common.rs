@@ -13,9 +13,11 @@
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::fs_port::LocalFs;
 use crate::mcp_install::registry::*;
+// 一律用带 `_with_fs` / `_from_source` 的端口版本并显式传 LocalFs：不带后缀的同名
+// 函数只对测试可见，生产代码里「忘记传端口」会是编译错误而不是静默写到本机。
 use crate::mcp_install::{
-    atomic_write_file, backup_path, install_skill_dir, remove_skill_dir, skill_status_for_target,
-    McpEntry, MergeResult, SkillInstallOutcome, DEFAULT_AGENT_URL,
+    atomic_write_file, backup_path, install_skill_dir_from_source, remove_skill_dir_with_fs,
+    skill_status_for_target, McpEntry, MergeResult, SkillInstallOutcome, DEFAULT_AGENT_URL,
 };
 use std::fs;
 use std::io;
@@ -241,7 +243,7 @@ pub(super) fn install_skill(
 ) -> IntegrationOperationResult {
     let target = skill_path.to_string_lossy().into_owned();
     match ctx.skill_source() {
-        Some(source) => match install_skill_dir(source, skill_path) {
+        Some(source) => match install_skill_dir_from_source(&LocalFs, source, skill_path) {
             Ok(outcome) => skill_outcome_to_result(outcome),
             Err(error) => integration_result(
                 IntegrationCapability::Skill,
@@ -270,7 +272,7 @@ pub(super) fn install_skill(
 ///   - 已删除时为 Installed（表示卸载变更），不存在时为 AlreadyPresent 的语义用 Skipped
 pub(super) fn uninstall_skill(skill_path: &Path) -> IntegrationOperationResult {
     let target = skill_path.to_string_lossy().into_owned();
-    match remove_skill_dir(skill_path) {
+    match remove_skill_dir_with_fs(&LocalFs, skill_path) {
         Ok(true) => integration_result(
             IntegrationCapability::Skill,
             IntegrationResult::Installed,
