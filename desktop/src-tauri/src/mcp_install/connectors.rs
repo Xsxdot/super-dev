@@ -82,6 +82,164 @@ fn descriptor(id: &str, name: &str, built_in: bool, standard: bool) -> AgentConn
     .expect("内置连接器描述符必须通过契约校验")
 }
 
+/// built_in_install_outcome 把内置方言的 `InstallOutcome` 映射成统一契约结果。
+///
+/// 参数：
+///   - connector_id: 开放字符串连接器 ID
+///   - operation: 本次操作（install / update）
+///   - old: MCP + skill + hook 三项的安装结果
+///   - manual: 手动配置指引（失败时供用户兜底）
+///
+/// 返回：
+///   - 聚合后的连接器操作结果
+///
+/// 注意：
+///   - 本机（`BuiltInConnector::install`）与远端（`remote_install`）共用这一份映射：
+///     两边各写一份的话，同一件事在两条路径上的 result/message 会悄悄分叉
+pub(crate) fn built_in_install_outcome(
+    connector_id: &str,
+    operation: ConnectorOperation,
+    old: crate::mcp_install::InstallOutcome,
+    manual: ConnectorManualInstructions,
+) -> Result<ConnectorOperationOutcome, ConnectorError> {
+    let map = |cap, result, path: String, backup: Option<String>, msg: Option<String>| {
+        IntegrationOperationResult {
+            capability: cap,
+            result,
+            target_path: Some(path),
+            backup_path: backup,
+            message: msg,
+        }
+    };
+    let skill_result = if old.skill.error.is_some() {
+        IntegrationResult::Failed
+    } else if old.skill.installed {
+        IntegrationResult::Installed
+    } else {
+        IntegrationResult::AlreadyPresent
+    };
+    let hook_needs_trust = old.session_hook.needs_trust;
+    let hook_message = if hook_needs_trust {
+        Some("需要在 Codex 中信任 hook".to_string())
+    } else {
+        old.session_hook.error.clone()
+    };
+    let hook_result = if hook_needs_trust {
+        IntegrationResult::NeedsAction
+    } else if old.session_hook.error.is_some() {
+        IntegrationResult::Failed
+    } else if old.session_hook.installed {
+        IntegrationResult::Installed
+    } else {
+        IntegrationResult::AlreadyPresent
+    };
+    aggregate_connector_result(
+        connector_id.into(),
+        operation,
+        vec![
+            map(
+                IntegrationCapability::Mcp,
+                if old.installed {
+                    IntegrationResult::Installed
+                } else {
+                    IntegrationResult::AlreadyPresent
+                },
+                old.config_path,
+                old.backup_path,
+                None,
+            ),
+            map(
+                IntegrationCapability::Skill,
+                skill_result,
+                old.skill.target_path,
+                old.skill.backup_path,
+                old.skill.error,
+            ),
+            map(
+                IntegrationCapability::SessionHook,
+                hook_result,
+                old.session_hook.config_path,
+                old.session_hook.backup_path,
+                hook_message,
+            ),
+        ],
+        Some(manual),
+        true,
+        Some("安装完成".into()),
+    )
+    .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"))
+}
+
+/// built_in_uninstall_outcome 把内置方言的 `UninstallOutcome` 映射成统一契约结果。
+///
+/// 参数：
+///   - connector_id: 开放字符串连接器 ID
+///   - o: 配置 / skill / hook 三项的删除结果
+///
+/// 返回：
+///   - 连接器卸载结果；三项全未变更时为 Unchanged
+///
+/// 注意：
+///   - 与 `built_in_install_outcome` 同理，本机与远端共用，避免措辞分叉
+pub(crate) fn built_in_uninstall_outcome(
+    connector_id: &str,
+    o: crate::mcp_install::UninstallOutcome,
+) -> ConnectorOperationOutcome {
+    let mk = |c, r, p, b| IntegrationOperationResult {
+        capability: c,
+        result: r,
+        target_path: Some(p),
+        backup_path: b,
+        message: (r == IntegrationResult::Installed).then(|| "已移除".into()),
+    };
+    let integrations = vec![
+        mk(
+            IntegrationCapability::Mcp,
+            if o.removed_config {
+                IntegrationResult::Installed
+            } else {
+                IntegrationResult::Skipped
+            },
+            o.config_path,
+            o.config_backup_path,
+        ),
+        mk(
+            IntegrationCapability::Skill,
+            if o.removed_skill {
+                IntegrationResult::Installed
+            } else {
+                IntegrationResult::Skipped
+            },
+            o.skill_path,
+            None,
+        ),
+        mk(
+            IntegrationCapability::SessionHook,
+            if o.removed_hook {
+                IntegrationResult::Installed
+            } else {
+                IntegrationResult::Skipped
+            },
+            o.hook_config_path,
+            None,
+        ),
+    ];
+    let changed = o.removed_config || o.removed_skill || o.removed_hook;
+    ConnectorOperationOutcome {
+        connector_id: connector_id.into(),
+        operation: ConnectorOperation::Uninstall,
+        result: if changed {
+            ConnectorResult::Success
+        } else {
+            ConnectorResult::Unchanged
+        },
+        integrations,
+        manual_instructions: None,
+        requires_restart: changed,
+        message: Some("卸载完成".into()),
+    }
+}
+
 /// BuiltInConnector 代表一个受支持的内置 Agent 方言。
 pub struct BuiltInConnector {
     descriptor: AgentConnectorDescriptor,
@@ -516,72 +674,12 @@ impl AgentConnector for BuiltInConnector {
                 });
             }
         };
-        let map = |cap, result, path: String, backup: Option<String>, msg: Option<String>| {
-            IntegrationOperationResult {
-                capability: cap,
-                result,
-                target_path: Some(path),
-                backup_path: backup,
-                message: msg,
-            }
-        };
-        let skill_result = if old.skill.error.is_some() {
-            IntegrationResult::Failed
-        } else if old.skill.installed {
-            IntegrationResult::Installed
-        } else {
-            IntegrationResult::AlreadyPresent
-        };
-        let hook_needs_trust = old.session_hook.needs_trust;
-        let hook_message = if hook_needs_trust {
-            Some("需要在 Codex 中信任 hook".to_string())
-        } else {
-            old.session_hook.error.clone()
-        };
-        let hook_result = if hook_needs_trust {
-            IntegrationResult::NeedsAction
-        } else if old.session_hook.error.is_some() {
-            IntegrationResult::Failed
-        } else if old.session_hook.installed {
-            IntegrationResult::Installed
-        } else {
-            IntegrationResult::AlreadyPresent
-        };
-        let outcome = aggregate_connector_result(
-            self.descriptor.id().into(),
+        let outcome = built_in_install_outcome(
+            self.descriptor.id(),
             request.operation,
-            vec![
-                map(
-                    IntegrationCapability::Mcp,
-                    if old.installed {
-                        IntegrationResult::Installed
-                    } else {
-                        IntegrationResult::AlreadyPresent
-                    },
-                    old.config_path,
-                    old.backup_path,
-                    None,
-                ),
-                map(
-                    IntegrationCapability::Skill,
-                    skill_result,
-                    old.skill.target_path,
-                    old.skill.backup_path,
-                    old.skill.error,
-                ),
-                map(
-                    IntegrationCapability::SessionHook,
-                    hook_result,
-                    old.session_hook.config_path,
-                    old.session_hook.backup_path,
-                    hook_message,
-                ),
-            ],
-            Some(self.manual_instructions(ctx)?),
-            true,
-            Some("安装完成".into()),
-        )
-        .map_err(|_| ConnectorError::new("aggregate_failed", "结果聚合失败"))?;
+            old,
+            self.manual_instructions(ctx)?,
+        )?;
         tracing::info!(connector_id=self.descriptor.id(), operation=?request.operation, result=?outcome.result, duration_ms=started.elapsed().as_millis() as u64, "built-in connector install finished");
         Ok(outcome)
     }
@@ -591,59 +689,7 @@ impl AgentConnector for BuiltInConnector {
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let o = uninstall_mcp_for_paths(self.kind.label(), ctx.home_dir())
             .map_err(|e| ConnectorError::new("uninstall_failed", e))?;
-        let mk = |c, r, p, b| IntegrationOperationResult {
-            capability: c,
-            result: r,
-            target_path: Some(p),
-            backup_path: b,
-            message: (r == IntegrationResult::Installed).then(|| "已移除".into()),
-        };
-        let integrations = vec![
-            mk(
-                IntegrationCapability::Mcp,
-                if o.removed_config {
-                    IntegrationResult::Installed
-                } else {
-                    IntegrationResult::Skipped
-                },
-                o.config_path,
-                o.config_backup_path,
-            ),
-            mk(
-                IntegrationCapability::Skill,
-                if o.removed_skill {
-                    IntegrationResult::Installed
-                } else {
-                    IntegrationResult::Skipped
-                },
-                o.skill_path,
-                None,
-            ),
-            mk(
-                IntegrationCapability::SessionHook,
-                if o.removed_hook {
-                    IntegrationResult::Installed
-                } else {
-                    IntegrationResult::Skipped
-                },
-                o.hook_config_path,
-                None,
-            ),
-        ];
-        let changed = o.removed_config || o.removed_skill || o.removed_hook;
-        Ok(ConnectorOperationOutcome {
-            connector_id: self.descriptor.id().into(),
-            operation: ConnectorOperation::Uninstall,
-            result: if changed {
-                ConnectorResult::Success
-            } else {
-                ConnectorResult::Unchanged
-            },
-            integrations,
-            manual_instructions: None,
-            requires_restart: changed,
-            message: Some("卸载完成".into()),
-        })
+        Ok(built_in_uninstall_outcome(self.descriptor.id(), o))
     }
     fn manual_instructions(
         &self,

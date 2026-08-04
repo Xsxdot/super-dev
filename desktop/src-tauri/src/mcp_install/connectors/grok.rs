@@ -20,7 +20,10 @@ use super::common;
 use super::process::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
-use crate::mcp_install::{executable_file_names, MergeResult, DEFAULT_AGENT_URL};
+use crate::mcp_install::{executable_file_names, MergeResult};
+// DEFAULT_AGENT_URL 只剩测试在用：生产路径已全部改走 ctx.mcp_launch()。
+#[cfg(test)]
+use crate::mcp_install::DEFAULT_AGENT_URL;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -250,6 +253,12 @@ struct McpListEntry {
     name: Option<String>,
     scope: Option<String>,
     command: Option<String>,
+    /// args 是 `grok mcp list --json` 里 command 之后的启动参数；缺失视为空。
+    ///
+    /// 本机 args 恒为空，所以这个字段在本机场景下永远是空 Vec，比较结果与改造前
+    /// 完全一致；远端场景下它是「目标机 agent 有没有真的带上 `mcp` 子命令」的唯一
+    /// 判据，不比对就会把一条不可用的配置报成"已配置"。
+    args: Vec<String>,
     agent_url: Option<String>,
     enabled: bool,
 }
@@ -270,6 +279,16 @@ impl McpListEntry {
                 .get("command")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            args: value
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
             agent_url: value
                 .get("env")
                 .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
@@ -291,9 +310,11 @@ impl McpListEntry {
     }
 
     fn matches_expected(&self, ctx: &ConnectorRuntimeContext) -> bool {
-        let expected = ctx.mcp_binary().to_string_lossy();
+        let launch = ctx.mcp_launch();
+        let expected = launch.command.to_string_lossy();
         self.command.as_deref() == Some(expected.as_ref())
-            && self.agent_url.as_deref() == Some(DEFAULT_AGENT_URL)
+            && self.args == launch.args
+            && self.agent_url.as_deref() == Some(launch.agent_url.as_str())
             && self.enabled
     }
 }
@@ -410,6 +431,35 @@ fn list_servers(
     }
 }
 
+/// mcp_add_args 构造 `grok mcp add` 的完整 argv（不含程序名）。
+///
+/// 参数：
+///   - ctx: 运行上下文，MCP 启动规格取自 `ctx.mcp_launch()`
+///
+/// 返回：
+///   - `["mcp", "add", "superdev", "--scope", "user", "-e", "SUPERDEV_AGENT_URL=…", "--", 命令, args…]`
+///
+/// 注意：
+///   - `--` 之后是「命令 + 启动规格 args」：本机 args 恒为空，因此只有裸二进制一项，
+///     与改造前逐字节相同；远端场景会多出 `mcp` 一项，否则目标机上的 `superdev-agent`
+///     不会进入 MCP 模式，用户只会看到"安装成功"却连不上（静默错误）。
+fn mcp_add_args(ctx: &ConnectorRuntimeContext) -> Vec<String> {
+    let launch = ctx.mcp_launch();
+    let mut args = vec![
+        "mcp".to_string(),
+        "add".to_string(),
+        "superdev".to_string(),
+        "--scope".to_string(),
+        "user".to_string(),
+        "-e".to_string(),
+        format!("SUPERDEV_AGENT_URL={}", launch.agent_url),
+        "--".to_string(),
+        launch.command.to_string_lossy().into_owned(),
+    ];
+    args.extend(launch.args.iter().cloned());
+    args
+}
+
 /// find_superdev_user_entry 仅匹配 user-scope 的 superdev 条目。
 ///
 /// 始终使用 --scope user：项目级配置不属于 SuperDev 自动管理范围。
@@ -425,11 +475,12 @@ fn entry_matches(ctx: &ConnectorRuntimeContext, entry: &McpListEntry) -> bool {
 /// configured_list_json 构造匹配期望的 list --json 夹具（测试与假 runner 复用）。
 #[cfg(test)]
 fn configured_list_json(ctx: &ConnectorRuntimeContext) -> String {
+    let launch = ctx.mcp_launch();
     serde_json::json!([{
         "name": "superdev",
-        "command": ctx.mcp_binary().to_string_lossy(),
-        "args": [],
-        "env": { "SUPERDEV_AGENT_URL": DEFAULT_AGENT_URL },
+        "command": launch.command.to_string_lossy(),
+        "args": launch.args,
+        "env": { "SUPERDEV_AGENT_URL": launch.agent_url },
         "enabled": true,
         "scope": "user"
     }])
@@ -789,19 +840,8 @@ fn grok_install_body(
                 };
 
                 if !already {
-                    let mcp_bin = ctx.mcp_binary().to_string_lossy().into_owned();
-                    let env_arg = format!("SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL}");
-                    let add_args = [
-                        "mcp",
-                        "add",
-                        "superdev",
-                        "--scope",
-                        "user",
-                        "-e",
-                        env_arg.as_str(),
-                        "--",
-                        mcp_bin.as_str(),
-                    ];
+                    let add_args = mcp_add_args(ctx);
+                    let add_args: Vec<&str> = add_args.iter().map(String::as_str).collect();
                     let add_output = match run_cli(connector.runner.as_ref(), &program, &add_args) {
                         Ok(output) => output,
                         Err(error) => {
@@ -1363,19 +1403,25 @@ impl AgentConnector for GrokConnector {
         // 手动指引必须可粘贴：add 命令与 verification 均以 --scope user 为准。
         // SessionStart 在 Grok 上不注入 additionalContext，步骤文案明确 Skill-first。
         // 路径 quoting 分 shell 方言：POSIX / PowerShell / cmd.exe 各一版（真实 install 走 argv）。
-        let raw_mcp = ctx.mcp_binary().display().to_string();
-        let add_posix = format!(
-            "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {}",
-            shell_quote_posix(&raw_mcp)
-        );
-        let add_powershell = format!(
-            "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {}",
-            shell_quote_powershell(&raw_mcp)
-        );
-        let add_cmd = format!(
-            "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL} -- {}",
-            shell_quote_cmd(&raw_mcp)
-        );
+        let launch = ctx.mcp_launch();
+        let raw_mcp = launch.command.display().to_string();
+        // 手动指引必须与 mcp_add_args 生成的 argv 同源：命令之后逐个附加启动规格
+        // 的 args（本机恒为空 → 与改造前逐字节相同；远端会多出 `mcp`）。
+        let render = |quote: fn(&str) -> String| {
+            let mut command = format!(
+                "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={} -- {}",
+                launch.agent_url,
+                quote(&raw_mcp)
+            );
+            for arg in &launch.args {
+                command.push(' ');
+                command.push_str(&quote(arg));
+            }
+            command
+        };
+        let add_posix = render(shell_quote_posix);
+        let add_powershell = render(shell_quote_powershell);
+        let add_cmd = render(shell_quote_cmd);
         let add_default = if cfg!(windows) {
             add_powershell.clone()
         } else {
@@ -2242,4 +2288,62 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(home);
     }
+
+    /// remote_launch_spec 构造远端安装场景的 MCP 启动规格：目标机 agent 的绝对
+    /// 路径 + `mcp` 子命令 + 目标机自己的 Agent URL（刻意不是本机默认端口）。
+    ///
+    /// 这三项只要有一项没抵达最终写出的配置，用户就会看到"安装成功"但远端那个
+    /// 智能体永远连不上——是静默错误，必须由测试钉死。
+    fn remote_launch_spec() -> crate::mcp_install::McpLaunchSpec {
+        crate::mcp_install::McpLaunchSpec {
+            command: PathBuf::from("/opt/superdev/superdev-agent"),
+            args: vec!["mcp".to_string()],
+            agent_url: "http://10.1.2.3:57117".to_string(),
+        }
+    }
+
+    #[test]
+    fn remote_launch_spec_reaches_grok_mcp_add_args() {
+        let home = test_dir("grok-remote-launch");
+        let ctx = context_at(home.clone(), vec![]).with_mcp_launch(remote_launch_spec());
+
+        let args = mcp_add_args(&ctx);
+        assert!(
+            args.contains(&"SUPERDEV_AGENT_URL=http://10.1.2.3:57117".to_string()),
+            "-e 必须带目标机 Agent URL: {args:?}"
+        );
+        let separator = args
+            .iter()
+            .position(|item| item == "--")
+            .expect("grok mcp add 必须保留 -- 分隔符");
+        assert_eq!(
+            &args[separator + 1..],
+            ["/opt/superdev/superdev-agent".to_string(), "mcp".to_string()],
+            "-- 之后必须是「命令 + 启动规格 args」: {args:?}"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn local_grok_mcp_add_args_end_with_the_bare_binary() {
+        let home = test_dir("grok-local-launch");
+        let ctx = context_at(home.clone(), vec![]);
+
+        let args = mcp_add_args(&ctx);
+        let separator = args
+            .iter()
+            .position(|item| item == "--")
+            .expect("grok mcp add 必须保留 -- 分隔符");
+        assert_eq!(
+            &args[separator + 1..],
+            [ctx.mcp_binary().to_string_lossy().into_owned()],
+            "本机 args 为空时 -- 之后只能是裸二进制（字节等价约束）: {args:?}"
+        );
+        assert!(
+            args.contains(&format!("SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL}")),
+            "{args:?}"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
 }

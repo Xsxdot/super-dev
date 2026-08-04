@@ -15,8 +15,10 @@ use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{
     executable_file_names, mcp_server_json_value, merge_json_config, remove_json_superdev_config,
-    DEFAULT_AGENT_URL,
 };
+// DEFAULT_AGENT_URL 只剩测试在用：生产路径已全部改走 ctx.mcp_launch()。
+#[cfg(test)]
+use crate::mcp_install::DEFAULT_AGENT_URL;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -96,13 +98,22 @@ fn mcp_configured(ctx: &ConnectorRuntimeContext, content: &str) -> Result<bool, 
         .get("command")
         .and_then(|value| value.as_str())
         .unwrap_or("");
+    // args 键缺席等价于空数组（本机场景恒如此，判断结果与改造前一致）；写入侧
+    // （common::entry → mcp_server_json_value）已经按启动规格写 args，判定侧不跟上
+    // 就会在远端把「命令对了但缺 mcp 子命令」的坏配置误判成已配置。
+    let args: Vec<&str> = server
+        .get("args")
+        .and_then(|value| value.as_array())
+        .map(|items| items.iter().filter_map(|item| item.as_str()).collect())
+        .unwrap_or_default();
     let agent_url = server
         .get("env")
         .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
         .and_then(|value| value.as_str())
         .unwrap_or("");
-    let expected = ctx.mcp_binary().to_string_lossy();
-    Ok(command == expected.as_ref() && agent_url == DEFAULT_AGENT_URL)
+    let launch = ctx.mcp_launch();
+    let expected = launch.command.to_string_lossy();
+    Ok(command == expected.as_ref() && args == launch.args && agent_url == launch.agent_url)
 }
 
 /// install_mcp 通过安全突变写入 mcpServers.superdev。
@@ -800,4 +811,39 @@ mod tests {
         assert!(text.contains("/mcp-config"), "{text}");
         let _ = fs::remove_dir_all(home);
     }
+
+    /// remote_launch_spec 构造远端安装场景的 MCP 启动规格：目标机 agent 的绝对
+    /// 路径 + `mcp` 子命令 + 目标机自己的 Agent URL（刻意不是本机默认端口）。
+    ///
+    /// 这三项只要有一项没抵达最终写出的配置，用户就会看到"安装成功"但远端那个
+    /// 智能体永远连不上——是静默错误，必须由测试钉死。
+    fn remote_launch_spec() -> crate::mcp_install::McpLaunchSpec {
+        crate::mcp_install::McpLaunchSpec {
+            command: PathBuf::from("/opt/superdev/superdev-agent"),
+            args: vec!["mcp".to_string()],
+            agent_url: "http://10.1.2.3:57117".to_string(),
+        }
+    }
+
+    #[test]
+    fn remote_launch_spec_is_recognised_as_configured() {
+        let home = test_dir("kimi-remote-launch");
+        let ctx = context_at(home.clone()).with_mcp_launch(remote_launch_spec());
+
+        let entry = common::entry(&ctx);
+        let content = serde_json::json!({
+            "mcpServers": { "superdev": mcp_server_json_value(&entry) }
+        })
+        .to_string();
+        assert!(
+            mcp_configured(&ctx, &content).expect("status parse"),
+            "远端 spec 写出的配置必须被自己的状态判定认成已配置: {content}"
+        );
+        assert!(
+            content.contains("http://10.1.2.3:57117") && content.contains("\"mcp\""),
+            "{content}"
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
 }

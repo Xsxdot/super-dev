@@ -21,6 +21,7 @@ pub mod contracts;
 pub mod fs_port;
 pub mod registry;
 pub mod remote_fs;
+pub mod remote_install;
 
 use fs_port::{BatchFile, ConnectorFs, LocalFs};
 use serde::Serialize;
@@ -424,17 +425,62 @@ pub fn install_mcp_for_paths_with_skill(
     skill_source: Option<&Path>,
     skill_source_error: Option<String>,
 ) -> Result<InstallOutcome, String> {
-    // 本机安装：文件操作统一经 LocalFs 端口；远端安装（Task 9）传入 RemoteAgentFs
-    // 复用下面完全相同的编排与方言逻辑。
-    let fs_port = &LocalFs;
-    let kind = AgentKind::parse(agent)?;
-    // 本机入口固定绑定 LocalFs 时的启动规格：独立 mcp 二进制、无 args、默认 Agent URL——
-    // 与改造前完全一致，保证本地配置文件逐字节不变。
-    let entry = McpEntry::from_launch(&McpLaunchSpec {
+    // 本机安装：文件操作统一经 LocalFs 端口，启动规格是「独立 mcp 二进制、无 args、
+    // 默认 Agent URL」——与改造前完全一致，保证本地配置文件逐字节不变。
+    install_mcp_for_paths_with_fs(
+        &LocalFs,
+        agent,
+        home,
+        &local_launch_spec(mcp_path),
+        skill_source,
+        skill_source_error,
+    )
+}
+
+/// local_launch_spec 构造本机场景的 MCP 启动规格。
+///
+/// 参数：
+///   - mcp_path: 桌面端打包的 `superdev-mcp` 可执行文件绝对路径
+///
+/// 返回：
+///   - 独立二进制 + 空 args + 默认 Agent URL 的启动规格
+///
+/// 注意：
+///   - 只有本机入口才用它；远端入口的规格来自目标机 detect 端点，不得走这里
+fn local_launch_spec(mcp_path: &Path) -> McpLaunchSpec {
+    McpLaunchSpec {
         command: mcp_path.to_path_buf(),
         args: Vec::new(),
         agent_url: DEFAULT_AGENT_URL.to_string(),
-    });
+    }
+}
+
+/// install_mcp_for_paths_with_fs 经端口为单个 Agent 完成 MCP + skill + hook 安装。
+///
+/// 参数：
+///   - fs_port: 目标机器的文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - agent: Agent 标识，支持 claude-code、codex、cursor
+///   - home: **目标机器**上用于定位配置文件、skill 目录与 hook 配置的用户 HOME
+///   - launch: MCP 启动规格（command/args/agent_url），远端场景来自目标机 detect
+///   - skill_source: bundled superdev skill 源目录（恒在桌面端本机）
+///   - skill_source_error: skill 源目录不可用时的错误说明
+///
+/// 返回：
+///   - MCP 配置、skill、session hook 三项的安装结果
+///
+/// 注意：
+///   - 本地与远端共用这一份编排与方言逻辑，差别只有 fs_port 与 launch 两个入参
+///   - skill 或 hook 失败不阻断 MCP 配置安装，失败原因回填到各自的结果里
+pub fn install_mcp_for_paths_with_fs(
+    fs_port: &dyn ConnectorFs,
+    agent: &str,
+    home: &Path,
+    launch: &McpLaunchSpec,
+    skill_source: Option<&Path>,
+    skill_source_error: Option<String>,
+) -> Result<InstallOutcome, String> {
+    let kind = AgentKind::parse(agent)?;
+    let entry = McpEntry::from_launch(launch);
     let config_path = kind.config_path(home);
     let merge: fn(Option<&str>, &McpEntry) -> Result<MergeResult, String> = match kind {
         AgentKind::ClaudeCode | AgentKind::Cursor => merge_json_config,
@@ -493,12 +539,28 @@ pub fn install_hint_for_paths(
     home: &Path,
     mcp_path: &Path,
 ) -> Result<InstallHint, String> {
+    install_hint_for_launch(agent, home, &local_launch_spec(mcp_path))
+}
+
+/// install_hint_for_launch 按给定启动规格生成手动配置指引。
+///
+/// 参数：
+///   - agent: Agent 标识，支持 claude-code、codex、cursor
+///   - home: 目标机器上的用户 HOME
+///   - launch: MCP 启动规格；远端场景带 `["mcp"]` 与目标机 Agent URL
+///
+/// 返回：
+///   - 配置路径、可粘贴配置文本与 skill 目标路径
+///
+/// 注意：
+///   - 手动指引必须与自动安装写出的内容同源，否则用户照着粘贴反而装错
+pub fn install_hint_for_launch(
+    agent: &str,
+    home: &Path,
+    launch: &McpLaunchSpec,
+) -> Result<InstallHint, String> {
     let kind = AgentKind::parse(agent)?;
-    let entry = McpEntry::from_launch(&McpLaunchSpec {
-        command: mcp_path.to_path_buf(),
-        args: Vec::new(),
-        agent_url: DEFAULT_AGENT_URL.to_string(),
-    });
+    let entry = McpEntry::from_launch(launch);
     Ok(InstallHint {
         agent: kind.label().to_string(),
         config_path: kind.config_path(home).to_string_lossy().to_string(),
@@ -508,21 +570,32 @@ pub fn install_hint_for_paths(
 }
 
 fn generic_mcp_connection_material_for_path(mcp_path: &Path) -> GenericMcpConnectionMaterial {
-    let command = mcp_path.to_string_lossy().to_string();
-    let agent_url = DEFAULT_AGENT_URL.to_string();
+    generic_mcp_connection_material_for_launch(&local_launch_spec(mcp_path))
+}
+
+/// generic_mcp_connection_material_for_launch 按启动规格生成通用可粘贴连接材料。
+///
+/// 参数：
+///   - launch: MCP 启动规格（command/args/agent_url）
+///
+/// 返回：
+///   - transport / 命令 / Agent URL / 标准 `mcpServers` JSON 示例
+///
+/// 注意：
+///   - 可粘贴 JSON 复用 `mcp_server_json_value`，与自动写入的方言同源：args 为空时
+///     不写 `args` 键，本机输出与改造前逐字节相同
+fn generic_mcp_connection_material_for_launch(
+    launch: &McpLaunchSpec,
+) -> GenericMcpConnectionMaterial {
+    let entry = McpEntry::from_launch(launch);
     let manual_config = serde_json::to_string_pretty(&json!({
-        "mcpServers": {
-            "superdev": {
-                "command": command,
-                "env": { "SUPERDEV_AGENT_URL": agent_url }
-            }
-        }
+        "mcpServers": { "superdev": mcp_server_json_value(&entry) }
     }))
     .expect("generic manual json");
     GenericMcpConnectionMaterial {
         transport: "stdio".to_string(),
-        command,
-        agent_url,
+        command: entry.command,
+        agent_url: entry.agent_url,
         manual_config,
     }
 }
@@ -2433,9 +2506,28 @@ pub fn mcp_status_for_kind(
 ///   - 只删除 superdev 这一项 MCP server，不删除其他 MCP server
 ///   - 配置文件变更前会先备份原文件
 pub fn uninstall_mcp_for_paths(agent: &str, home: &Path) -> Result<UninstallOutcome, String> {
-    // 本机卸载：文件操作统一经 LocalFs 端口；远端卸载（Task 9）传入 RemoteAgentFs
-    // 复用下面完全相同的编排。
-    let fs_port = &LocalFs;
+    // 本机卸载：文件操作统一经 LocalFs 端口；远端卸载走 uninstall_mcp_for_paths_with_fs
+    // 传 RemoteAgentFs，复用完全相同的编排。
+    uninstall_mcp_for_paths_with_fs(&LocalFs, agent, home)
+}
+
+/// uninstall_mcp_for_paths_with_fs 经端口移除指定 Agent 的 SuperDev 配置、skill 与 hook。
+///
+/// 参数：
+///   - fs_port: 目标机器的文件操作端口，本地传 LocalFs、远端传 RemoteAgentFs
+///   - agent: Agent 标识，支持 claude-code、codex、cursor
+///   - home: 目标机器上的用户 HOME
+///
+/// 返回：
+///   - 配置项、skill 目录与 hook 条目是否被删除，以及配置备份路径
+///
+/// 注意：
+///   - 只删除 superdev 这一项 MCP server 与带 HOOK_MARKER 的那条 hook，不动用户其它配置
+pub fn uninstall_mcp_for_paths_with_fs(
+    fs_port: &dyn ConnectorFs,
+    agent: &str,
+    home: &Path,
+) -> Result<UninstallOutcome, String> {
     let kind = AgentKind::parse(agent)?;
     let config_path = kind.config_path(home);
     let (removed_config, config_backup_path) = match kind {

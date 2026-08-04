@@ -13,7 +13,7 @@
 use super::common;
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
-use crate::mcp_install::{executable_file_names, MergeResult, DEFAULT_AGENT_URL};
+use crate::mcp_install::{executable_file_names, MergeResult};
 use jsonc_parser::cst::CstRootNode;
 use jsonc_parser::json;
 use jsonc_parser::{parse_to_serde_value, ParseOptions};
@@ -80,18 +80,37 @@ fn find_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
 fn mcp_command(ctx: &ConnectorRuntimeContext) -> String {
     // jsonc-parser 0.26.3 的 CST string writer 不会转义 Windows 反斜杠。
     // Windows 接受正斜杠绝对路径，因此在生成边界统一规范化。
-    ctx.mcp_binary().to_string_lossy().replace('\\', "/")
+    ctx.mcp_launch().command.to_string_lossy().replace('\\', "/")
+}
+
+/// mcp_command_line 返回 OpenCode `command` 数组的完整内容：命令 + 启动规格 args。
+///
+/// OpenCode 的 schema 本来就是「argv 数组」，所以 args 直接追加即可，不存在
+/// 「空 args 要不要写键」的问题：本机 args 恒为空 → 数组仍是单元素，与改造前
+/// 逐字节相同；远端场景会多出 `mcp`，否则目标机 agent 不会进入 MCP 模式。
+fn mcp_command_line(ctx: &ConnectorRuntimeContext) -> Vec<String> {
+    let mut line = vec![mcp_command(ctx)];
+    line.extend(ctx.mcp_launch().args.iter().cloned());
+    line
 }
 
 /// superdev_mcp_value 构造 OpenCode 本地 MCP 条目的 CST 输入值。
 fn superdev_mcp_value(ctx: &ConnectorRuntimeContext) -> jsonc_parser::cst::CstInputValue {
-    let command = mcp_command(ctx);
+    // jsonc_parser 的 json! 宏只接受字面量结构，长度可变的 argv 只能手工构造
+    // CstInputValue::Array——这是唯一的差异，键的顺序与取值仍与改造前一致。
+    let command = jsonc_parser::cst::CstInputValue::Array(
+        mcp_command_line(ctx)
+            .into_iter()
+            .map(jsonc_parser::cst::CstInputValue::String)
+            .collect(),
+    );
+    let agent_url = ctx.mcp_launch().agent_url.clone();
     json!({
         "type": "local",
-        "command": [command],
+        "command": command,
         "enabled": true,
         "environment": {
-            "SUPERDEV_AGENT_URL": DEFAULT_AGENT_URL
+            "SUPERDEV_AGENT_URL": agent_url
         }
     })
 }
@@ -100,10 +119,10 @@ fn superdev_mcp_value(ctx: &ConnectorRuntimeContext) -> jsonc_parser::cst::CstIn
 fn expected_superdev_json(ctx: &ConnectorRuntimeContext) -> serde_json::Value {
     serde_json::json!({
         "type": "local",
-        "command": [mcp_command(ctx)],
+        "command": mcp_command_line(ctx),
         "enabled": true,
         "environment": {
-            "SUPERDEV_AGENT_URL": DEFAULT_AGENT_URL
+            "SUPERDEV_AGENT_URL": ctx.mcp_launch().agent_url
         }
     })
 }
@@ -866,4 +885,54 @@ mod tests {
         );
         let _ = fs::remove_dir_all(home);
     }
+
+    /// remote_launch_spec 构造远端安装场景的 MCP 启动规格：目标机 agent 的绝对
+    /// 路径 + `mcp` 子命令 + 目标机自己的 Agent URL（刻意不是本机默认端口）。
+    ///
+    /// 这三项只要有一项没抵达最终写出的配置，用户就会看到"安装成功"但远端那个
+    /// 智能体永远连不上——是静默错误，必须由测试钉死。
+    fn remote_launch_spec() -> crate::mcp_install::McpLaunchSpec {
+        crate::mcp_install::McpLaunchSpec {
+            command: PathBuf::from("/opt/superdev/superdev-agent"),
+            args: vec!["mcp".to_string()],
+            agent_url: "http://10.1.2.3:57117".to_string(),
+        }
+    }
+
+    #[test]
+    fn remote_launch_spec_reaches_opencode_command_array() {
+        let home = test_dir("opencode-remote-launch");
+        let ctx = context_at(home.clone()).with_mcp_launch(remote_launch_spec());
+
+        let value = expected_superdev_json(&ctx);
+        assert_eq!(
+            value["command"],
+            serde_json::json!(["/opt/superdev/superdev-agent", "mcp"]),
+            "OpenCode 的 command 数组必须带上启动规格的 args"
+        );
+        assert_eq!(
+            value["environment"]["SUPERDEV_AGENT_URL"],
+            "http://10.1.2.3:57117"
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn local_launch_spec_keeps_single_element_command_array() {
+        let home = test_dir("opencode-local-launch");
+        let ctx = context_at(home.clone());
+
+        let value = expected_superdev_json(&ctx);
+        assert_eq!(
+            value["command"],
+            serde_json::json!([mcp_command(&ctx)]),
+            "本机 args 为空时 command 数组必须仍是单元素（字节等价约束）"
+        );
+        assert_eq!(
+            value["environment"]["SUPERDEV_AGENT_URL"],
+            crate::mcp_install::DEFAULT_AGENT_URL
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
 }

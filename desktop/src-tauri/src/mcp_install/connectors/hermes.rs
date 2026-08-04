@@ -13,7 +13,7 @@
 use super::common;
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
-use crate::mcp_install::{executable_file_names, MergeResult, DEFAULT_AGENT_URL};
+use crate::mcp_install::{executable_file_names, MergeResult};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -132,27 +132,53 @@ fn entry_matches_current_hook(entry: &YamlNode, skill_dir: &Path) -> bool {
 }
 
 fn mcp_entry_matches(ctx: &ConnectorRuntimeContext, entry: &Mapping) -> bool {
-    let expected = ctx.mcp_binary().to_string_lossy();
+    let launch = ctx.mcp_launch();
+    let expected = launch.command.to_string_lossy();
     let command = entry
         .get("command")
         .and_then(|n| scalar_string(&n))
+        .unwrap_or_default();
+    // args 键缺席等价于空列表（本机场景恒如此，判断结果与改造前一致）；远端场景
+    // 下不比对 args，会把「命令对了但缺 mcp 子命令」的坏配置误判成已配置。
+    let args: Vec<String> = entry
+        .get_sequence("args")
+        .map(|sequence| sequence.values().filter_map(|item| scalar_string(&item)).collect())
         .unwrap_or_default();
     let agent_url = entry
         .get_mapping("env")
         .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
         .and_then(|n| scalar_string(&n))
         .unwrap_or_default();
-    command == expected.as_ref() && agent_url == DEFAULT_AGENT_URL
+    command == expected.as_ref() && args == launch.args && agent_url == launch.agent_url
+}
+
+/// superdev_server_fields 往 `superdev:` 这层 mapping 里写入 command/args/env。
+///
+/// 三处生成点（fragment 替换、空配置自建、根节点追加）共用这一个函数，避免各写一份
+/// 之后悄悄分叉。**args 为空时完全不写 `args` 键**——不是写一个空列表：本机 args 恒
+/// 为空，这条保证桌面端升级后本地 Hermes 配置与升级前逐字节相同。
+fn superdev_server_fields(
+    server: MappingBuilder,
+    launch: &crate::mcp_install::McpLaunchSpec,
+) -> MappingBuilder {
+    let server = server.pair("command", launch.command.to_string_lossy().into_owned());
+    let server = if launch.args.is_empty() {
+        server
+    } else {
+        let args = launch.args.clone();
+        server.sequence("args", |sequence| {
+            args.into_iter()
+                .fold(sequence, |sequence, arg| sequence.item(arg))
+        })
+    };
+    let agent_url = launch.agent_url.clone();
+    server.mapping("env", |env| env.pair("SUPERDEV_AGENT_URL", agent_url))
 }
 
 fn desired_mcp_server_fragment(ctx: &ConnectorRuntimeContext) -> String {
-    let command = ctx.mcp_binary().to_string_lossy().into_owned();
+    let launch = ctx.mcp_launch();
     MappingBuilder::new()
-        .mapping("superdev", |server| {
-            server.pair("command", command).mapping("env", |env| {
-                env.pair("SUPERDEV_AGENT_URL", DEFAULT_AGENT_URL)
-            })
-        })
+        .mapping("superdev", |server| superdev_server_fields(server, launch))
         .build_document()
         .to_string()
 }
@@ -452,14 +478,10 @@ fn merge_hermes_mcp(
 ) -> Result<MergeResult, ConnectorError> {
     let (doc, source) = parse_hermes_document(existing)?;
     if source.is_empty() {
-        let command = ctx.mcp_binary().to_string_lossy().into_owned();
+        let launch = ctx.mcp_launch();
         let content = MappingBuilder::new()
             .mapping("mcp_servers", |servers| {
-                servers.mapping("superdev", |server| {
-                    server.pair("command", command).mapping("env", |env| {
-                        env.pair("SUPERDEV_AGENT_URL", DEFAULT_AGENT_URL)
-                    })
-                })
+                servers.mapping("superdev", |server| superdev_server_fields(server, launch))
             })
             .build_document()
             .to_string();
@@ -513,14 +535,10 @@ fn merge_hermes_mcp(
             "Hermes mcp_servers 必须是 mapping",
         ));
     } else {
-        let command = ctx.mcp_binary().to_string_lossy().into_owned();
+        let launch = ctx.mcp_launch();
         let fragment = MappingBuilder::new()
             .mapping("mcp_servers", |servers| {
-                servers.mapping("superdev", |server| {
-                    server.pair("command", command).mapping("env", |env| {
-                        env.pair("SUPERDEV_AGENT_URL", DEFAULT_AGENT_URL)
-                    })
-                })
+                servers.mapping("superdev", |server| superdev_server_fields(server, launch))
             })
             .build_document()
             .to_string();
@@ -1695,4 +1713,68 @@ hooks:
         );
         let _ = fs::remove_dir_all(home);
     }
+
+    /// remote_launch_spec 构造远端安装场景的 MCP 启动规格：目标机 agent 的绝对
+    /// 路径 + `mcp` 子命令 + 目标机自己的 Agent URL（刻意不是本机默认端口）。
+    ///
+    /// 这三项只要有一项没抵达最终写出的配置，用户就会看到"安装成功"但远端那个
+    /// 智能体永远连不上——是静默错误，必须由测试钉死。
+    fn remote_launch_spec() -> crate::mcp_install::McpLaunchSpec {
+        crate::mcp_install::McpLaunchSpec {
+            command: PathBuf::from("/opt/superdev/superdev-agent"),
+            args: vec!["mcp".to_string()],
+            agent_url: "http://10.1.2.3:57117".to_string(),
+        }
+    }
+
+    #[test]
+    fn remote_launch_spec_reaches_generated_mcp_server_fragment() {
+        let home = test_dir("hermes-remote-launch");
+        let ctx = context_at(home.clone()).with_mcp_launch(remote_launch_spec());
+
+        let fragment = desired_mcp_server_fragment(&ctx);
+        assert!(
+            fragment.contains("/opt/superdev/superdev-agent"),
+            "command 必须取自远端启动规格: {fragment}"
+        );
+        assert!(
+            fragment.contains("- mcp"),
+            "args 必须写进配置，否则目标机 agent 不会进入 mcp 模式: {fragment}"
+        );
+        assert!(
+            fragment.contains("http://10.1.2.3:57117"),
+            "SUPERDEV_AGENT_URL 必须指向目标机: {fragment}"
+        );
+
+        // 空配置分支（merge_hermes_mcp 自建整份文档）与替换分支必须是同一份形状。
+        let merged = merge_hermes_mcp(None, &ctx).expect("merge from empty");
+        assert!(merged.content.contains("- mcp"), "{}", merged.content);
+        assert!(
+            merged.content.contains("http://10.1.2.3:57117"),
+            "{}",
+            merged.content
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn local_launch_spec_keeps_the_args_key_absent() {
+        let home = test_dir("hermes-local-launch");
+        let ctx = context_at(home.clone());
+
+        let fragment = desired_mcp_server_fragment(&ctx);
+        assert!(
+            !fragment.contains("args"),
+            "本机 args 为空时不得写 args 键（字节等价约束）: {fragment}"
+        );
+        assert!(
+            !merge_hermes_mcp(None, &ctx)
+                .expect("merge from empty")
+                .content
+                .contains("args"),
+            "空配置分支同样不得写 args 键"
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
 }

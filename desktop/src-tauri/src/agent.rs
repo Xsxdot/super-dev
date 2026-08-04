@@ -366,6 +366,22 @@ fn agent_addr_and_data_dir() -> Result<(String, PathBuf), String> {
     Ok((addr.to_string(), data_dir))
 }
 
+/// local_agent_base_url 返回本机 agent 的 HTTP origin（如 `http://127.0.0.1:57017`）。
+///
+/// 返回：
+///   - Ok: 可直接拼接 `/api/...` 的 origin。
+///   - Err: 用户目录解析失败时的说明。
+///
+/// 注意：
+///   - 明文 HTTP 是刻意的：桌面端与 agent 只走本机回环，agent 侧对 loopback 明文
+///     连接有单端口首字节嗅探豁免，这里再套一层 TLS 反而会连不上。
+///   - 远端接入（`mcp_install::remote_install`）用它作为 integrations 代理的基址：
+///     桌面端自始至终只跟**本机** agent 说话，目标机凭据由本机 agent 注入。
+pub(crate) fn local_agent_base_url() -> Result<String, String> {
+    let (addr, _) = agent_addr_and_data_dir()?;
+    Ok(format!("http://{addr}"))
+}
+
 /// 前端底栏呈现用的桌面端-agent 连接形态快照。
 #[derive(serde::Serialize, Clone)]
 pub struct AgentConnectionInfo {

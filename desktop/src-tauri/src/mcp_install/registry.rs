@@ -133,6 +133,25 @@ impl ConnectorRuntimeContext {
         }
     }
 
+    /// with_mcp_launch 覆盖 SuperDev MCP 的启动规格（command/args/agent_url 三元组）。
+    ///
+    /// 参数：
+    ///   - mcp_launch: 目标机器上的启动规格；远端场景取自 detect 端点返回的 `agent`
+    ///     字段（目标机 `superdev-agent` 绝对路径 + `["mcp"]` + 该机 agent URL）
+    ///
+    /// 返回：
+    ///   - 带该启动规格的运行上下文
+    ///
+    /// 注意：
+    ///   - `new()` 只会产出「本机默认」规格（独立 mcp 二进制 + 空 args + 默认 Agent URL），
+    ///     远端上下文**必须**经这个消费型 builder 覆盖，否则会写出指向本机端口的配置。
+    ///     刻意做成与 `with_environment` 对称的形态，而不是给 `new()` 加参数——后者会
+    ///     波及数十处按位置参数调用它的既有测试。
+    pub fn with_mcp_launch(mut self, mcp_launch: McpLaunchSpec) -> Self {
+        self.mcp_launch = mcp_launch;
+        self
+    }
+
     /// with_environment 注入已在 Tauri 边界解析的已知路径覆盖。
     ///
     /// 参数：

@@ -68,6 +68,59 @@ where
     result
 }
 
+/// run_remote_connector_command 是 `run_connector_command` 的远端变体：额外带 host_id。
+///
+/// 参数：
+///   - connector_id: 开放 Connector ID（探测这类跨全部连接器的操作传 "all"）
+///   - operation: 操作名
+///   - host_id: 目标机器 ID
+///   - command: 实际执行体
+///
+/// 返回：
+///   - 与 command 相同的结果，原样透传
+///
+/// 注意：
+///   - 日志只含 Connector ID、操作名、host_id、结果与耗时；错误文本、路径、
+///     配置材料与 token 一律不输出——host_id 是本机 agent 里的注册 ID，不是凭据
+fn run_remote_connector_command<T, F>(
+    connector_id: &str,
+    operation: &'static str,
+    host_id: &str,
+    command: F,
+) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
+    let started = Instant::now();
+    tracing::info!(
+        connector_id,
+        operation,
+        host_id,
+        command_result = "started",
+        "remote connector command started"
+    );
+    let result = command();
+    match &result {
+        Ok(_) => tracing::info!(
+            connector_id,
+            operation,
+            host_id,
+            command_result = "success",
+            duration_ms = started.elapsed().as_millis() as u64,
+            "remote connector command finished"
+        ),
+        Err(_) => tracing::error!(
+            connector_id,
+            operation,
+            host_id,
+            command_result = "failed",
+            duration_ms = started.elapsed().as_millis() as u64,
+            "remote connector command failed"
+        ),
+    }
+    result
+}
+
 #[tauri::command]
 fn list_agent_connectors(
     app: tauri::AppHandle,
@@ -134,6 +187,134 @@ fn verify_agent_connector(
         registry
             .verify(&connector_id, &ctx)
             .map_err(|e| e.to_string())
+    })
+}
+
+/// remote_install_inputs 解析一次远端接入调用所需的三样东西。
+///
+/// 参数：
+///   - app: 用于定位随桌面端打包的 skill 资源目录
+///   - agent_state: 用于读取本机 agent 的 local access token
+///   - host_id: 目标机器在本机 agent 里的注册 ID
+///
+/// 返回：
+///   - (detect 客户端, 目标机文件端口, bundled skill 源解析结果)
+///
+/// 注意：
+///   - token 只被交给 detect 客户端与文件端口，用于拼 `Authorization` 头；本函数
+///     与调用方都不得把它写进日志或错误串
+///   - skill 源解析失败不阻断调用：它会作为 skill_source_error 随上下文下传，
+///     让 MCP 配置照样能装、skill 那一项单独报错
+fn remote_install_inputs(
+    app: &tauri::AppHandle,
+    agent_state: State<'_, AgentProcess>,
+    host_id: &str,
+) -> Result<
+    (
+        mcp_install::remote_install::AgentProxyDetector,
+        mcp_install::remote_fs::RemoteAgentFs,
+        (Option<std::path::PathBuf>, Option<String>),
+    ),
+    String,
+> {
+    let base = agent::local_agent_base_url()?;
+    let token = agent::local_agent_token(agent_state)?;
+    let detector = mcp_install::remote_install::AgentProxyDetector::new(
+        base.clone(),
+        token.clone(),
+        host_id.to_string(),
+    );
+    let fs_port = mcp_install::remote_install::remote_agent_fs(&base, &token, host_id);
+    let skill = mcp_install::remote_install::skill_source_pair(mcp_install::resolve_skill_source_dir(
+        app,
+    ));
+    Ok((detector, fs_port, skill))
+}
+
+/// detect_remote_coding_agents 探测目标机上已安装的编程智能体及其 SuperDev 接入状态。
+///
+/// 参数：
+///   - host_id: 目标机器在本机 agent 里的注册 ID
+///
+/// 返回：
+///   - 每个内置连接器在目标机上的 CLI 存在性与三项接入状态
+///
+/// 注意：
+///   - 只读操作；CLI 不在目标机上时不会对该智能体发任何文件请求
+#[tauri::command]
+fn detect_remote_coding_agents(
+    app: tauri::AppHandle,
+    agent_state: State<'_, AgentProcess>,
+    host_id: String,
+) -> Result<Vec<mcp_install::remote_install::RemoteAgentStatus>, String> {
+    run_remote_connector_command("all", "remote_detect", &host_id, || {
+        let (detector, fs_port, (skill_source, skill_source_error)) =
+            remote_install_inputs(&app, agent_state, &host_id)?;
+        mcp_install::remote_install::detect_remote_agents(
+            &detector,
+            &fs_port,
+            &mcp_install::remote_install::remote_connectors(),
+            skill_source,
+            skill_source_error,
+        )
+    })
+}
+
+/// install_remote_agent_connector 在目标机上安装单个智能体的 SuperDev 接入。
+///
+/// 参数：
+///   - host_id: 目标机器 ID
+///   - connector_id: 连接器 ID（claude-code / codex / cursor）
+///
+/// 返回：
+///   - 与本机同构的连接器操作结果（MCP / skill / session hook 三项）
+///
+/// 注意：
+///   - 不支持远端接入的连接器会显式失败并说明原因，不会静默写出半套配置
+#[tauri::command]
+fn install_remote_agent_connector(
+    app: tauri::AppHandle,
+    agent_state: State<'_, AgentProcess>,
+    host_id: String,
+    connector_id: String,
+) -> Result<ConnectorOperationOutcome, String> {
+    run_remote_connector_command(&connector_id, "remote_install", &host_id, || {
+        let (detector, fs_port, (skill_source, skill_source_error)) =
+            remote_install_inputs(&app, agent_state, &host_id)?;
+        mcp_install::remote_install::install_remote_connector(
+            &detector,
+            &fs_port,
+            &mcp_install::remote_install::remote_connectors(),
+            &host_id,
+            &connector_id,
+            skill_source,
+            skill_source_error,
+        )
+    })
+}
+
+/// uninstall_remote_agent_connector 从目标机移除单个智能体的 SuperDev 接入。
+///
+/// 参数与返回语义同 `install_remote_agent_connector`；只删除 SuperDev 自己写入的部分。
+#[tauri::command]
+fn uninstall_remote_agent_connector(
+    app: tauri::AppHandle,
+    agent_state: State<'_, AgentProcess>,
+    host_id: String,
+    connector_id: String,
+) -> Result<ConnectorOperationOutcome, String> {
+    run_remote_connector_command(&connector_id, "remote_uninstall", &host_id, || {
+        let (detector, fs_port, (skill_source, skill_source_error)) =
+            remote_install_inputs(&app, agent_state, &host_id)?;
+        mcp_install::remote_install::uninstall_remote_connector(
+            &detector,
+            &fs_port,
+            &mcp_install::remote_install::remote_connectors(),
+            &host_id,
+            &connector_id,
+            skill_source,
+            skill_source_error,
+        )
     })
 }
 
@@ -534,6 +715,9 @@ fn main() {
             uninstall_agent_connector,
             verify_agent_connector,
             agent_connector_manual_instructions,
+            detect_remote_coding_agents,
+            install_remote_agent_connector,
+            uninstall_remote_agent_connector,
             detect_coding_agents,
             install_mcp,
             mcp_install_hint,
@@ -602,7 +786,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_loopback_proxy_bypass, run_connector_command,
+        append_loopback_proxy_bypass, run_connector_command, run_remote_connector_command,
         should_disable_main_window_decorations_for_target,
         should_install_native_app_menu_for_target,
     };
@@ -774,6 +958,60 @@ mod tests {
             source.contains("show_home_window,"),
             "show_home_window must be registered in the invoke handler"
         );
+    }
+
+    #[test]
+    fn remote_connector_commands_are_registered_and_logged_with_host_id() {
+        let source = main_source();
+        for command in [
+            "detect_remote_coding_agents,",
+            "install_remote_agent_connector,",
+            "uninstall_remote_agent_connector,",
+        ] {
+            assert!(
+                source.contains(command),
+                "远端接入命令必须注册进 invoke handler: {command}"
+            );
+        }
+        for operation in ["\"remote_detect\"", "\"remote_install\"", "\"remote_uninstall\""] {
+            assert!(
+                MAIN_RS.contains(&format!("run_remote_connector_command(")),
+                "三个远端命令都必须走统一的日志包装"
+            );
+            assert!(
+                MAIN_RS.contains(operation),
+                "远端命令必须带稳定的操作名: {operation}"
+            );
+        }
+        // host_id 必须进日志：远端失败时用户手上通常同时开着多台机器，
+        // 不带 host_id 的日志无法定位是哪台机器出的问题。
+        for level in ["tracing::info!(", "tracing::error!("] {
+            let anchor = MAIN_RS
+                .find("fn run_remote_connector_command")
+                .expect("main.rs should define the remote logging wrapper");
+            let body = &MAIN_RS[anchor..];
+            let position = body.find(level).expect("wrapper should log at this level");
+            let window = &body[position..position + 260];
+            assert!(
+                window.contains("host_id"),
+                "{level} 必须带 host_id 字段: {window}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_connector_command_boundary_preserves_success_and_error_results() {
+        let success =
+            run_remote_connector_command("claude-code", "remote_install", "host-42", || {
+                Ok::<_, String>(7)
+            });
+        let failure =
+            run_remote_connector_command("claude-code", "remote_install", "host-42", || {
+                Err::<(), _>("remote unreachable".to_string())
+            });
+
+        assert_eq!(success, Ok(7));
+        assert_eq!(failure, Err("remote unreachable".to_string()));
     }
 
     #[test]

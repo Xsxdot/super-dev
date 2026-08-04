@@ -14,7 +14,7 @@ use super::common;
 use super::process::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
-use crate::mcp_install::{executable_file_names, DEFAULT_AGENT_URL};
+use crate::mcp_install::{executable_file_names, mcp_server_json_value};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -88,15 +88,13 @@ fn require_cli(ctx: &ConnectorRuntimeContext) -> Result<PathBuf, ConnectorError>
     })
 }
 
-/// canonical_mcp_json 仅包含 SuperDev stdio 命令与 SUPERDEV_AGENT_URL。
+/// canonical_mcp_json 仅包含 SuperDev stdio 命令、启动参数与 SUPERDEV_AGENT_URL。
+///
+/// 复用 `mcp_server_json_value`（与 JSON 方言族共享的那个 helper），而不是本地再手写
+/// 一次「args 为空就不写 args 键」的判断——三处各写一份必然分叉。本机 args 恒为空，
+/// 因此输出与改造前逐字节相同。
 fn canonical_mcp_json(ctx: &ConnectorRuntimeContext) -> String {
-    serde_json::to_string(&serde_json::json!({
-        "command": ctx.mcp_binary().to_string_lossy(),
-        "env": {
-            "SUPERDEV_AGENT_URL": DEFAULT_AGENT_URL
-        }
-    }))
-    .expect("canonical mcp json")
+    serde_json::to_string(&mcp_server_json_value(&common::entry(ctx))).expect("canonical mcp json")
 }
 
 fn apply_config_env(mut spec: CommandSpec, ctx: &ConnectorRuntimeContext) -> CommandSpec {
@@ -176,14 +174,24 @@ fn show_output_reports_missing(output: &CommandOutput) -> bool {
 }
 
 fn entry_matches(ctx: &ConnectorRuntimeContext, value: &serde_json::Value) -> bool {
-    let expected_command = ctx.mcp_binary().to_string_lossy();
+    let launch = ctx.mcp_launch();
+    let expected_command = launch.command.to_string_lossy();
     let command = value.get("command").and_then(|v| v.as_str()).unwrap_or("");
+    // args 缺席等价于空数组（本机场景恒如此，与改造前判断结果一致）；远端场景下
+    // 不比对 args 会把「命令对了但没带 mcp 子命令」的坏配置误判成已配置。
+    let args: Vec<&str> = value
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|items| items.iter().filter_map(|item| item.as_str()).collect())
+        .unwrap_or_default();
     let agent_url = value
         .get("env")
         .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    command == expected_command.as_ref() && agent_url == DEFAULT_AGENT_URL
+    command == expected_command.as_ref()
+        && args == launch.args
+        && agent_url == launch.agent_url
 }
 
 fn config_hint(ctx: &ConnectorRuntimeContext) -> Option<String> {
@@ -1096,4 +1104,48 @@ mod tests {
         }));
         let _ = std::fs::remove_dir_all(home);
     }
+
+    /// remote_launch_spec 构造远端安装场景的 MCP 启动规格：目标机 agent 的绝对
+    /// 路径 + `mcp` 子命令 + 目标机自己的 Agent URL（刻意不是本机默认端口）。
+    ///
+    /// 这三项只要有一项没抵达最终写出的配置，用户就会看到"安装成功"但远端那个
+    /// 智能体永远连不上——是静默错误，必须由测试钉死。
+    fn remote_launch_spec() -> crate::mcp_install::McpLaunchSpec {
+        crate::mcp_install::McpLaunchSpec {
+            command: PathBuf::from("/opt/superdev/superdev-agent"),
+            args: vec!["mcp".to_string()],
+            agent_url: "http://10.1.2.3:57117".to_string(),
+        }
+    }
+
+    #[test]
+    fn remote_launch_spec_reaches_canonical_mcp_json() {
+        let home = test_dir("openclaw-remote-launch");
+        let ctx = context_with_cli(home.clone()).with_mcp_launch(remote_launch_spec());
+
+        let raw = canonical_mcp_json(&ctx);
+        let value: serde_json::Value = serde_json::from_str(&raw).expect("canonical json");
+        assert_eq!(value["command"], "/opt/superdev/superdev-agent");
+        assert_eq!(value["args"], serde_json::json!(["mcp"]));
+        assert_eq!(value["env"]["SUPERDEV_AGENT_URL"], "http://10.1.2.3:57117");
+        assert!(
+            entry_matches(&ctx, &value),
+            "远端 spec 写出的条目必须被自己的匹配器认成已配置: {raw}"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn local_canonical_mcp_json_omits_the_args_key() {
+        let home = test_dir("openclaw-local-launch");
+        let ctx = context_with_cli(home.clone());
+
+        let raw = canonical_mcp_json(&ctx);
+        assert!(
+            !raw.contains("args"),
+            "本机 args 为空时不得写 args 键（字节等价约束）: {raw}"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
 }
