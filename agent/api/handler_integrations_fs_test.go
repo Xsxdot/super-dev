@@ -662,3 +662,191 @@ func TestIntegrationsFsRejectsAnonymousRequest(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, resp.Code, "匿名请求必须 401")
 	require.Contains(t, resp.Body.String(), "agent token required")
 }
+
+// doWriteRequestWithOptions 与 doWriteRequest 同义，但额外把 Task 9b 新增的
+// 可选字段（require_regular_file / new_file_mode）拼进请求体。
+//
+// 单独一个 helper 而不是给 doWriteRequest 加参数：既有测试全部按「不带新字段」
+// 的形状发请求，正是向后兼容性的活证据，不应该被这次扩展改写。
+func doWriteRequestWithOptions(t *testing.T, app *App, path, content string, backup bool, extra map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	payload := map[string]any{"path": path, "content": content, "backup": backup}
+	for key, value := range extra {
+		payload[key] = value
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return httptestDo(t, app, http.MethodPut, "/api/integrations/fs/write", bytes.NewReader(body))
+}
+
+// seedSymlinkInsideWhitelist 在白名单根内造一个指向【同一根内】另一个真实文件
+// 的符号链接，返回 (链接路径, 真实文件路径)。
+//
+// 刻意让链接目标留在根内：指向根外的链接会先被 integrationPathAllowed 以 403
+// 挡下（既有测试 TestIntegrationsFsWriteRejectsSymlinkEscape 覆盖了那条），
+// 那样就测不到本次新增的「非普通文件目标」守卫本身。
+func seedSymlinkInsideWhitelist(t *testing.T, home string) (string, string) {
+	t.Helper()
+	dir := filepath.Join(home, ".claude")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	real := filepath.Join(dir, "real-settings.json")
+	require.NoError(t, os.WriteFile(real, []byte(`{"real":true}`), 0o600))
+	link := filepath.Join(dir, "settings.json")
+	require.NoError(t, os.Symlink(real, link))
+	return link, real
+}
+
+// TestIntegrationsFsStatReportsIsSymlink 覆盖 stat 新增的 is_symlink 字段：
+// 判定必须是 lstat 语义（看路径末段自身是不是链接），而不是 os.Stat 的跟随
+// 语义——后者对指向普通文件的链接只会说"这是个普通文件"，桌面端就再也无法
+// 在远端复刻本机 mutate_config 的符号链接守卫。
+//
+// 同时锁住 exists / is_dir 的既有语义不变（仍是跟随语义）。
+func TestIntegrationsFsStatReportsIsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 建符号链接需要额外权限")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	link, real := seedSymlinkInsideWhitelist(t, home)
+
+	linkOut := statForTest(t, app, link)
+	require.True(t, linkOut.IsSymlink, "指向普通文件的符号链接必须被报成 is_symlink")
+	require.True(t, linkOut.Exists, "exists 保持跟随语义：链接指向的普通文件存在")
+	require.False(t, linkOut.IsDir)
+
+	realOut := statForTest(t, app, real)
+	require.False(t, realOut.IsSymlink, "普通文件不能被误报成符号链接")
+	require.True(t, realOut.Exists)
+
+	missingOut := statForTest(t, app, filepath.Join(home, ".claude", "nope.json"))
+	require.False(t, missingOut.IsSymlink, "不存在的路径不是符号链接")
+	require.False(t, missingOut.Exists)
+
+	dirOut := statForTest(t, app, filepath.Join(home, ".claude"))
+	require.False(t, dirOut.IsSymlink)
+	require.True(t, dirOut.IsDir, "目录判定必须保持不变")
+}
+
+// integrationsFsStatOut 是 stat 响应体的测试侧镜像。
+type integrationsFsStatOut struct {
+	Exists    bool  `json:"exists"`
+	IsDir     bool  `json:"is_dir"`
+	IsSymlink bool  `json:"is_symlink"`
+	Size      int64 `json:"size"`
+}
+
+func statForTest(t *testing.T, app *App, path string) integrationsFsStatOut {
+	t.Helper()
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/stat", path), nil)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var out integrationsFsStatOut
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	return out
+}
+
+// TestIntegrationsFsWriteRejectsSymlinkTargetWhenGuardRequested 覆盖新增守卫：
+// require_regular_file=true 时，目标自身是符号链接必须被明确错误码拒绝，
+// 且既不备份也不写入——备份那一步会 **跟随** 链接读出被指向文件的内容再落到
+// 白名单内的 .superdev-bak，是一条真实的读取放大路径。
+func TestIntegrationsFsWriteRejectsSymlinkTargetWhenGuardRequested(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 建符号链接需要额外权限")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	link, real := seedSymlinkInsideWhitelist(t, home)
+
+	resp := doWriteRequestWithOptions(t, app, link, `{"pwned":true}`, true,
+		map[string]any{"require_regular_file": true})
+
+	require.Equal(t, http.StatusConflict, resp.Code, resp.Body.String())
+	require.Contains(t, resp.Body.String(), "unsafe_write_target",
+		"必须是稳定错误码，而不是 500 泛化错误")
+
+	content, err := os.ReadFile(real)
+	require.NoError(t, err)
+	require.Equal(t, `{"real":true}`, string(content), "被拒绝的写入不得改动链接指向的真实文件")
+	_, statErr := os.Stat(filepath.Join(home, ".claude", "settings.json.superdev-bak"))
+	require.True(t, os.IsNotExist(statErr), "守卫必须先于备份执行，不能留下备份文件")
+}
+
+// TestIntegrationsFsWriteRejectsDirectoryTargetWhenGuardRequested 覆盖守卫的
+// 另一半语义：非普通文件（这里是目录）同样必须被拒绝，而不是掉进 500。
+func TestIntegrationsFsWriteRejectsDirectoryTargetWhenGuardRequested(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "settings.json")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+
+	resp := doWriteRequestWithOptions(t, app, target, `{}`, false,
+		map[string]any{"require_regular_file": true})
+
+	require.Equal(t, http.StatusConflict, resp.Code, resp.Body.String())
+	require.Contains(t, resp.Body.String(), "unsafe_write_target")
+}
+
+// TestIntegrationsFsWriteWithoutGuardKeepsLegacySymlinkBehavior 是向后兼容的
+// 正面证据：不带 require_regular_file 的请求（Task 8 的 RemoteAgentFs 现有形状）
+// 行为与本次扩展之前完全一致——符号链接目标仍然照旧接受。
+func TestIntegrationsFsWriteWithoutGuardKeepsLegacySymlinkBehavior(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 建符号链接需要额外权限")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	link, _ := seedSymlinkInsideWhitelist(t, home)
+
+	resp := doWriteRequest(t, app, link, `{"v":2}`, false)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+}
+
+// TestIntegrationsFsWriteRestrictedNewFileMode 覆盖新增的 new_file_mode：
+// 桌面端本机 mutate_config 对新建配置文件用 0600，远端必须能表达同一语义，
+// 否则同一份配置在本机装是 0600、远端装却是 0644。
+func TestIntegrationsFsWriteRestrictedNewFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 不支持 Unix 权限位语义")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	fresh := filepath.Join(home, ".claude", "restricted.json")
+
+	resp := doWriteRequestWithOptions(t, app, fresh, `{"a":1}`, false,
+		map[string]any{"new_file_mode": "restricted"})
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	info, err := os.Stat(fresh)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "restricted 新建文件必须落 0600")
+}
+
+// TestIntegrationsFsWriteRestrictedModeStillPreservesExistingMode 锁住 Task 4
+// 人类裁决不被本次扩展回退：new_file_mode 只影响【新建】，已存在文件仍然保留
+// 它自己的权限位（哪怕比 restricted 更宽）。
+func TestIntegrationsFsWriteRestrictedModeStillPreservesExistingMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 不支持 Unix 权限位语义")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude")
+	target := filepath.Join(dir, "existing.json")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(target, []byte(`{"v":1}`), 0o640))
+
+	resp := doWriteRequestWithOptions(t, app, target, `{"v":2}`, false,
+		map[string]any{"new_file_mode": "restricted"})
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o640), info.Mode().Perm(),
+		"已存在文件的权限位由目标自己决定，new_file_mode 不得覆盖它")
+}
+
+// TestIntegrationsFsWriteRejectsUnknownNewFileMode 覆盖未知取值必须快速失败，
+// 而不是静默退回默认值——静默退回会让调用方以为自己拿到了更紧的权限。
+func TestIntegrationsFsWriteRejectsUnknownNewFileMode(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "bad-mode.json")
+
+	resp := doWriteRequestWithOptions(t, app, target, `{}`, false,
+		map[string]any{"new_file_mode": "0777"})
+	require.Equal(t, http.StatusBadRequest, resp.Code, resp.Body.String())
+	_, statErr := os.Stat(target)
+	require.True(t, os.IsNotExist(statErr), "参数非法时不得落盘")
+}

@@ -58,8 +58,67 @@ func (a *App) integrationsHome() (string, error) {
 	return os.UserHomeDir()
 }
 
+// integrationsFsNewFileModeRestricted 是 write 端点 new_file_mode 字段唯一被
+// 接受的非空取值，语义是「新建文件用 0600」。
+//
+// 刻意做成枚举字符串而不是让调用方直接下发八进制数字：受限文件通道不应该把
+// 「目标文件最终是什么权限」这件事完全交给客户端（下发 0777 就没人拦得住），
+// 服务端只承认自己定义好的、有限的几档语义。当前只有一档，因为桌面端只需要
+// 表达 mutate_config 的 0600；将来若真有第二档，在这里加常量并在
+// integrationsFsResolveNewFileMode 里加分支，客户端不会因此获得任意权限位。
+const integrationsFsNewFileModeRestricted = "restricted"
+
+// integrationsFsResolveNewFileMode 把请求里的 new_file_mode 翻译成【新建文件】
+// 使用的权限位。
+//
+// 参数：
+//   - raw: 请求体里的 new_file_mode 字段原值
+//
+// 返回：
+//   - (新建文件权限位, 取值是否合法)
+//
+// 注意：
+//   - 空串（字段缺席即为空串）必须回 0o644——这是本字段引入之前的行为，Task 8
+//     的 RemoteAgentFs 现有请求全部不带这个字段，缺省语义一变它们就会回归
+//   - 未知取值返回 false 让调用方 400，而不是静默退回默认：静默退回会让调用方
+//     以为自己拿到了更紧的权限，实际却落了更宽的一档
+func integrationsFsResolveNewFileMode(raw string) (os.FileMode, bool) {
+	switch raw {
+	case "":
+		return 0o644, true
+	case integrationsFsNewFileModeRestricted:
+		return 0o600, true
+	default:
+		return 0, false
+	}
+}
+
+// integrationsFsPathIsSymlink 用 os.Lstat 判断【请求中声明的】路径末段自身是不是
+// 符号链接。
+//
+// 为什么必须用请求里的原始路径而不是 integrationPathAllowed 的返回值：后者已经
+// 把已存在部分做过 EvalSymlinks 收敛，末段若是符号链接，返回的就是解析后的真实
+// 目标——对它 Lstat 永远得到 false，符号链接这条信息在那一步就已经丢了。
+//
+// 为什么必须用 Lstat 而不是 Stat：Stat 跟随符号链接，对一个指向普通文件的链接
+// 只会说「这是普通文件」，桌面端因此无法在远端复刻本机 mutate_config 的
+// 「拒绝符号链接目标」守卫。
+//
+// Lstat 失败（不存在、权限不足等）一律回 false：不存在的路径不是符号链接，而
+// 其它失败情况下调用方随后的实际 I/O 也会自行失败，这里不越权把它变成拒绝。
+func integrationsFsPathIsSymlink(rawPath string) bool {
+	info, err := os.Lstat(filepath.Clean(rawPath))
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
+}
+
 // integrationsFsStat 处理 GET /api/integrations/fs/stat：返回白名单内路径的
-// 存在性/类型/大小，供桌面端判断目标文件当前状态。
+// 存在性/类型/大小/是否符号链接，供桌面端判断目标文件当前状态。
+//
+// exists / is_dir 保持 os.Stat 的【跟随符号链接】语义不变（桌面端既有判断依赖
+// 它）；is_symlink 是本次新增的一位，走 os.Lstat 的不跟随语义，两者刻意不同源。
 func (a *App) integrationsFsStat(w http.ResponseWriter, r *http.Request) {
 	rawPath := r.URL.Query().Get("path")
 	home, err := a.integrationsHome()
@@ -75,17 +134,21 @@ func (a *App) integrationsFsStat(w http.ResponseWriter, r *http.Request) {
 		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
 		return
 	}
+	isSymlink := integrationsFsPathIsSymlink(rawPath)
 	info, statErr := os.Stat(target)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
-			jsonOK(w, map[string]any{"exists": false, "is_dir": false, "size": int64(0)})
+			// 悬空符号链接（链接本身在、指向的目标没了）会走到这里：exists 仍是
+			// false（跟随语义下确实读不到东西），但 is_symlink 必须如实为 true，
+			// 否则桌面端会把它当成「不存在，可以放心创建」而写穿这条链接。
+			jsonOK(w, map[string]any{"exists": false, "is_dir": false, "is_symlink": isSymlink, "size": int64(0)})
 			return
 		}
 		log.Printf("[SuperDev] integrations: stat 失败 path=%s：%v", target, statErr)
 		jsonError(w, http.StatusInternalServerError, "stat failed")
 		return
 	}
-	jsonOK(w, map[string]any{"exists": true, "is_dir": info.IsDir(), "size": info.Size()})
+	jsonOK(w, map[string]any{"exists": true, "is_dir": info.IsDir(), "is_symlink": isSymlink, "size": info.Size()})
 }
 
 // integrationsFsRead 处理 GET /api/integrations/fs/read：读取白名单内文件内容。
@@ -213,12 +276,22 @@ func (a *App) integrationsFsList(w http.ResponseWriter, r *http.Request) {
 // integrationsFsWrite 处理 PUT /api/integrations/fs/write：白名单内原子写，可选备份。
 //
 // 权限位：目标已存在时沿用它原有的权限位（不放宽也不收紧）；只有新建文件
-// 才用 0o644 默认值——理由与细节见函数体内 mode 计算前的注释。
+// 才用 new_file_mode 指定的那一档（缺省 0o644）——理由与细节见函数体内 mode
+// 计算前的注释。
+//
+// 两个可选字段（Task 9b 新增，缺席时行为与引入之前逐字节一致）：
+//   - require_regular_file: true 时，目标自身是符号链接或非普通文件一律 409
+//     拒绝。这条守卫**必须由本端点执行**而不是由桌面端先 stat 再 write：那样
+//     两次调用之间存在 TOCTOU 窗口，攻击者可以在窗口内把目标换成符号链接，
+//     客户端的判定形同虚设
+//   - new_file_mode: 新建文件的权限档位，取值见 integrationsFsResolveNewFileMode
 func (a *App) integrationsFsWrite(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-		Backup  bool   `json:"backup"`
+		Path               string `json:"path"`
+		Content            string `json:"content"`
+		Backup             bool   `json:"backup"`
+		RequireRegularFile bool   `json:"require_regular_file"`
+		NewFileMode        string `json:"new_file_mode"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
@@ -226,6 +299,12 @@ func (a *App) integrationsFsWrite(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Content) > integrationsFsMaxWriteBytes {
 		jsonError(w, http.StatusRequestEntityTooLarge, "content too large")
+		return
+	}
+	newFileMode, modeOK := integrationsFsResolveNewFileMode(req.NewFileMode)
+	if !modeOK {
+		log.Printf("[SuperDev] integrations: 写入的 new_file_mode 非法 path=%s value=%s", req.Path, req.NewFileMode)
+		jsonError(w, http.StatusBadRequest, "invalid new_file_mode")
 		return
 	}
 	home, err := a.integrationsHome()
@@ -241,6 +320,26 @@ func (a *App) integrationsFsWrite(w http.ResponseWriter, r *http.Request) {
 		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
 		return
 	}
+	// 守卫必须排在 MkdirAll / 备份 / 写入之前：备份那一步（copyFile）会**跟随**
+	// 符号链接读出被指向文件的内容，再把它落到白名单内的 .superdev-bak，是一条
+	// 真实的读取放大路径；等到写入那一步再拒绝已经晚了。
+	//
+	// 判定用 Lstat 而不是 Stat：Lstat 下符号链接自身的 Mode 带 ModeSymlink 位、
+	// IsRegular() 恒为 false，所以「非普通文件」这一个条件同时盖住了符号链接与
+	// 目录/FIFO/套接字；换成 Stat 就会跟随链接、把指向普通文件的链接判成合法目标。
+	if req.RequireRegularFile {
+		if info, lstatErr := os.Lstat(filepath.Clean(req.Path)); lstatErr == nil {
+			if !info.Mode().IsRegular() {
+				name, _, _ := principalFromRequest(r)
+				log.Printf("[SuperDev] integrations: 写入被非普通文件守卫拒绝 path=%s mode=%s by=%s",
+					target, info.Mode(), name)
+				jsonCodeError(w, http.StatusConflict, "unsafe_write_target",
+					"target is not a regular file", nil)
+				return
+			}
+		}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		log.Printf("[SuperDev] integrations: 创建父目录失败 path=%s：%v", target, err)
 		jsonError(w, http.StatusInternalServerError, "mkdir failed")
@@ -255,9 +354,13 @@ func (a *App) integrationsFsWrite(w http.ResponseWriter, r *http.Request) {
 	//
 	// 这里是相对 brief Step 3 范例代码（硬编码 0o644）的一处明确授权偏离
 	// ——人类已裁决：保留原有权限，不要为了字面忠于 brief 把它改回硬编码。
+	//
+	// new_file_mode 只参与「新建」这一档，不改动上面这条裁决：已存在的目标仍然
+	// 由它自己的权限位说了算，客户端说 restricted 也不会把一个 0o644 的既有
+	// 配置收紧掉（那同样是未经用户同意改动用户文件）。
 	info, statErr := os.Stat(target)
 	targetExists := statErr == nil
-	mode := os.FileMode(0o644)
+	mode := newFileMode
 	switch {
 	case targetExists:
 		mode = info.Mode().Perm()
