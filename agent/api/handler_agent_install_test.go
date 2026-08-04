@@ -12,6 +12,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -386,7 +387,7 @@ func TestInstallAgentProceedsWhenGuardProbeTimesOut(t *testing.T) {
 	slowSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
-		case <-time.After(5 * time.Second):
+		case <-time.After(30 * time.Second):
 		}
 	}))
 	defer slowSrv.Close()
@@ -396,4 +397,37 @@ func TestInstallAgentProceedsWhenGuardProbeTimesOut(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, resp.Code)
 	assert.Equal(t, 1, fake.calls)
+	// 超时探测放行但绝不静默：响应必须带出「无法断定目标机状态」的事实，
+	// 桌面端据此提示用户自行确认目标机上没有别人在用的 agent。
+	assert.Contains(t, resp.Body.String(), `"guard_probe":"inconclusive"`)
+}
+
+// TestInstallAgentGuardDetectsTLSOnlyProvisionedAgent 是纳管场景的核心回归：
+// 目标机被别的控制面 provision 成「只有自签 HTTPS 在监听」（默认 tls_mode=auto
+// 姿态），守卫必须经不验证证书的 HTTPS 探测把它探出来并 409 阻断——旧实现按
+// 本地明文口径探测，在这种目标上 100% fail-open 直接盲装。
+func TestInstallAgentGuardDetectsTLSOnlyProvisionedAgent(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.117.127.123:57019"}}]},
+	  "config":{"listen_address":"100.117.127.123","listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+	// https(不验证) 尝试成功返回 provisioned 体检；明文尝试模拟 TLS 端口对
+	// 明文客户端的握手拒绝——只有 HTTPS 能探到它。
+	app.nodeTransport = &schemeFakeTransport{
+		body:    `{"version":"1.5.0","provision_state":"provisioned"}`,
+		httpErr: errors.New("tls handshake rejected plaintext client"),
+	}
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/install", bytes.NewBufferString(`{"method":"push_over_ssh"}`))
+
+	require.Equal(t, http.StatusConflict, resp.Code)
+	assert.Contains(t, resp.Body.String(), `"code":"existing_agent_detected"`)
+	assert.Contains(t, resp.Body.String(), `"version":"1.5.0"`)
+	assert.Equal(t, 0, fake.calls)
 }

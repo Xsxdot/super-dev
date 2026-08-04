@@ -32,11 +32,13 @@ const (
 
 // installGuardProbeTimeout 限定安装前「既有 agent 探测守卫」的最长等待时间。
 //
-// 取 1.5 秒：留出一次跨网 HTTP 往返的余量，同时不能让「添加主机」这种交互式
-// 操作被一台无响应的目标机拖住几十秒——探测失败本就直接放行（见下方
-// guardAgainstExistingProvisionedAgent 的注释），拖长超时只会拖慢正常的
-// “这台机器确实还没装 agent”路径，对守卫本身的正确性没有帮助。
-const installGuardProbeTimeout = 1500 * time.Millisecond
+// 取 5 秒：守卫失效的后果是「盲目重装停掉别人正在用的 agent + 全部控制面凭据
+// 集体失效」，探测预算必须覆盖真实链路的全价往返——SSH 隧道冷启动（建连 +
+// 端口转发）加一次 HTTPS 握手在跨洋链路上轻松超过 1.5 秒，偏紧的超时会让守卫
+// 系统性静默 fail-open。5 秒是「交互式操作可容忍的上限」与「给慢链路留足余量」
+// 的折中；且超时不再静默放行——无法断定时放行但在安装响应里带
+// guard_probe=inconclusive（见 installAgent），桌面端据此提示用户自行确认。
+const installGuardProbeTimeout = 5 * time.Second
 
 // existingAgentDetectedErrorCode 是安装预探测守卫拦截时返回的稳定错误码，
 // 供桌面端识别并引导用户改走纳管（接入请求）流程。
@@ -53,6 +55,10 @@ type agentInstallRequest struct {
 type existingAgentGuardResult struct {
 	Blocked bool
 	Version string
+	// Inconclusive 表示探测无法断定目标机状态（超时/握手异常/非 agent 服务）：
+	// 安装照常放行，但响应必须带出该事实，不允许静默——静默放行会把「探测
+	// 预算不够」直接翻译成「盲目重装别人在用的 agent」。
+	Inconclusive bool
 }
 
 // guardAgainstExistingProvisionedAgent 在真正执行安装前，直接探测目标机的
@@ -68,31 +74,43 @@ type existingAgentGuardResult struct {
 //     agent，应阻断本次盲目重装；Version 是探到的远端 agent 版本
 //
 // 注意：
-//   - 探测走不通、超时或响应不含 provisioned 状态，一律返回 Blocked=false
-//     放行安装：这条守卫是尽力而为的安全网，不是安装的前置门。连不通目标机，
-//     大概率就是这台机器还没装 agent，不该反而拦住正常的首次安装。
+//   - 探测经 doAgentRequestSchemeAware 先试 HTTPS(不验证证书)再退明文：被纳管
+//     目标默认（tls_mode=auto）是自签 HTTPS 监听，只按本地记录的明文口径探测
+//     会 100% 探不到既有 agent，守卫形同虚设
+//   - 「连接被拒」= 端口上确定没有监听者，静默放行（正常的首次安装路径）；
+//     其余失败（超时/握手异常/非 agent 服务/响应不可解析）放行但标记
+//     Inconclusive，由调用方带出警示，不允许静默
+//   - 探到 agent 但 provision_state 非 provisioned（如 pending-bootstrap 的
+//     半成品安装）：放行，重装是合法的收尾手段
 func (a *App) guardAgainstExistingProvisionedAgent(ctx context.Context, hostID string) existingAgentGuardResult {
 	probeCtx, cancel := context.WithTimeout(ctx, installGuardProbeTimeout)
 	defer cancel()
-	resp, err := a.nodeTransport.Do(probeCtx, hostID, nodetransport.NodeRequest{
-		Method: http.MethodGet,
-		Path:   nodetransport.SecurityHealthPath,
-	})
+	resp, scheme, verdict, err := a.doAgentRequestSchemeAware(probeCtx, hostID, http.MethodGet, nodetransport.SecurityHealthPath, nil, nil)
 	if err != nil {
-		// 探不通（未装 agent / 网络不可达 / 超时）：尽力而为，直接放行。
-		return existingAgentGuardResult{}
+		if verdict == agentProbeUnreachable {
+			// 连接被拒：端口上确定没有监听者，大概率这台机器还没装 agent，
+			// 不该拦住正常的首次安装，静默放行。
+			return existingAgentGuardResult{}
+		}
+		log.Printf("[SuperDev] installAgent 守卫探测无法断定 host=%s：%v（放行并要求提示）", hostID, err)
+		return existingAgentGuardResult{Inconclusive: true}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return existingAgentGuardResult{}
+		// 端口上有东西在响应但不是可读的 agent 体检——可能是别的服务占了端口，
+		// 也可能是版本极旧的 agent；无法断定，放行但要求提示。
+		log.Printf("[SuperDev] installAgent 守卫探测得到非 2xx host=%s scheme=%s status=%d（放行并要求提示）", hostID, scheme, resp.StatusCode)
+		return existingAgentGuardResult{Inconclusive: true}
 	}
 	var body nodetransport.SecurityHealthResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return existingAgentGuardResult{}
+		log.Printf("[SuperDev] installAgent 守卫探测响应不可解析 host=%s scheme=%s：%v（放行并要求提示）", hostID, scheme, err)
+		return existingAgentGuardResult{Inconclusive: true}
 	}
 	if body.ProvisionState != string(model.AgentProvisionStateProvisioned) {
 		return existingAgentGuardResult{}
 	}
+	log.Printf("[SuperDev] installAgent 守卫探到既有 provisioned agent host=%s scheme=%s version=%s", hostID, scheme, body.Version)
 	return existingAgentGuardResult{Blocked: true, Version: body.Version}
 }
 
@@ -168,6 +186,7 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	guardInconclusive := false
 	if req.ForceReinstall {
 		// 用户显式确认要盲目重装（例如确实要接管一台失联旧控制面的机器），
 		// 跳过探测守卫，直接走原安装路径。
@@ -186,6 +205,10 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 			"address": address,
 		})
 		return
+	} else if guard.Inconclusive {
+		// 探测无法断定目标机状态：放行安装，但必须把这个事实带到响应里
+		// （见 existingAgentGuardResult.Inconclusive 注释），不允许静默。
+		guardInconclusive = true
 	}
 
 	sessionReq, err := prepareAgentInstallSessionRequest(agent, agentInstallCommandRequest{
@@ -224,7 +247,32 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if guardInconclusive {
+		jsonOK(w, withGuardProbeInconclusive(result))
+		return
+	}
 	jsonOK(w, result)
+}
+
+// withGuardProbeInconclusive 在安装成功响应上附加 guard_probe=inconclusive 标记。
+//
+// 参数：
+//   - result: 安装器返回的原始结果（任意可 JSON 序列化的结构）
+//
+// 返回：
+//   - 展平后的 map，额外带 "guard_probe":"inconclusive"；序列化失败时退化为
+//     只含标记的 map（宁可丢结果细节也不丢安全警示）
+//
+// 注意：
+//   - 只在守卫探测无法断定时使用；正常路径保持原响应结构不动，避免无谓的
+//     响应形状漂移
+func withGuardProbeInconclusive(result any) map[string]any {
+	flat := map[string]any{}
+	if raw, err := json.Marshal(result); err == nil {
+		_ = json.Unmarshal(raw, &flat)
+	}
+	flat["guard_probe"] = "inconclusive"
+	return flat
 }
 
 // restartAgent 处理 POST /api/agents/{host_id}/restart。

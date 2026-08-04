@@ -1097,6 +1097,7 @@ onBeforeUnmount(() => {
                       {{ installingPush ? t('common.loading') : t('settings.agents.installStartNow') }}
                     </button>
                     <p v-if="pushInstallResult" class="install-note" data-test="agent-install-push-result">{{ pushInstallResult.message }}</p>
+                    <p v-if="pushInstallResult?.guard_probe === 'inconclusive'" class="install-note warning" data-test="agent-install-guard-inconclusive">{{ t('settings.agents.installGuardProbeInconclusive') }}</p>
                   </template>
                 </section>
 

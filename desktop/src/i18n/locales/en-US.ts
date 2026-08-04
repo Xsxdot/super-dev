@@ -489,6 +489,7 @@ export default {
       generatedCommand: 'Generated command',
       pushOverSSH: 'Push over SSH',
       pushOverSSHNote: 'Push-over-SSH install reuses the Host SSH login info. Save the Host first, then install.',
+      installGuardProbeInconclusive: 'Could not verify the target machine before installing (probe timed out or returned an unexpected response). If this machine may already be managed by another control plane, please double-check before relying on this install — it could have replaced an agent that was in use.',
       pushOverSSHBlocked: 'Complete the Host SSH address, user, login credential, and trusted host-key fingerprint before installing.',
       tunnelInvalidationWarning: 'Saving this tunnel target change will disconnect any active tunnel; reconnect after the new configuration is stored.',
       installNow: 'Install',

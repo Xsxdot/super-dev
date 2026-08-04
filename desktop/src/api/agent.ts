@@ -1372,6 +1372,13 @@ export interface AgentInstallResponse {
   host_id: string
   platform: string
   message: string
+  /**
+   * guard_probe 为 'inconclusive' 时表示安装前的「既有 agent 探测守卫」无法
+   * 断定目标机状态（超时/握手异常/非 agent 服务），安装照常执行但用户应自行
+   * 确认目标机上没有别人在用的 agent——静默放行会掩盖「探测预算不够」被翻译
+   * 成「盲目重装」的风险。省略表示探测有确定结论（未探到 / 已被 409 拦截）。
+   */
+  guard_probe?: 'inconclusive'
 }
 
 export interface AgentRestartResponse {

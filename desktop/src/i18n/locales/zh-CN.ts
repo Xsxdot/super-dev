@@ -489,6 +489,7 @@ export default {
       generatedCommand: '生成命令',
       pushOverSSH: 'SSH 直推',
       pushOverSSHNote: 'SSH 直推安装会复用 Host 的 SSH 登录信息；请先保存主机，再执行安装。',
+      installGuardProbeInconclusive: '安装前未能确认目标机状态（探测超时或响应异常）。若这台机器可能已被其他控制面纳管，请自行确认后再继续使用，避免覆盖对方在用的 agent。',
       pushOverSSHBlocked: '请先补全 Host 的 SSH 地址、用户、登录凭据和可信 Host Key 指纹，再执行安装。',
       tunnelInvalidationWarning: '保存该 tunnel 目标变更会断开当前活动隧道；新配置落盘后需要重新连接。',
       installNow: '执行安装',
