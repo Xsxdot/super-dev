@@ -201,6 +201,56 @@ func TestWsOperationApprovals_DualControlPlaneAcceptance(t *testing.T) {
 	assert.Equal(t, "CP-A", approvedEvent.Data["decided_by"])
 	assert.Equal(t, "remote", approvedEvent.Data["principal_type"])
 	assert.Equal(t, recA.ID, approvedEvent.Data["principal_id"])
+
+	// --- 5. 反方向冲突（spec §12 验收第 4 项字面场景）：CP-B 先拒绝，CP-A 再批准 ---
+	// 必须与 approve-在先走同一条 409 already_decided + 回显胜者的通道；rejected
+	// 若走 403 approval_rejected，桌面端会渲染成错误横幅而不是「已由 X 处理」灰化。
+	required2 := postJSONWithHeadersForTest[map[string]any](t, srv.URL+"/api/deployments/api-prod/restart", map[string]any{}, map[string]string{
+		"Authorization": "Bearer " + app.LocalAccessToken(),
+	}, http.StatusForbidden)
+	approvalID2 := required2["approval"].(map[string]any)["id"].(string)
+	// 消费掉创建广播帧，保持后续帧序断言的确定性。
+	readFrame(connA)
+	readFrame(connB)
+
+	// reject 端点返回裸 sanitized approval（不像 approve 包一层 {approval}）。
+	rejectResp := postJSONWithHeadersForTest[operation.Approval](t, srv.URL+"/api/operation-approvals/"+approvalID2+"/reject", map[string]any{
+		"note": "rejected by CP-B",
+	}, map[string]string{
+		"Authorization": "Bearer cp-b-secret-token",
+	}, http.StatusOK)
+	assert.Equal(t, "CP-B", rejectResp.DecidedBy)
+
+	conflict2 := postJSONWithHeadersForTest[map[string]any](t, srv.URL+"/api/operation-approvals/"+approvalID2+"/approve", map[string]any{
+		"note": "CP-A trying to approve an already-rejected approval",
+	}, map[string]string{
+		"Authorization": "Bearer cp-a-secret-token",
+	}, http.StatusConflict)
+	assert.Equal(t, "approval_already_decided", conflict2["code"])
+	assert.Equal(t, "CP-B", conflict2["decided_by"])
+
+	// 灰化数据面同样成立：两边随后的帧里该单进 decided 段，胜者是 CP-B。
+	afterRejectA := readFrame(connA)
+	afterRejectB := readFrame(connB)
+	assert.Empty(t, afterRejectA.Pending)
+	assert.Empty(t, afterRejectB.Pending)
+	foundA := false
+	for _, item := range afterRejectA.Decided {
+		if item.ID == approvalID2 {
+			foundA = true
+			assert.Equal(t, operation.ApprovalRejected, item.Status)
+			assert.Equal(t, "CP-B", item.DecidedBy)
+		}
+	}
+	require.True(t, foundA, "CP-A must see the rejected approval in the decided section")
+	foundB := false
+	for _, item := range afterRejectB.Decided {
+		if item.ID == approvalID2 {
+			foundB = true
+			assert.Equal(t, "CP-B", item.DecidedBy)
+		}
+	}
+	require.True(t, foundB, "CP-B must see the rejected approval in the decided section")
 }
 
 // TestWsOperationApprovals_UnregistersPublisherOnDisconnect 验证连接断开后

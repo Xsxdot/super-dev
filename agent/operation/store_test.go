@@ -134,6 +134,37 @@ func TestApprovalFirstDecisionWins(t *testing.T) {
 	assert.Equal(t, ApprovalUsed, used.Status)
 }
 
+// TestApprovalFirstDecisionWinsRejectFirst 覆盖冲突的另一个方向：先拒绝、后批准。
+// 对裁决路径这与 approve-在先是同一个事实（先裁决者已生效、本次请求是败者），
+// 必须走同一个 ErrApprovalAlreadyDecided（HTTP 层 409 + 回显胜者），不能走
+// ErrApprovalRejected（HTTP 层 403，会被前端当错误横幅而不是灰化）。
+func TestApprovalFirstDecisionWinsRejectFirst(t *testing.T) {
+	store := NewApprovalFileStore(t.TempDir() + "/operation-approvals.json")
+	approval, err := store.FindOrCreatePending(context.Background(), storePlan("runtime.restart", "fp-1"), "mcp", "Codex")
+	require.NoError(t, err)
+
+	_, err = store.Reject(context.Background(), approval.ID, "CP-B", "not now")
+	require.NoError(t, err)
+
+	// 另一侧再点批准：裁决冲突，不是「你的操作被拒绝」。
+	_, err = store.Approve(context.Background(), approval.ID, "CP-A", "")
+	assert.ErrorIs(t, err, ErrApprovalAlreadyDecided)
+
+	// 二次拒绝同理：胜者身份不可被覆盖。
+	_, err = store.Reject(context.Background(), approval.ID, "CP-A", "")
+	assert.ErrorIs(t, err, ErrApprovalAlreadyDecided)
+
+	got, err := store.Get(context.Background(), approval.ID)
+	require.NoError(t, err)
+	assert.Equal(t, ApprovalRejected, got.Status)
+	assert.Equal(t, "CP-B", got.DecidedBy)
+
+	// token 校验/发放路径保持「被拒绝」语义不变：问「这单能不能执行」时
+	// 准确回答仍是 rejected。
+	_, _, err = store.IssueToken(context.Background(), approval.ID)
+	assert.ErrorIs(t, err, ErrApprovalRejected)
+}
+
 func TestAuditStoreAppendsAndFilters(t *testing.T) {
 	store := NewAuditFileStore(t.TempDir()+"/operation-audit.json", 100)
 	plan := storePlan("runtime.restart", "fp-1")

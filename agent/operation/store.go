@@ -583,13 +583,21 @@ func (s *AuditFileStore) List(ctx context.Context, filter AuditFilter) ([]AuditE
 // 再次裁决，第二次 Approve 会静默覆盖第一个裁决者的 DecidedBy（胜者身份被抹掉），第二次
 // Reject 更会翻案并吊销胜者已经领到手的一次性 token（执行方被背刺）。因此“先裁决者生效”
 // 必须是服务器侧硬语义：一旦进入 approved，后续任何裁决请求都直接拒绝，不做任何状态变更。
+//
+// rejected 同样按「裁决冲突」处理（而不是 ErrApprovalRejected）：对**裁决路径**来说，
+// 「另一侧先拒绝了，我再点批准」与「另一侧先批准了，我再点拒绝」是同一个事实——先裁决者
+// 已生效，本次请求是败者。两个方向必须走同一条 409 already_decided + 回显胜者的通道，桌面
+// 端才能统一灰化成「已由 X 处理」；rejected 走 403 approval_rejected 会被前端当成错误横幅
+// （spec §12 验收第 4 项的字面场景）。ErrApprovalRejected 保留给 token 校验/发放路径
+// （ensureTokenIssueAllowed / VerifyToken）——那里的调用方问的是「这单能不能执行」，
+// 「被拒绝」才是准确回答。
 func ensureApprovalDecisionAllowed(approval Approval, now time.Time) error {
 	switch approval.Status {
 	case ApprovalPending:
 	case ApprovalApproved:
 		return ErrApprovalAlreadyDecided
 	case ApprovalRejected:
-		return ErrApprovalRejected
+		return ErrApprovalAlreadyDecided
 	case ApprovalUsed:
 		return ErrApprovalTokenConsumed
 	case ApprovalExpired:
