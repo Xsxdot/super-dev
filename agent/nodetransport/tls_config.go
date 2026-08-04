@@ -60,6 +60,12 @@ func tlsConfigForAgentTLS(spec model.AgentTLSSpec) (*tls.Config, error) {
 		return nil, nil
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if spec.InsecureSkipVerify {
+		// 探测专用（见 model.AgentTLSSpec.InsecureSkipVerify 注释）：跳过证书
+		// 校验、不加载 CA——调用方正是因为没有目标机的 CA 才需要这条路径。
+		cfg.InsecureSkipVerify = true
+		return cfg, nil
+	}
 	if strings.TrimSpace(spec.ServerName) != "" {
 		cfg.ServerName = strings.TrimSpace(spec.ServerName)
 	}

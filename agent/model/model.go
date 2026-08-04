@@ -484,6 +484,13 @@ type AgentTLSSpec struct {
 	Mode       AgentTLSMode `json:"mode"`
 	CACert     string       `json:"ca_cert,omitempty"`
 	ServerName string       `json:"server_name,omitempty"`
+	// InsecureSkipVerify 仅供 nodetransport.NodeRequest.TLSOverride 的「scheme
+	// 探测」场景使用：目标机可能已被别的控制面 provision 成自签 HTTPS 监听，
+	// 而本机没有对方的 CA，探测想问清「有没有 agent 在听」只能跳过证书校验。
+	// json:"-" 保证该字段永不持久化进 agents.json、也不会经 API 下发——
+	// 常规带凭据流量绝不允许走不验证证书的 TLS，只有安装守卫探测与纳管
+	// 接入通道（本身就是与陌生 agent 的首次接触，尚无信任锚）允许使用。
+	InsecureSkipVerify bool `json:"-"`
 }
 
 // TransportConfig 持有一台 host 的有序传输链。

@@ -349,3 +349,45 @@ func firstNonLoopbackIPv4(t *testing.T) string {
 	t.Skip("no non-loopback IPv4 address available")
 	return ""
 }
+
+// TestDirectTransportTLSOverrideInsecureProbe 验证「scheme 探测」链路的传输层前提：
+// 目标机被别的控制面 provision 成自签 HTTPS 后，带 InsecureSkipVerify 的
+// TLSOverride 能真实完成握手拿到响应；而默认（本地记录明文口径）请求必失败。
+// 这是安装守卫/纳管通道在默认 tls_mode=auto 姿态下不再 fail-open 的根基。
+func TestDirectTransportTLSOverrideInsecureProbe(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	u, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	target := directTarget("h1", "direct", u.Host)
+	tr := nodetransport.NewDirectTransport(func() ([]nodetransport.NodeTarget, error) { return []nodetransport.NodeTarget{target}, nil })
+
+	// 默认口径（Agent 记录是明文）：明文 HTTP 打 Go 的 TLS 端口不会得到传输层
+	// 错误，而是一条 400 明文响应（"Client sent an HTTP request to an HTTPS
+	// server"）——这正是旧安装守卫 fail-open 的隐蔽路径之一：非 2xx → 放行。
+	// 钉死该行为，防止未来有人以为明文探测「失败得足够响亮」。
+	plainResp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{Path: "/api/security/health"})
+	require.NoError(t, err)
+	defer plainResp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, plainResp.StatusCode)
+
+	// 探测口径：跳过证书校验的 HTTPS override，自签服务也能问到。
+	resp, err := tr.Do(context.Background(), "h1", nodetransport.NodeRequest{
+		Path:        "/api/security/health",
+		TLSOverride: &model.AgentTLSSpec{Mode: model.AgentTLSModeAuto, InsecureSkipVerify: true},
+	})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestAgentTLSSpecInsecureSkipVerifyNeverSerialized 钉死红线：探测专用的
+// InsecureSkipVerify 绝不允许被持久化或经 API 下发——一旦入 JSON，常规带凭据
+// 流量就可能被配置成不验证证书。
+func TestAgentTLSSpecInsecureSkipVerifyNeverSerialized(t *testing.T) {
+	raw, err := json.Marshal(model.AgentTLSSpec{Mode: model.AgentTLSModeAuto, InsecureSkipVerify: true})
+	require.NoError(t, err)
+	assert.NotContains(t, strings.ToLower(string(raw)), "insecure")
+}
