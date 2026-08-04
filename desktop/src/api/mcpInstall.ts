@@ -6,10 +6,13 @@
  *   - 保持 Rust canonical Connector DTO 与 TypeScript 字段一致
  *   - 读取其他本机 stdio MCP Agent 的通用连接材料
  *   - 统一开放 Connector ID 与能力结果类型
+ *   - 封装远端机器（只装了 agent）的编程智能体探测/安装/卸载三个 Tauri command
  *
  * 边界：
  *   - 不渲染引导界面
  *   - 不读写 agent settings
+ *   - 远端操作经 Tauri command 转发到目标机 agent 的受限文件端点，本模块不感知
+ *     本机 agent 代理链或 nodetransport 转发细节
  */
 import { invoke } from '@tauri-apps/api/core'
 
@@ -140,4 +143,73 @@ export async function getGenericMcpConnectionMaterial(): Promise<GenericMcpConne
  */
 export async function getMcpDocs(): Promise<McpDocs> {
   return invoke<McpDocs>('mcp_docs')
+}
+
+/**
+ * RemoteAgentStatus 是「只装了 agent 的远端机器」上单个连接器的接入状态。
+ *
+ * 与本机 `AgentConnectorState` 的关键差异：
+ *   - `cli_present` 来自目标机 detect 端点的 PATH 查找，不是桌面机本地扫描
+ *   - `mcp_installed` 只有在 command/args/SUPERDEV_AGENT_URL 三者与**这台机器自己
+ *     的 agent** 完全一致时才为 true；`mcp_command`/`agent_url` 非空但
+ *     `mcp_installed` 为 false 表示「装了但指向别处」，不是「没装」
+ *   - `remote_supported` 为 false 时，`mcp_installed`/`skill_installed`/
+ *     `hook_installed` 都只是占位 false——真实语义是「查不到」，不是「没装」。
+ *     该字段为 false 的连接器（openclaw / grok）依赖目标机本地 CLI 进程写配置，
+ *     远端只提供受限文件端点，不提供远程执行原语
+ */
+export interface RemoteAgentStatus {
+  connector_id: ConnectorId
+  display_name: string
+  cli_present: boolean
+  mcp_installed: boolean
+  mcp_command?: string | null
+  agent_url?: string | null
+  skill_installed: boolean
+  hook_installed: boolean
+  remote_supported: boolean
+}
+
+/**
+ * detectRemoteCodingAgents 探测目标机上已安装的编程智能体及其 SuperDev 接入状态。
+ *
+ * 参数：
+ *   - hostId: 目标机器在本机 agent 里的注册 ID
+ *
+ * 返回：
+ *   - 每个内置连接器在目标机上的 CLI 存在性与三项接入状态
+ *
+ * 注意：
+ *   - 只读操作；失败时（目标机不可达 / detect 响应无法解析等）会 reject，
+ *     调用方需要向用户解释「查不到」而非把异常吞掉渲染成空列表
+ */
+export async function detectRemoteCodingAgents(hostId: string): Promise<RemoteAgentStatus[]> {
+  return invoke<RemoteAgentStatus[]>('detect_remote_coding_agents', { hostId })
+}
+
+/**
+ * installRemoteAgentConnector 在目标机上安装单个连接器的 MCP + skill + hook。
+ *
+ * 参数：
+ *   - hostId: 目标机器 ID
+ *   - connectorId: 待安装的连接器 ID
+ *
+ * 返回：
+ *   - 与本机同构的连接器操作结果（MCP / skill / session hook 三项）
+ *
+ * 注意：
+ *   - `remote_supported=false` 的连接器会显式 reject 并点名 host 与 connector，
+ *     不会静默写出半套配置；调用前应先用 `remote_supported` 禁用入口按钮
+ */
+export async function installRemoteAgentConnector(hostId: string, connectorId: ConnectorId): Promise<ConnectorOperationOutcome> {
+  return invoke<ConnectorOperationOutcome>('install_remote_agent_connector', { hostId, connectorId })
+}
+
+/**
+ * uninstallRemoteAgentConnector 从目标机移除单个连接器的 SuperDev 接入。
+ *
+ * 参数与返回语义同 `installRemoteAgentConnector`；只删除 SuperDev 自己写入的部分。
+ */
+export async function uninstallRemoteAgentConnector(hostId: string, connectorId: ConnectorId): Promise<ConnectorOperationOutcome> {
+  return invoke<ConnectorOperationOutcome>('uninstall_remote_agent_connector', { hostId, connectorId })
 }

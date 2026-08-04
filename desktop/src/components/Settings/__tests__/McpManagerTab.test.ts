@@ -1,16 +1,20 @@
 /**
  * Dynamic Connector settings tests.
  *
- * Responsibility: verify shared summaries, operation gating, grouping, and manual entry.
- * Boundary: Tauri and filesystem operations are mocked.
+ * Responsibility: verify shared summaries, operation gating, grouping, manual entry,
+ * and the remote machine dimension (detect/install/uninstall on agent-only hosts).
+ * Boundary: Tauri, filesystem, and agents-store network calls are mocked.
  */
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ask } from '@tauri-apps/plugin-dialog'
 import McpManagerTab from '@/components/Settings/McpManagerTab.vue'
 import { installTestI18n } from '@/test-utils/i18n'
+import { useAgentsStore } from '@/stores/agents'
+import type { AgentDTO } from '@/api/agent'
 import * as api from '@/api/mcpInstall'
-import type { AgentConnectorSummary, ConnectorOperationOutcome, McpDocs } from '@/api/mcpInstall'
+import type { AgentConnectorSummary, ConnectorOperationOutcome, McpDocs, RemoteAgentStatus } from '@/api/mcpInstall'
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({ ask: vi.fn() }))
 vi.mock('@/api/mcpInstall', async (importOriginal) => {
@@ -25,6 +29,9 @@ vi.mock('@/api/mcpInstall', async (importOriginal) => {
     getAgentConnectorManualInstructions: vi.fn(),
     getGenericMcpConnectionMaterial: vi.fn(),
     getMcpDocs: vi.fn(),
+    detectRemoteCodingAgents: vi.fn(),
+    installRemoteAgentConnector: vi.fn(),
+    uninstallRemoteAgentConnector: vi.fn(),
   }
 })
 
@@ -90,6 +97,37 @@ const docs: McpDocs = {
   ],
 }
 
+// remoteHost builds a minimal AgentDTO fixture for the machine picker; only
+// host_id/host_name/runtime.reachable matter to the picker and its online badge.
+function remoteHost(hostId: string, hostName: string, reachable = true): AgentDTO {
+  return {
+    host_id: hostId,
+    host_name: hostName,
+    tags: [],
+    transport: { chain: [] },
+    config: { listen_address: '127.0.0.1', listen_port: 57017 },
+    runtime: { installed: true, health: reachable ? 'healthy' : 'unreachable', reachable },
+    security: { token_configured: true, provision_state: 'configured', tls: { mode: 'auto' } },
+    updated_at: '2026-08-04T00:00:00Z',
+  }
+}
+
+// remoteStatus builds a RemoteAgentStatus fixture with sane defaults so each test
+// only overrides the field(s) it actually cares about.
+function remoteStatus(overrides: Partial<RemoteAgentStatus> & { connector_id: string }): RemoteAgentStatus {
+  return {
+    display_name: overrides.connector_id,
+    cli_present: true,
+    mcp_installed: false,
+    mcp_command: null,
+    agent_url: null,
+    skill_installed: false,
+    hook_installed: false,
+    remote_supported: true,
+    ...overrides,
+  }
+}
+
 async function mountTab() {
   const wrapper = mount(McpManagerTab, { global: { plugins: [installTestI18n('zh-CN')] } })
   await flushPromises()
@@ -98,6 +136,7 @@ async function mountTab() {
 
 describe('McpManagerTab', () => {
   beforeEach(() => {
+    setActivePinia(createPinia())
     vi.clearAllMocks()
     vi.mocked(api.listAgentConnectors).mockResolvedValue(summaries)
     vi.mocked(api.getMcpDocs).mockResolvedValue(docs)
@@ -105,6 +144,9 @@ describe('McpManagerTab', () => {
     vi.mocked(api.updateAgentConnector).mockResolvedValue(operationOutcome)
     vi.mocked(api.verifyAgentConnector).mockResolvedValue({ ...operationOutcome, operation: 'verify', result: 'success', message: 'Configuration verified' })
     vi.mocked(api.uninstallAgentConnector).mockResolvedValue({ ...operationOutcome, operation: 'uninstall', result: 'success' })
+    // agentsStore.loadAgents hits a real HTTP endpoint in production; stub it so the
+    // machine picker's data source is fully test-controlled (mirrors AgentManagerTab.test.ts).
+    vi.spyOn(useAgentsStore(), 'loadAgents').mockResolvedValue(undefined)
     vi.mocked(api.getAgentConnectorManualInstructions).mockResolvedValue({
       summary: 'Configure Codex manually', steps: ['Open settings'], config_path: '/config/codex',
       manual_config: '[mcp_servers.superdev]\ncommand = "/app/superdev-mcp"',
@@ -323,5 +365,156 @@ describe('McpManagerTab', () => {
 
     await wrapper.find('[data-test="mcp-doc-references/log-tools.md"]').trigger('click')
     expect(wrapper.find('[data-test="mcp-doc-content"]').text()).toContain('# Log Tools')
+  })
+
+  describe('remote machine dimension', () => {
+    it('offers the local machine first and lists connected remote hosts with their online state', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One', true), remoteHost('host-2', 'Box Two', false)]
+      const wrapper = await mountTab()
+
+      const options = wrapper.findAll('[data-test="mcp-machine-picker"] option')
+      expect(options[0].text()).toContain('本机')
+      expect(options.some(o => o.text().includes('Box One') && o.text().includes('在线'))).toBe(true)
+      expect(options.some(o => o.text().includes('Box Two') && o.text().includes('离线'))).toBe(true)
+    })
+
+    it('calls detect_remote_coding_agents with the selected host id after picking a remote machine', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([remoteStatus({ connector_id: 'codex', display_name: 'Codex' })])
+      const wrapper = await mountTab()
+
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      expect(api.detectRemoteCodingAgents).toHaveBeenCalledWith('host-1')
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(true)
+    })
+
+    it('disables the row and buttons when the target machine has no CLI for that agent', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([
+        remoteStatus({ connector_id: 'cursor', display_name: 'Cursor', cli_present: false }),
+      ])
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      const row = wrapper.find('[data-test="mcp-remote-row-cursor"]')
+      expect(row.classes()).toContain('mcp-remote-row-disabled')
+      expect(wrapper.find('[data-test="mcp-remote-install-cursor"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.find('[data-test="mcp-remote-uninstall-cursor"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('disables install/uninstall and explains local-only setup when remote_supported is false', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([
+        remoteStatus({ connector_id: 'grok', display_name: 'Grok', remote_supported: false }),
+      ])
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      const row = wrapper.find('[data-test="mcp-remote-row-grok"]')
+      expect(row.classes()).toContain('mcp-remote-row-disabled')
+      expect(wrapper.find('[data-test="mcp-remote-install-grok"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.find('[data-test="mcp-remote-uninstall-grok"]').attributes('disabled')).toBeDefined()
+      const notice = wrapper.find('[data-test="mcp-remote-unsupported-grok"]')
+      expect(notice.exists()).toBe(true)
+      expect(notice.text()).toContain('本地')
+      // The three status booleans are placeholders when unsupported ("can't tell"), not "not installed" —
+      // the row must not render an mcp/skill/hook detail grid that would misleadingly imply real status.
+      expect(wrapper.find('[data-test="mcp-remote-command-grok"]').exists()).toBe(false)
+    })
+
+    it('renders "installed but pointing elsewhere" instead of a plain not-installed state', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([
+        remoteStatus({
+          connector_id: 'codex', display_name: 'Codex',
+          mcp_installed: false, mcp_command: '/old/superdev-mcp', agent_url: 'http://127.0.0.1:57017',
+        }),
+        remoteStatus({ connector_id: 'cursor', display_name: 'Cursor', mcp_installed: false, mcp_command: null, agent_url: null }),
+      ])
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      const misdirected = wrapper.find('[data-test="mcp-remote-misdirected-codex"]')
+      expect(misdirected.exists()).toBe(true)
+      expect(misdirected.text()).toContain('/old/superdev-mcp')
+      expect(misdirected.text()).toContain('http://127.0.0.1:57017')
+      expect(wrapper.find('[data-test="mcp-remote-install-codex"]').text()).toBe('修正指向')
+
+      // Plain missing (no prior entry at all) must stay visually/textually distinct.
+      expect(wrapper.find('[data-test="mcp-remote-misdirected-cursor"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="mcp-remote-install-cursor"]').text()).not.toBe('修正指向')
+    })
+
+    it('shows an error message instead of a blank list when detect_remote_coding_agents rejects', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockRejectedValue(new Error('agent unreachable'))
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      const error = wrapper.find('[data-test="mcp-remote-error"]')
+      expect(error.exists()).toBe(true)
+      expect(error.text()).toContain('agent unreachable')
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(false)
+    })
+
+    it('installs a remote connector with the correct host and connector id and refreshes remote status', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents)
+        .mockResolvedValueOnce([remoteStatus({ connector_id: 'codex', display_name: 'Codex' })])
+        .mockResolvedValue([remoteStatus({
+          connector_id: 'codex', display_name: 'Codex', mcp_installed: true,
+          mcp_command: '/agent/superdev-mcp', agent_url: 'http://127.0.0.1:58000',
+        })])
+      vi.mocked(api.installRemoteAgentConnector).mockResolvedValue({ ...operationOutcome, connector_id: 'codex', operation: 'install', result: 'success' })
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      await wrapper.find('[data-test="mcp-remote-install-codex"]').trigger('click')
+      await flushPromises()
+
+      expect(api.installRemoteAgentConnector).toHaveBeenCalledWith('host-1', 'codex')
+      expect(api.detectRemoteCodingAgents).toHaveBeenCalledTimes(2)
+    })
+
+    it('confirms before uninstalling a remote connector and calls the API with host and connector id', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([remoteStatus({
+        connector_id: 'codex', display_name: 'Codex', mcp_installed: true,
+        mcp_command: '/agent/superdev-mcp', agent_url: 'http://127.0.0.1:58000',
+      })])
+      vi.mocked(api.uninstallRemoteAgentConnector).mockResolvedValue({ ...operationOutcome, connector_id: 'codex', operation: 'uninstall', result: 'success' })
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      await wrapper.find('[data-test="mcp-remote-uninstall-codex"]').trigger('click')
+      await flushPromises()
+
+      expect(ask).toHaveBeenCalled()
+      expect(api.uninstallRemoteAgentConnector).toHaveBeenCalledWith('host-1', 'codex')
+    })
+
+    it('returns to the local path when the machine picker is reset to the local machine', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([remoteStatus({ connector_id: 'codex', display_name: 'Codex' })])
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(true)
+
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('')
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="mcp-install-codex"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(false)
+      expect(api.listAgentConnectors).toHaveBeenCalledTimes(2)
+    })
   })
 })

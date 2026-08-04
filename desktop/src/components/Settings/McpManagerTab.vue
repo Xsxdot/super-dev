@@ -5,18 +5,23 @@ MCP 管理设置页签
   - 展示 SuperDev MCP 在各编程智能体中的安装状态
   - 触发 MCP/skill 安装更新和卸载
   - 展示 MCP 工具能力说明与 bundled superdev skill 文档
+  - 提供机器维度切换：机器选择器首项「本机」走本地路径，其余为已接入的远端
+    Host，切换后对远端机器做探测/安装/卸载
 
 边界：
   - 不直接读写 Agent 配置文件，统一通过 api/mcpInstall.ts 调用 Tauri command
   - 不修改 onboarding store
   - 不启动、停止或探测 SuperDev agent 运行态
+  - 远端操作经 Tauri command 转发到目标机 agent 的受限文件端点，本组件不感知
+    本机 agent 代理链或 nodetransport 转发细节
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ask } from '@tauri-apps/plugin-dialog'
 import { useI18n } from 'vue-i18n'
 import ManualAgentConnectDialog from '@/components/Onboarding/ManualAgentConnectDialog.vue'
 import { emitConnectorDiagnostic } from '@/lib/connectorDiagnostics'
+import { useAgentsStore } from '@/stores/agents'
 import {
   getMcpDocs,
   getAgentConnectorManualInstructions,
@@ -25,6 +30,9 @@ import {
   updateAgentConnector,
   verifyAgentConnector,
   uninstallAgentConnector,
+  detectRemoteCodingAgents,
+  installRemoteAgentConnector,
+  uninstallRemoteAgentConnector,
   type ConnectorId,
   type ConnectorManualInstructions,
   type ConnectorOperationOutcome,
@@ -32,9 +40,11 @@ import {
   type AgentConnectorSummary,
   type McpDocs,
   type McpDocument,
+  type RemoteAgentStatus,
 } from '@/api/mcpInstall'
 
 const { t } = useI18n()
+const agentsStore = useAgentsStore()
 const statuses = ref<AgentConnectorSummary[]>([])
 const docs = ref<McpDocs | null>(null)
 const loading = ref(false)
@@ -53,6 +63,25 @@ const restartHints = ref<Record<string, boolean>>({})
 const lastOutcomes = ref<Record<string, ConnectorOperationOutcome>>({})
 const showOtherBuiltIns = ref(false)
 const manualDialogOpen = ref(false)
+
+/**
+ * selectedHostId 是机器选择器的当前值：空串 = 本机（走既有本地路径，行为不变），
+ * 非空字符串 = 已接入远端 Host 的 host_id。
+ *
+ * 注意：
+ *   - 刻意不用 null 表示本机——`<option :value="null">` 会被 Vue 的 patchDOMProp
+ *     当作「无值」整个移除 value 内容属性，届时该 option 的原生 `.value` 会退化
+ *     为它的文本内容（"本机"），使浏览器原生 select-by-value（含测试里的
+ *     `setValue('')`）都定位不到这个选项。空串是一个真正、稳定的 DOM 属性值，
+ *     不会有这个陷阱
+ */
+const selectedHostId = ref<string>('')
+const remoteStatuses = ref<RemoteAgentStatus[]>([])
+const remoteLoading = ref(false)
+const remoteError = ref('')
+const remoteOperationAgent = ref<ConnectorId | null>(null)
+const remoteOperationMessage = ref<Record<string, string>>({})
+const remoteOperationTone = ref<Record<string, 'success' | 'warning' | 'danger' | 'info'>>({})
 
 const selectedDocument = computed<McpDocument | null>(() =>
   docs.value?.documents.find(doc => doc.id === selectedDocId.value) ?? null,
@@ -74,8 +103,22 @@ const visibleRows = computed(() => [
   ...(showOtherBuiltIns.value ? otherBuiltInRows.value : []),
 ])
 
+const isRemoteMode = computed(() => selectedHostId.value !== '')
+// remoteHostOptions 复用 agentsStore 已接入节点列表和其现有的 runtime.reachable
+// 在线状态字段；本组件不打开 NodeRegistry 订阅，也不引入新的在线态来源。
+const remoteHostOptions = computed(() =>
+  [...agentsStore.agents].sort((a, b) => a.host_name.localeCompare(b.host_name) || a.host_id.localeCompare(b.host_id)),
+)
+
 onMounted(() => {
   void refreshAll()
+  void agentsStore.loadAgents()
+})
+
+// 切换机器选择器时重新拉取该机器维度的状态；本机（null）与远端共用同一入口，
+// 保证「首项本机走现有本地路径」在切换回来时也成立。
+watch(selectedHostId, () => {
+  void refreshCurrentStatuses()
 })
 
 function errorMessage(errorValue: unknown): string {
@@ -145,7 +188,16 @@ function rememberOutcome(agent: ConnectorId, outcome: ConnectorOperationOutcome)
 }
 
 async function refreshAll() {
-  await Promise.all([refreshStatus(), refreshDocs()])
+  await Promise.all([refreshCurrentStatuses(), refreshDocs()])
+}
+
+/** refreshCurrentStatuses 按机器选择器当前值分派到本机或远端状态刷新。 */
+async function refreshCurrentStatuses() {
+  if (isRemoteMode.value) {
+    await refreshRemoteStatus()
+  } else {
+    await refreshStatus()
+  }
 }
 
 async function refreshStatus() {
@@ -179,6 +231,127 @@ async function refreshDocs() {
     docsError.value = t('settings.mcp.readFailed', { message: errorMessage(err) })
   } finally {
     docsLoading.value = false
+  }
+}
+
+/**
+ * refreshRemoteStatus 探测当前选中远端机器上的编程智能体接入状态。
+ *
+ * 注意：
+ *   - detect 失败（目标机不可达/本机 agent 代理转发失败等）时把 remoteError 填成
+ *     可读文案，而不是留一份空列表——空列表会让用户误以为「这台机器什么都没有」
+ */
+async function refreshRemoteStatus() {
+  const hostId = selectedHostId.value
+  if (!hostId) return
+  const started = performance.now()
+  remoteLoading.value = true
+  remoteError.value = ''
+  emitConnectorDiagnostic('remote_detect.started', 'info', { surface: 'settings', hostId })
+  try {
+    remoteStatuses.value = await detectRemoteCodingAgents(hostId)
+    emitConnectorDiagnostic('remote_detect.succeeded', 'info', {
+      surface: 'settings', hostId, connectorCount: remoteStatuses.value.length,
+      durationMs: Math.round(performance.now() - started),
+    })
+  } catch (err) {
+    remoteStatuses.value = []
+    remoteError.value = t('settings.mcpRemote.targetUnreachable', { message: errorMessage(err) })
+    emitConnectorDiagnostic('remote_detect.failed', 'error', {
+      surface: 'settings', hostId, errorType: err instanceof Error ? err.name : typeof err,
+      durationMs: Math.round(performance.now() - started),
+    })
+  } finally {
+    remoteLoading.value = false
+  }
+}
+
+/**
+ * remoteInstallLabel 决定安装按钮文案：区分「未安装」与「装了但指向别处」。
+ *
+ * 注意：
+ *   - 只看 mcp_command 是否非空——mcp_installed 为 false 且 mcp_command 有值时，
+ *     目标机上确实存在一条 superdev 配置，只是没有指向这台机器自己的 agent，
+ *     此时点击按钮的语义是「修正」而不是从零「安装」
+ */
+function remoteInstallLabel(status: RemoteAgentStatus): string {
+  if (!status.mcp_installed && status.mcp_command) return t('settings.mcpRemote.fixPointer')
+  return t('settings.mcp.installUpdate')
+}
+
+/** remoteActionDisabled 统一 install/uninstall 按钮的禁用判据。 */
+function remoteActionDisabled(status: RemoteAgentStatus): boolean {
+  return !status.remote_supported || !status.cli_present || remoteOperationAgent.value === status.connector_id
+}
+
+async function installRemote(status: RemoteAgentStatus) {
+  const hostId = selectedHostId.value
+  if (!hostId) return
+  const agent = status.connector_id
+  const started = performance.now()
+  remoteOperationAgent.value = agent
+  remoteOperationMessage.value[agent] = ''
+  remoteOperationTone.value[agent] = 'info'
+  try {
+    emitConnectorDiagnostic('remote_install.started', 'info', { surface: 'settings', connectorId: agent, hostId })
+    const outcome = await installRemoteAgentConnector(hostId, agent)
+    remoteOperationMessage.value[agent] = formatOutcomeMessage(outcome)
+    remoteOperationTone.value[agent] = outcomeTone(outcome.result)
+    emitConnectorDiagnostic('remote_install.completed', outcome.result === 'failed' ? 'error' : outcome.result === 'partial' ? 'warn' : 'info', {
+      surface: 'settings', connectorId: agent, hostId, result: outcome.result,
+      capabilityResults: outcome.integrations.map(item => `${item.capability}=${item.result}`),
+      durationMs: Math.round(performance.now() - started),
+    })
+    await refreshRemoteStatus()
+  } catch (err) {
+    remoteOperationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
+    remoteOperationTone.value[agent] = 'danger'
+    emitConnectorDiagnostic('remote_mutation.failed', 'error', {
+      surface: 'settings', connectorId: agent, hostId,
+      errorType: err instanceof Error ? err.name : typeof err,
+      durationMs: Math.round(performance.now() - started),
+    })
+  } finally {
+    remoteOperationAgent.value = null
+  }
+}
+
+async function confirmUninstallRemote(status: RemoteAgentStatus) {
+  const hostId = selectedHostId.value
+  if (!hostId) return
+  const agent = status.connector_id
+  const confirmed = await ask(t('settings.mcp.uninstallConfirmMessage', { agent: status.display_name }), {
+    title: t('settings.mcp.uninstallConfirmTitle'),
+    kind: 'warning',
+  })
+  if (!confirmed) return
+  const started = performance.now()
+  remoteOperationAgent.value = agent
+  remoteOperationMessage.value[agent] = ''
+  remoteOperationTone.value[agent] = 'info'
+  try {
+    emitConnectorDiagnostic('remote_uninstall.started', 'info', { surface: 'settings', connectorId: agent, hostId })
+    const outcome = await uninstallRemoteAgentConnector(hostId, agent)
+    remoteOperationMessage.value[agent] = outcome.result === 'failed'
+      ? formatOutcomeMessage(outcome)
+      : t('settings.mcp.uninstallDone')
+    remoteOperationTone.value[agent] = outcome.result === 'failed' ? 'danger' : 'success'
+    emitConnectorDiagnostic('remote_uninstall.completed', outcome.result === 'failed' ? 'error' : 'info', {
+      surface: 'settings', connectorId: agent, hostId, result: outcome.result,
+      capabilityResults: outcome.integrations.map(item => `${item.capability}=${item.result}`),
+      durationMs: Math.round(performance.now() - started),
+    })
+    await refreshRemoteStatus()
+  } catch (err) {
+    remoteOperationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
+    remoteOperationTone.value[agent] = 'danger'
+    emitConnectorDiagnostic('remote_uninstall.failed', 'error', {
+      surface: 'settings', connectorId: agent, hostId,
+      errorType: err instanceof Error ? err.name : typeof err,
+      durationMs: Math.round(performance.now() - started),
+    })
+  } finally {
+    remoteOperationAgent.value = null
   }
 }
 
@@ -327,10 +500,22 @@ async function showManualConfig(agent: ConnectorId, label: string) {
       </button>
     </header>
 
-    <div v-if="error" class="settings-alert settings-alert-danger">{{ error }}</div>
-    <div v-if="loading" class="settings-empty">{{ t('settings.mcp.loading') }}</div>
+    <div class="settings-field mcp-machine-picker">
+      <label class="settings-field-label" for="mcp-machine-picker">{{ t('settings.mcpRemote.machinePicker') }}</label>
+      <select id="mcp-machine-picker" v-model="selectedHostId" class="settings-select" data-test="mcp-machine-picker">
+        <option value="">{{ t('settings.mcpRemote.localMachine') }}</option>
+        <option v-for="agent in remoteHostOptions" :key="agent.host_id" :value="agent.host_id">
+          {{ agent.host_name }} · {{ agent.runtime.reachable ? t('settings.mcpRemote.online') : t('settings.mcpRemote.offline') }}
+        </option>
+      </select>
+      <p v-if="remoteHostOptions.length === 0" class="mcp-agent-path">{{ t('settings.mcpRemote.noRemoteHosts') }}</p>
+    </div>
 
-    <div class="settings-card-list mcp-agent-list">
+    <template v-if="!isRemoteMode">
+      <div v-if="error" class="settings-alert settings-alert-danger">{{ error }}</div>
+      <div v-if="loading" class="settings-empty">{{ t('settings.mcp.loading') }}</div>
+
+      <div class="settings-card-list mcp-agent-list">
       <article v-for="row in visibleRows" :key="row.id" class="settings-card">
         <header class="settings-card-header mcp-card-header">
           <div>
@@ -465,7 +650,110 @@ async function showManualConfig(agent: ConnectorId, label: string) {
           </button>
         </header>
       </article>
-    </div>
+      </div>
+    </template>
+    <template v-else>
+      <div v-if="remoteError" class="settings-alert settings-alert-danger" data-test="mcp-remote-error">{{ remoteError }}</div>
+      <div v-if="remoteLoading" class="settings-empty" data-test="mcp-remote-loading">{{ t('settings.mcp.loading') }}</div>
+
+      <div class="settings-card-list mcp-agent-list" data-test="mcp-remote-list">
+        <article
+          v-for="status in remoteStatuses"
+          :key="status.connector_id"
+          class="settings-card"
+          :class="{ 'mcp-remote-row-disabled': !status.remote_supported || !status.cli_present }"
+          :data-test="`mcp-remote-row-${status.connector_id}`"
+        >
+          <header class="settings-card-header mcp-card-header">
+            <div>
+              <h2 class="mcp-agent-name">{{ status.display_name }}</h2>
+              <p class="mcp-agent-path">
+                {{ t('settings.mcp.agentStatus') }}:
+                {{ status.cli_present ? t('settings.mcp.detected') : t('settings.mcp.notDetected') }}
+              </p>
+            </div>
+            <div class="settings-toolbar">
+              <button
+                class="settings-btn settings-btn-primary"
+                :data-test="`mcp-remote-install-${status.connector_id}`"
+                type="button"
+                :disabled="remoteActionDisabled(status)"
+                @click="installRemote(status)"
+              >
+                {{ remoteInstallLabel(status) }}
+              </button>
+              <button
+                class="settings-btn settings-btn-danger"
+                :data-test="`mcp-remote-uninstall-${status.connector_id}`"
+                type="button"
+                :disabled="remoteActionDisabled(status)"
+                @click="confirmUninstallRemote(status)"
+              >
+                {{ t('settings.mcp.uninstall') }}
+              </button>
+            </div>
+          </header>
+
+          <div
+            v-if="!status.remote_supported"
+            class="settings-alert settings-alert-warning mcp-inline-alert"
+            :data-test="`mcp-remote-unsupported-${status.connector_id}`"
+          >
+            {{ t('settings.mcpRemote.unsupportedNotice', { agent: status.display_name }) }}
+          </div>
+          <template v-else>
+            <div class="agent-capabilities">
+              <span :data-test="`mcp-remote-mcp-status-${status.connector_id}`">
+                MCP ·
+                {{
+                  status.mcp_installed
+                    ? t('settings.mcp.configured')
+                    : (status.mcp_command ? t('settings.mcpRemote.mcpMisdirected') : t('settings.mcp.notConfigured'))
+                }}
+              </span>
+              <span>{{ t('settings.mcp.skill') }} · {{ status.skill_installed ? t('settings.mcp.configured') : t('settings.mcp.notConfigured') }}</span>
+              <span>{{ t('settings.mcp.hook') }} · {{ status.hook_installed ? t('settings.mcp.configured') : t('settings.mcp.notConfigured') }}</span>
+            </div>
+            <div class="mcp-detail-grid">
+              <div class="mcp-detail-item">
+                <span>{{ t('settings.mcp.command') }}</span>
+                <code :data-test="`mcp-remote-command-${status.connector_id}`">{{ status.mcp_command || t('settings.mcp.noCommand') }}</code>
+              </div>
+              <div class="mcp-detail-item">
+                <span>{{ t('settings.mcp.agentUrl') }}</span>
+                <code :data-test="`mcp-remote-agent-url-${status.connector_id}`">{{ status.agent_url || t('settings.mcp.noAgentUrl') }}</code>
+              </div>
+            </div>
+            <div
+              v-if="status.mcp_command && !status.mcp_installed"
+              class="settings-alert settings-alert-warning mcp-inline-alert"
+              :data-test="`mcp-remote-misdirected-${status.connector_id}`"
+            >
+              {{ t('settings.mcpRemote.mcpMisdirectedHint', { command: status.mcp_command, url: status.agent_url || t('settings.mcp.noAgentUrl') }) }}
+            </div>
+            <div
+              v-if="!status.cli_present"
+              class="settings-alert settings-alert-warning mcp-inline-alert"
+              :data-test="`mcp-remote-cli-missing-${status.connector_id}`"
+            >
+              {{ t('settings.mcpRemote.cliMissing', { agent: status.display_name }) }}
+            </div>
+          </template>
+
+          <div
+            v-if="remoteOperationMessage[status.connector_id]"
+            class="settings-alert mcp-inline-alert"
+            :class="{
+              'settings-alert-warning': remoteOperationTone[status.connector_id] === 'warning',
+              'settings-alert-danger': remoteOperationTone[status.connector_id] === 'danger',
+            }"
+            :data-test="`mcp-remote-operation-message-${status.connector_id}`"
+          >
+            {{ remoteOperationMessage[status.connector_id] }}
+          </div>
+        </article>
+      </div>
+    </template>
 
     <section class="settings-section mcp-docs" data-test="mcp-docs">
       <header class="mcp-section-heading">
@@ -557,6 +845,15 @@ async function showManualConfig(agent: ConnectorId, label: string) {
 </template>
 
 <style scoped>
+.mcp-machine-picker {
+  max-width: 320px;
+  margin-bottom: 14px;
+}
+
+.mcp-remote-row-disabled {
+  opacity: 0.55;
+}
+
 .mcp-agent-list {
   margin-bottom: 14px;
 }
