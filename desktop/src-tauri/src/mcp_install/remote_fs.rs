@@ -93,11 +93,13 @@ impl RemoteAgentFs {
     ///     由调用方自行拼成 "from -> to" 形式传入）
     ///
     /// 错误映射（对应 brief 要求的四类中的后三类；`{exists:false}` 那一类由
-    /// read_optional 自己在拿到 200 响应体之后判断，不在这里处理）：
+    /// read_optional 自己在拿到 200 响应体之后判断，不在这里处理）。四个分支
+    /// 全部带 host_id + operation 上下文；403/502 额外带 path_context——不能
+    /// 只丢一句「远端机器不可达」，调用方需要知道是哪个操作、哪个路径失败的：
     ///   - HTTP 403：目标机白名单拒绝（Task 4 契约：白名单外一律 403），映射为
-    ///     带路径的中文错误
+    ///     带 operation + 路径的中文错误
     ///   - HTTP 502：Task 5 代理转发失败（`integration_target_unreachable`），
-    ///     映射为「远端机器不可达」
+    ///     映射为「远端机器不可达」，同样带 operation + path_context
     ///   - ureq 传输层错误（连不上本机 agent 本身）：同样映射为「远端机器不可达」
     ///     ——从调用方视角，本机 agent 代理不可用与目标机不可达同样意味着这次
     ///     远端文件操作做不成，不值得让上层区分这两种子原因
@@ -137,12 +139,12 @@ impl RemoteAgentFs {
                 // path_not_allowed code），无需解析，只需要把连接排空。
                 let _ = response.into_string();
                 Err(format!(
-                    "远端机器 {} 拒绝访问该路径（不在允许范围内）: {path_context}",
+                    "远端机器 {} 拒绝 {operation} 访问该路径（不在允许范围内）: {path_context}",
                     self.host_id
                 ))
             }
             Err(ureq::Error::Status(502, response)) => Err(format!(
-                "远端机器 {} 不可达: {}",
+                "远端机器 {} 不可达（{operation} {path_context} 失败）: {}",
                 self.host_id,
                 extract_error_message(response)
             )),
@@ -805,6 +807,10 @@ mod tests {
             error.contains("不允许") || error.contains("拒绝"),
             "error should read as a permission denial in Chinese: {error}"
         );
+        assert!(
+            error.contains("stat"),
+            "error should name the operation that was forbidden: {error}"
+        );
     }
 
     #[test]
@@ -861,6 +867,14 @@ mod tests {
         assert!(
             error.contains("dial tcp"),
             "underlying transport error text should be preserved: {error}"
+        );
+        assert!(
+            error.contains("stat"),
+            "error should name the operation that failed: {error}"
+        );
+        assert!(
+            error.contains("/home/x/.claude.json"),
+            "error should include the path that was being operated on: {error}"
         );
     }
 

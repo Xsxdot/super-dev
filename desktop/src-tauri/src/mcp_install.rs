@@ -2716,6 +2716,180 @@ mod skill_port_tests {
     }
 }
 
+/// mkdir_all_invariant_tests 把 `RemoteAgentFs::mkdir_all`（remote_fs.rs）的
+/// no-op 假设——「本仓库现有全部生产调用点后面都紧跟一次会在远端服务端自建
+/// 父目录的写入（fs/write 或 fs/write-batch），所以 mkdir_all 本身不需要真的
+/// 发网络请求」——从 remote_fs.rs 里的散文注释变成这里的可执行断言。
+///
+/// `RemoteAgentFs` 本身活在 remote_fs.rs，不该反过来依赖 mcp_install.rs 的安装
+/// 编排函数，所以断言放在调用方这一侧：`MkdirInvariantFs` 包一层 `LocalFs`，
+/// 记录每次 `mkdir_all(p)`，并在每次 `write_atomic`/`write_batch` 落地时把
+/// 「写入目标以 p 为前缀」的那个 p 标记为已兑现；安装流程跑完后断言全部
+/// 记录到的 mkdir_all 都被兑现过。将来如果有人加一个新调用点——比如
+/// `mkdir_all(dir)` 之后只 `stat(dir)`/`list_relative_files(dir)` 判断状态、
+/// 不写入——这条 mkdir 会一直停留在"未兑现"，断言在这里失败，而不是在真实
+/// 远端环境里以一句不相干的下游错误静默浮现。
+#[cfg(test)]
+mod mkdir_all_invariant_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// MkdirInvariantFs 记录每次 `mkdir_all` 调用的路径，并追踪每条记录是否
+    /// 被后续某次 `write_atomic`/`write_batch` 的写入目标"兑现"（写入目标以
+    /// 该路径为前缀）。除 `mkdir_all`/`write_atomic`/`write_batch` 外的方法
+    /// 全部原样委托给 `LocalFs`，保证驱动生产安装函数时行为真实可用。
+    struct MkdirInvariantFs {
+        mkdirs: RefCell<Vec<(PathBuf, bool)>>,
+    }
+
+    impl MkdirInvariantFs {
+        fn new() -> Self {
+            Self {
+                mkdirs: RefCell::new(Vec::new()),
+            }
+        }
+
+        /// redeem 把写入目标与全部已记录的 mkdir_all 路径比对，命中的（写入
+        /// 目标以该路径为前缀）标记为已兑现。一次写入可能同时兑现多条记录
+        /// （如 skill 安装里 target.parent() 与 temp 两次 mkdir_all 都是
+        /// write_batch 目标的前缀），这里不提前退出，全部检查一遍。
+        fn redeem(&self, write_target: &Path) {
+            for (recorded, redeemed) in self.mkdirs.borrow_mut().iter_mut() {
+                if write_target.starts_with(&*recorded) {
+                    *redeemed = true;
+                }
+            }
+        }
+
+        /// assert_all_mkdirs_redeemed 断言整个安装流程结束时，每一次
+        /// `mkdir_all` 调用都至少被一次后续写入兑现过——这正是
+        /// `RemoteAgentFs::mkdir_all` 能安全地是 no-op 的充要条件：远端不会
+        /// 真的建目录，唯一能让目录在远端存在的手段是紧随其后的一次写入
+        /// （Go 端点自建父目录）。额外断言至少发生过一次 mkdir_all，避免
+        /// 「安装函数本身不再调用 mkdir_all 了」这种改动让测试退化成空转通过。
+        fn assert_all_mkdirs_redeemed(&self) {
+            let mkdirs = self.mkdirs.borrow();
+            assert!(
+                !mkdirs.is_empty(),
+                "本次安装没有触发任何 mkdir_all 调用，测试没有覆盖到目标断言"
+            );
+            for (path, redeemed) in mkdirs.iter() {
+                assert!(
+                    *redeemed,
+                    "mkdir_all({}) 之后没有任何写入把它的路径当作前缀——这违反了 \
+                     RemoteAgentFs::mkdir_all no-op 的前提假设，远端上这个目录\
+                     不会真的被创建",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    impl ConnectorFs for MkdirInvariantFs {
+        fn stat(&self, path: &Path) -> Result<fs_port::FsStat, String> {
+            LocalFs.stat(path)
+        }
+
+        fn read_optional(&self, path: &Path) -> Result<Option<String>, String> {
+            LocalFs.read_optional(path)
+        }
+
+        fn write_atomic(
+            &self,
+            path: &Path,
+            content: &str,
+            backup: bool,
+            labels: fs_port::WriteLabels<'_>,
+        ) -> Result<Option<String>, String> {
+            self.redeem(path);
+            LocalFs.write_atomic(path, content, backup, labels)
+        }
+
+        fn mkdir_all(&self, path: &Path) -> Result<(), String> {
+            self.mkdirs.borrow_mut().push((path.to_path_buf(), false));
+            LocalFs.mkdir_all(path)
+        }
+
+        fn write_batch(&self, dir: &Path, files: &[BatchFile], label: &str) -> Result<(), String> {
+            for file in files {
+                self.redeem(&dir.join(&file.rel_path));
+            }
+            LocalFs.write_batch(dir, files, label)
+        }
+
+        fn rename(&self, from: &Path, to: &Path) -> Result<(), String> {
+            LocalFs.rename(from, to)
+        }
+
+        fn list_relative_files(&self, dir: &Path) -> Result<Vec<PathBuf>, String> {
+            LocalFs.list_relative_files(dir)
+        }
+
+        fn remove_dir_all(&self, path: &Path) -> Result<(), String> {
+            LocalFs.remove_dir_all(path)
+        }
+    }
+
+    #[test]
+    fn install_to_path_only_writes_under_a_directory_it_mkdired() {
+        let dir = create_unique_test_dir("superdev-mkdir-invariant-config");
+        let target = dir.join("nested").join("config.json");
+        let fs_port = MkdirInvariantFs::new();
+
+        let outcome = install_to_path_with_fs(
+            &fs_port,
+            &target,
+            &McpEntry {
+                command: "/usr/local/bin/superdev-mcp".to_string(),
+                args: Vec::new(),
+                agent_url: "http://127.0.0.1:57017".to_string(),
+            },
+            merge_json_config,
+            "claude-code".to_string(),
+            "manual".to_string(),
+        )
+        .expect("install config");
+
+        assert!(outcome.installed);
+        fs_port.assert_all_mkdirs_redeemed();
+    }
+
+    #[test]
+    fn install_skill_dir_only_writes_under_directories_it_mkdired() {
+        let dir = create_unique_test_dir("superdev-mkdir-invariant-skill");
+        let source = dir.join("source");
+        fs::create_dir_all(source.join("hooks")).expect("mkdir source hooks");
+        fs::write(source.join("SKILL.md"), "# SuperDev\n").expect("write skill doc");
+        fs::write(source.join("hooks").join("run-hook.cmd"), "#!/bin/sh\n")
+            .expect("write hook runner");
+        // 目标目录本身也不存在，逼出 install_skill_dir_core 两次 mkdir_all
+        // （target.parent() 与临时目录）都被真正触发。
+        let target = dir.join("nested").join("skills").join("superdev");
+        let fs_port = MkdirInvariantFs::new();
+
+        let outcome =
+            install_skill_dir_from_source(&fs_port, &source, &target).expect("install skill dir");
+
+        assert!(outcome.installed);
+        fs_port.assert_all_mkdirs_redeemed();
+    }
+
+    #[test]
+    fn install_session_hook_only_writes_under_a_directory_it_mkdired() {
+        let dir = create_unique_test_dir("superdev-mkdir-invariant-hook");
+        let hook_path = dir.join("nested").join("settings.json");
+        let skill_dir = dir.join("skills").join("superdev");
+        let fs_port = MkdirInvariantFs::new();
+
+        let outcome =
+            install_session_hook_with_fs(&fs_port, AgentKind::ClaudeCode, &hook_path, &skill_dir)
+                .expect("install session hook");
+
+        assert!(outcome.installed);
+        fs_port.assert_all_mkdirs_redeemed();
+    }
+}
+
 #[cfg(test)]
 static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
