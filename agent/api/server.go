@@ -291,6 +291,14 @@ type App struct {
 	// transferMu + transferRun.mu 互斥。进程重启即丢失——半完成态靠
 	// operation 审计追溯，status 404 即「无进行中」（Task 5 定的诚实边界）。
 	projectTransfers map[string]*transferRun
+	// listenAddrMu 保护 listenAddr 的并发读写：Serve 在监听建立后写入一次
+	// （单 writer），integrationsDetect 等 handler 并发读取（多 reader）用于
+	// 推导 agent 自身 MCP launch spec 的端口，与包内其它字段（如
+	// localWSClients）同样采用专属小锁而非复用顶层 a.mu 的既有习惯。
+	listenAddrMu sync.RWMutex
+	// listenAddr 保存 Serve 实际监听的地址（ln.Addr().String()），供
+	// agentSelfLaunchSpec 解析出本机 loopback URL 的端口部分。
+	listenAddr string
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -826,6 +834,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings", a.getSettings)
 	mux.HandleFunc("PUT /api/settings", a.putSettings)
 
+	// 远端编程智能体接入（Task 3）：detect 是接入流程第一步，只读，受
+	// withSecurity 保护——不进 securityBypassPath 白名单，匿名请求必须 401。
+	mux.HandleFunc("POST /api/integrations/detect", a.integrationsDetect)
+
 	// Ingress 入口配置
 	mux.HandleFunc("GET /api/projects/{id}/ingress", a.listProjectIngress)
 	mux.HandleFunc("POST /api/projects/{id}/ingress", a.createProjectIngress)
@@ -1104,11 +1116,29 @@ func (a *App) Serve(ln net.Listener) error {
 		ln.Close()
 		return err
 	}
+	// listenAddr 必须在真正开始 Serve（阻塞调用）之前写入，否则请求进来时
+	// integrationsDetect 读到的仍是零值，agent 自身 launch spec 的端口会
+	// 回退到默认值而非实际监听端口。
+	a.setListenAddr(ln.Addr().String())
 	if enabled {
 		log.Printf("[SuperDev] api: TLS 监听已启用（同端口 loopback 明文豁免生效） addr=%s", ln.Addr())
 		return server.Serve(newSchemeSniffingListener(ln, tlsConfig))
 	}
 	return server.Serve(ln)
+}
+
+// setListenAddr 记录 Serve 实际监听的地址，供 currentListenAddr 并发读取。
+func (a *App) setListenAddr(addr string) {
+	a.listenAddrMu.Lock()
+	defer a.listenAddrMu.Unlock()
+	a.listenAddr = addr
+}
+
+// currentListenAddr 返回 Serve 已写入的监听地址；Serve 尚未调用时为空字符串。
+func (a *App) currentListenAddr() string {
+	a.listenAddrMu.RLock()
+	defer a.listenAddrMu.RUnlock()
+	return a.listenAddr
 }
 
 func (a *App) tlsConfigForListen() (*tls.Config, bool, error) {

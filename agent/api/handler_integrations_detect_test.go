@@ -1,0 +1,144 @@
+// handler_integrations_detect_test.go 覆盖 POST /api/integrations/detect。
+//
+// 职责：
+//   - 验证成功路径三样事实：CLI 存在性 map、home 非空、agent 自身 launch spec
+//   - 验证命令名白名单校验拒绝非法输入（含长度上限）
+//   - 验证匿名请求被 withSecurity 拦在 401（本端点不进 bypass 白名单）
+//
+// 边界：
+//   - 不覆盖 Task 4 的受限文件端点、Task 5 的跨机代理，那些不属于本文件范围
+package api
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+type integrationsDetectResponseForTest struct {
+	Home     string          `json:"home"`
+	Commands map[string]bool `json:"commands"`
+	Agent    struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+		URL     string   `json:"url"`
+	} `json:"agent"`
+}
+
+// TestIntegrationsDetectReturnsCommandPresenceHomeAndLaunchSpec 覆盖 brief Step 1
+// 列出的成功路径断言：go 一定存在、虚构命令一定不存在、home 非空、agent launch
+// spec 的 args 固定为 ["mcp"]（Task 1 的 stdio MCP 分派入口）、url 以本机
+// loopback 为前缀。
+func TestIntegrationsDetectReturnsCommandPresenceHomeAndLaunchSpec(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	body := bytes.NewBufferString(`{"commands":["go","definitely-not-a-cli-xyz"]}`)
+	resp := httptestDo(t, app, http.MethodPost, "/api/integrations/detect", body)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var got integrationsDetectResponseForTest
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &got))
+
+	require.True(t, got.Commands["go"], "go 应该在测试/CI 环境中存在于 PATH")
+	require.False(t, got.Commands["definitely-not-a-cli-xyz"], "虚构命令不应存在")
+	require.NotEmpty(t, got.Home, "home 目录必须非空")
+	require.Equal(t, []string{"mcp"}, got.Agent.Args, "launch spec 子命令固定为 mcp（Task 1 分派入口）")
+	require.True(t, strings.HasPrefix(got.Agent.URL, "http://127.0.0.1:"), "url 必须以本机 loopback http 前缀开头，got=%q", got.Agent.URL)
+	require.NotEmpty(t, got.Agent.Command, "command 必须是解析后的可执行文件路径")
+}
+
+// TestIntegrationsDetectEmptyCommandsStillReturnsHomeAndAgent 覆盖 commands 为空
+// 数组时仍能拿到 home 与 launch spec——detect 的 home/agent 两项事实不依赖
+// commands 参数。
+func TestIntegrationsDetectEmptyCommandsStillReturnsHomeAndAgent(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/integrations/detect", bytes.NewBufferString(`{"commands":[]}`))
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var got integrationsDetectResponseForTest
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &got))
+	require.NotEmpty(t, got.Home)
+	require.Equal(t, []string{"mcp"}, got.Agent.Args)
+	require.Empty(t, got.Commands)
+}
+
+// TestIntegrationsDetectRejectsInvalidCommandNames 覆盖命令名正则
+// ^[a-z0-9][a-z0-9-]{0,63}$ 的拒绝路径：带空格、大写字母都必须 400——虽然
+// exec.LookPath 本身不会执行任意字符串，但仍需要白名单化防止意外输入。
+func TestIntegrationsDetectRejectsInvalidCommandNames(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	cases := []struct {
+		name    string
+		command string
+	}{
+		{name: "包含空格", command: "a b"},
+		{name: "包含大写字母", command: "Go"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := json.Marshal(map[string][]string{"commands": {tc.command}})
+			require.NoError(t, err)
+			resp := httptestDo(t, app, http.MethodPost, "/api/integrations/detect", bytes.NewReader(payload))
+			require.Equal(t, http.StatusBadRequest, resp.Code, "非法命令名必须 400: %q", tc.command)
+		})
+	}
+}
+
+// TestIntegrationsDetectRejectsTooManyCommands 覆盖 32 个上限：33 个必须 400。
+func TestIntegrationsDetectRejectsTooManyCommands(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	commands := make([]string, 33)
+	for i := range commands {
+		commands[i] = "go"
+	}
+	payload, err := json.Marshal(map[string][]string{"commands": commands})
+	require.NoError(t, err)
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/integrations/detect", bytes.NewReader(payload))
+	require.Equal(t, http.StatusBadRequest, resp.Code, "超过 32 个命令必须 400")
+}
+
+// TestIntegrationsDetectRejectsAnonymousRequest 覆盖鉴权红线：本端点绝不进
+// securityBypassPath，匿名请求必须 401，而不是因为请求体校验先失败而巧合返回
+// 400——这里用一个合法请求体，确保 401 是鉴权中间件本身产生的。
+func TestIntegrationsDetectRejectsAnonymousRequest(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	resp := httptestDoWithHeader(t, app, http.MethodPost, "/api/integrations/detect",
+		bytes.NewBufferString(`{"commands":["go"]}`),
+		map[string]string{"Authorization": ""},
+	)
+	require.Equal(t, http.StatusUnauthorized, resp.Code, "匿名请求必须 401")
+	require.Contains(t, resp.Body.String(), "agent token required")
+}
+
+// TestAgentSelfLaunchSpecUsesActualListenPort 直接验证 agentSelfLaunchSpec 在
+// Serve 已写入 listenAddr 后，url 里的端口取自真实监听地址，而不是巧合落在
+// 回退值上——httptestDo 系列 helper 从不调用 Serve，上面的 HTTP 层测试因此
+// 只覆盖了回退路径，这里补上真实路径。
+func TestAgentSelfLaunchSpecUsesActualListenPort(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	app.setListenAddr("127.0.0.1:54321")
+	spec, err := app.agentSelfLaunchSpec()
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:54321", spec.URL)
+	require.Equal(t, []string{"mcp"}, spec.Args)
+	require.NotEmpty(t, spec.Command)
+}
+
+// TestListenPortFallsBackToDefaultWhenUnset 验证 Serve 尚未写入 listenAddr
+// （或写入了无法解析出端口的地址）时，listenPort 回退到 agent 默认端口
+// 57017，与 agent/mcp.ResolveStdioAgentURL 的默认值保持一致。
+func TestListenPortFallsBackToDefaultWhenUnset(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	require.Equal(t, "57017", app.listenPort(), "未调用 Serve 时应回退默认端口")
+}
