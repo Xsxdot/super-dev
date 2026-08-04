@@ -20,9 +20,13 @@
 //   - 不做 UI：返回值形状由前端契约固定，展示逻辑在 Vue 侧
 
 use super::connectors;
-use super::contracts::{ConnectorOperation, ConnectorOperationOutcome};
+use super::contracts::{
+    ConnectorOperation, ConnectorOperationOutcome, IntegrationCapability, IntegrationStateStatus,
+};
 use super::fs_port::ConnectorFs;
-use super::registry::{AgentConnector, ConnectorRuntimeContext};
+use super::registry::{
+    AgentConnector, ConnectorInstallRequest, ConnectorRuntimeContext, ConnectorStatus,
+};
 use super::remote_fs::RemoteAgentFs;
 use super::{AgentKind, McpLaunchSpec};
 use serde::{Deserialize, Serialize};
@@ -95,13 +99,11 @@ pub struct RemoteAgentStatus {
     pub hook_installed: bool,
     /// remote_supported 表示该连接器能否在**只有 agent 文件端点**的远端机器上完成接入。
     ///
-    /// 为 false 的连接器（当前是 opencode / openclaw / hermes / kimi-code / grok）有两类
-    /// 结构性阻碍，都不是本模块能绕开的：
-    ///   - openclaw / grok 通过目标机上的**自身 CLI 进程**（`openclaw mcp set`、
-    ///     `grok mcp add`）写配置，远端只有受限文件端点、没有远程执行原语
-    ///   - opencode / hermes / kimi-code 的配置读写走 `connectors/common.rs` 的
-    ///     `mutate_config`，那条路径直调 `std::fs`（含 symlink 安全检查，端口里没有
-    ///     对应原语），尚未端口化
+    /// 为 false 的连接器（当前是 openclaw / grok）有一类结构性阻碍，不是本模块
+    /// 能绕开的：它们通过目标机上的**自身 CLI 进程**（`openclaw mcp set`、
+    /// `grok mcp add`）写配置，而远端只提供受限文件端点、没有远程执行原语。
+    /// 在远端机器上执行任意命令是一个独立的安全面（需要单独的威胁建模与审批
+    /// 门设计），已明确排除在本计划之外。
     ///
     /// 之所以显式暴露这个布尔量而不是让三个状态位默默为 false：后者会让前端把
     /// 「查不到」渲染成「没装」，正是本任务要消灭的那类静默错误。
@@ -202,30 +204,92 @@ impl RemoteIntegrationDetector for AgentProxyDetector {
     }
 }
 
-/// remote_supported_kind 返回该连接器在远端可复用的内置方言。
+/// built_in_remote_kind 返回该连接器在远端可复用的**内置方言**。
 ///
 /// 参数：
 ///   - connector_id: 开放字符串连接器 ID
 ///
 /// 返回：
-///   - 能在远端完成接入时返回对应 `AgentKind`，否则 None
+///   - 走 mcp_install 内置方言机器（`install_mcp_for_paths_with_fs`）就能远端安装
+///     时返回对应 `AgentKind`，否则 None
 ///
 /// 注意：
-///   - 判据是「这家连接器的读写是否全程经 `ConnectorFs` 端口」。当前只有
-///     claude-code / codex / cursor 满足；其余五家的结构性阻碍见
-///     [`RemoteAgentStatus::remote_supported`] 的文档
 ///   - 这里刻意**逐个列出** ID，而不是写 `AgentKind::parse(id).ok()`：后者是拿
 ///     「有没有内置方言」代理「安装是否全程经端口」，两者今天恰好重合，但将来若
 ///     新增一个 `AgentKind` 变体而它的安装路径没有全程端口化，代理判据会**静默**
 ///     把它算进远端支持集合。列举式判据下，新增变体默认落到 `_ => None`，要支持
-///     远端必须有人显式加一行——同时会被下面那条正面断言逼着更新
-fn remote_supported_kind(connector_id: &str) -> Option<AgentKind> {
+///     远端必须有人显式加一行——同时会被支持集合的正面断言逼着更新
+///   - 第二波连接器（opencode / hermes / kimi-code）没有 `AgentKind` 变体，方言
+///     在 `connectors/*.rs` 里；它们走 [`RemoteInstallPlan::Ported`] 那条分支
+fn built_in_remote_kind(connector_id: &str) -> Option<AgentKind> {
     match connector_id {
         "claude-code" => Some(AgentKind::ClaudeCode),
         "codex" => Some(AgentKind::Codex),
         "cursor" => Some(AgentKind::Cursor),
         _ => None,
     }
+}
+
+/// RemoteInstallPlan 描述一家连接器在远端要走哪条安装路径。
+///
+/// 两条路径都全程经 `ConnectorFs` 端口，差别只在方言逻辑住在哪：
+enum RemoteInstallPlan {
+    /// BuiltInKind 走 mcp_install 的内置方言机器（claude-code / codex / cursor）。
+    ///
+    /// 不复用连接器自己的 `install()`：远端编排要给出指向目标机的手动指引
+    /// （`remote_manual_instructions`），与本机版本不同，走连接器会拿到本机文案。
+    BuiltInKind(AgentKind),
+    /// Ported 走连接器自身实现的 [`PortedConnectorOps`]（opencode / hermes /
+    /// kimi-code）：方言在 `connectors/*.rs`，本机与远端是同一份实现，
+    /// 只有端口不同。
+    Ported,
+}
+
+/// remote_plan 判定一家连接器能否远端接入、以及走哪条路径。
+///
+/// 参数：
+///   - connector: 连接器（只读它的 descriptor 与 port_ops，不触发任何 I/O）
+///
+/// 返回：
+///   - 能远端接入时返回具体计划，否则 None
+///
+/// 注意：
+///   - `port_ops()` 返回 Some 的前提是那家连接器真的实现了 `PortedConnectorOps`
+///     （即它的 status/install/uninstall 全部接受端口）。这条判据不需要维护
+///     一份 ID 清单，因此不可能与代码事实漂移
+fn remote_plan(connector: &dyn AgentConnector) -> Option<RemoteInstallPlan> {
+    if let Some(kind) = built_in_remote_kind(connector.descriptor().id()) {
+        return Some(RemoteInstallPlan::BuiltInKind(kind));
+    }
+    if connector.port_ops().is_some() {
+        return Some(RemoteInstallPlan::Ported);
+    }
+    None
+}
+
+/// integration_status 取出 ConnectorStatus 里某一项能力的状态。
+fn integration_status(
+    status: &ConnectorStatus,
+    capability: IntegrationCapability,
+) -> Option<IntegrationStateStatus> {
+    status
+        .integrations
+        .iter()
+        .find(|item| item.capability == capability)
+        .map(|item| item.status)
+}
+
+/// integration_present 判断某一项集成「在目标机上是否已就位」。
+///
+/// Configured 与 NeedsAction 都算就位：后者的含义是"东西在，但内容与本次要装的
+/// 不一致"（skill 版本旧、hook 已写但尚未被 Hermes 信任），前端要显示的是
+/// 「已安装、可更新」而不是「没装」。Missing/Error/Unknown 一律为 false——
+/// 「读不出来」不能渲染成「装好了」。
+fn integration_present(status: Option<IntegrationStateStatus>) -> bool {
+    matches!(
+        status,
+        Some(IntegrationStateStatus::Configured) | Some(IntegrationStateStatus::NeedsAction)
+    )
 }
 
 /// detect_command_union 汇总全部连接器要探测的 CLI 命令名。
@@ -388,7 +452,7 @@ pub fn remote_status_for(
     cli_present: bool,
 ) -> RemoteAgentStatus {
     let descriptor = connector.descriptor();
-    let kind = remote_supported_kind(descriptor.id());
+    let plan = remote_plan(connector);
     let base = RemoteAgentStatus {
         connector_id: descriptor.id().to_string(),
         display_name: descriptor.display_name().to_string(),
@@ -398,14 +462,20 @@ pub fn remote_status_for(
         agent_url: None,
         skill_installed: false,
         hook_installed: false,
-        remote_supported: kind.is_some(),
+        remote_supported: plan.is_some(),
     };
-    let Some(kind) = kind else {
+    let Some(plan) = plan else {
         return base;
     };
     if !cli_present {
         return base;
     }
+    let kind = match plan {
+        RemoteInstallPlan::BuiltInKind(kind) => kind,
+        RemoteInstallPlan::Ported => {
+            return ported_remote_status(connector, ctx, fs_port, base);
+        }
+    };
     let home = ctx.home_dir();
     let config = super::read_config_status(fs_port, kind, &kind.config_path(home));
     if let Some(error) = config.error.as_ref() {
@@ -441,6 +511,71 @@ pub fn remote_status_for(
         mcp_installed,
         mcp_command: config.command,
         agent_url: config.agent_url,
+        skill_installed,
+        hook_installed,
+        ..base
+    }
+}
+
+/// ported_remote_status 用连接器自身的端口化 status 读出远端状态。
+///
+/// 参数：
+///   - connector: 已确认 `port_ops()` 为 Some 的连接器
+///   - ctx: 远端运行上下文（home / mcp_launch 都取自 detect）
+///   - fs_port: 目标机文件操作端口
+///   - base: 已填好 id/display_name/cli_present/remote_supported 的基线值
+///
+/// 返回：
+///   - 填好三项状态与运行时字段的远端状态；status 整体失败时退回 base 并记 warn
+///
+/// 注意：
+///   - 这里**不**重新实现任何方言判断：`mcp_installed` 直接用连接器自己的
+///     `Configured`，而连接器的判据（如 opencode 的 `expected_superdev_json`）
+///     比对的是 `ctx.mcp_launch()`，在远端上下文里就是目标机自己的 agent 三元组
+///     ——与内置方言那条分支 `matches_launch` 的语义一致
+fn ported_remote_status(
+    connector: &dyn AgentConnector,
+    ctx: &ConnectorRuntimeContext,
+    fs_port: &dyn ConnectorFs,
+    base: RemoteAgentStatus,
+) -> RemoteAgentStatus {
+    let ops = match connector.port_ops() {
+        Some(ops) => ops,
+        None => return base,
+    };
+    let status = match ops.status_with_fs(ctx, fs_port) {
+        Ok(status) => status,
+        Err(error) => {
+            // 与内置方言分支同一纪律：读不出来时记 warn 留痕，返回值仍是全 false，
+            // 但用户随后点安装会立刻收到同一条错误，不会停留在"配置没了"的误解上。
+            tracing::warn!(
+                connector_id = connector.descriptor().id(),
+                error_code = error.code(),
+                "remote connector status unavailable"
+            );
+            return base;
+        }
+    };
+    let mcp_status = integration_status(&status, IntegrationCapability::Mcp);
+    let mcp_installed = mcp_status == Some(IntegrationStateStatus::Configured);
+    if !mcp_installed && integration_present(mcp_status) {
+        // 有条目但不匹配：面板会显示红灯，用户却可能觉得"明明装过"。
+        // 只记结论不记路径与 URL 值，避免把用户环境写进日志。
+        tracing::info!(
+            connector_id = connector.descriptor().id(),
+            "remote connector has a superdev entry that points elsewhere"
+        );
+    }
+    let skill_installed =
+        integration_present(integration_status(&status, IntegrationCapability::Skill));
+    let hook_installed = integration_present(integration_status(
+        &status,
+        IntegrationCapability::SessionHook,
+    ));
+    RemoteAgentStatus {
+        mcp_installed,
+        mcp_command: status.mcp_command,
+        agent_url: status.agent_url,
         skill_installed,
         hook_installed,
         ..base
@@ -490,7 +625,7 @@ pub fn detect_remote_agents(
 fn unsupported_remote_error(host_id: &str, connector_id: &str) -> String {
     format!(
         "远端机器 {host_id} 上的 {connector_id} 暂不支持远程接入：\
-         该连接器需要在目标机上运行自身 CLI 或直接读写本地文件，\
+         该连接器需要在目标机上运行自身 CLI 才能写配置，\
          而远端只提供受限文件端点。请在目标机本地完成该智能体的接入。"
     )
 }
@@ -520,9 +655,31 @@ pub fn install_remote_connector(
     skill_source: Option<PathBuf>,
     skill_source_error: Option<String>,
 ) -> Result<ConnectorOperationOutcome, String> {
-    let kind = require_remote_kind(connectors, host_id, connector_id)?;
+    let (connector, plan) = resolve_remote_plan(connectors, host_id, connector_id)?;
     let detected = detect_once(detector, connectors, host_id)?;
     let ctx = build_remote_context(&detected, skill_source, skill_source_error);
+    let kind = match plan {
+        RemoteInstallPlan::BuiltInKind(kind) => kind,
+        RemoteInstallPlan::Ported => {
+            // 方言与编排完全复用连接器自身的实现，差别只有 fs_port 与 ctx 两个入参；
+            // 能力集合给全三项，与本机「安装」按钮的语义一致（不支持的能力由连接器
+            // 自己降级成 NeedsAction/Skipped，不是编排在这里挑）。
+            let ops = connector
+                .port_ops()
+                .ok_or_else(|| unsupported_remote_error(host_id, connector_id))?;
+            let request = ConnectorInstallRequest {
+                operation: ConnectorOperation::Install,
+                capabilities: vec![
+                    IntegrationCapability::Mcp,
+                    IntegrationCapability::Skill,
+                    IntegrationCapability::SessionHook,
+                ],
+            };
+            return ops
+                .install_with_fs(&ctx, request, fs_port)
+                .map_err(|error| format!("远端机器 {host_id} 安装 {connector_id} 失败: {error}"));
+        }
+    };
     let outcome = super::install_mcp_for_paths_with_fs(
         fs_port,
         kind.label(),
@@ -549,9 +706,20 @@ pub fn uninstall_remote_connector(
     skill_source: Option<PathBuf>,
     skill_source_error: Option<String>,
 ) -> Result<ConnectorOperationOutcome, String> {
-    let kind = require_remote_kind(connectors, host_id, connector_id)?;
+    let (connector, plan) = resolve_remote_plan(connectors, host_id, connector_id)?;
     let detected = detect_once(detector, connectors, host_id)?;
     let ctx = build_remote_context(&detected, skill_source, skill_source_error);
+    let kind = match plan {
+        RemoteInstallPlan::BuiltInKind(kind) => kind,
+        RemoteInstallPlan::Ported => {
+            let ops = connector
+                .port_ops()
+                .ok_or_else(|| unsupported_remote_error(host_id, connector_id))?;
+            return ops
+                .uninstall_with_fs(&ctx, fs_port)
+                .map_err(|error| format!("远端机器 {host_id} 卸载 {connector_id} 失败: {error}"));
+        }
+    };
     let outcome = super::uninstall_mcp_for_paths_with_fs(fs_port, kind.label(), ctx.home_dir())
         .map_err(|error| format!("远端机器 {host_id} 卸载 {connector_id} 失败: {error}"))?;
     Ok(connectors::built_in_uninstall_outcome(
@@ -560,22 +728,29 @@ pub fn uninstall_remote_connector(
     ))
 }
 
-/// require_remote_kind 校验 connector_id 已注册且支持远端接入。
-fn require_remote_kind(
-    connectors: &[Arc<dyn AgentConnector>],
+/// resolve_remote_plan 校验 connector_id 已注册且支持远端接入，并返回安装计划。
+///
+/// 参数：
+///   - connectors: 已注册的连接器列表
+///   - host_id / connector_id: 仅用于错误文案与查找
+///
+/// 返回：
+///   - (连接器本身, 该连接器的远端安装计划)
+///
+/// 注意：
+///   - 校验必须先于任何远端调用：拒绝一家不支持的连接器不该先去 detect 一次目标机
+fn resolve_remote_plan<'a>(
+    connectors: &'a [Arc<dyn AgentConnector>],
     host_id: &str,
     connector_id: &str,
-) -> Result<AgentKind, String> {
-    if !connectors
+) -> Result<(&'a dyn AgentConnector, RemoteInstallPlan), String> {
+    let connector = connectors
         .iter()
-        .any(|connector| connector.descriptor().id() == connector_id)
-    {
-        return Err(format!(
-            "远端机器 {host_id} 请求的连接器不存在: {connector_id}"
-        ));
-    }
-    remote_supported_kind(connector_id)
-        .ok_or_else(|| unsupported_remote_error(host_id, connector_id))
+        .find(|connector| connector.descriptor().id() == connector_id)
+        .ok_or_else(|| format!("远端机器 {host_id} 请求的连接器不存在: {connector_id}"))?;
+    let plan = remote_plan(connector.as_ref())
+        .ok_or_else(|| unsupported_remote_error(host_id, connector_id))?;
+    Ok((connector.as_ref(), plan))
 }
 
 /// remote_manual_instructions 生成指向**目标机**路径与启动规格的手动配置指引。
@@ -677,7 +852,12 @@ mod tests {
             self.hit();
             let is_dir = self.dirs.borrow().iter().any(|dir| dir == path);
             let exists = is_dir || self.files.borrow().contains_key(path);
-            Ok(FsStat { exists, is_dir })
+            // 内存 fake 里不存在符号链接这种东西，恒为 false。
+            Ok(FsStat {
+                exists,
+                is_dir,
+                is_symlink: false,
+            })
         }
 
         fn read_optional(&self, path: &Path) -> Result<Option<String>, String> {
@@ -892,7 +1072,7 @@ mod tests {
     fn unsupported_connector_reports_no_remote_support_without_touching_the_filesystem() {
         let fs_port = RecordingFs::new();
         let ctx = build_remote_context(&detect_fixture(), None, None);
-        for id in ["opencode", "openclaw", "hermes", "kimi-code", "grok"] {
+        for id in ["openclaw", "grok"] {
             let connector = connectors::builtin()
                 .into_iter()
                 .find(|connector| connector.descriptor().id() == id)
@@ -1016,13 +1196,15 @@ mod tests {
     }
 
     #[test]
-    fn remote_support_is_pinned_to_the_three_fully_ported_connectors() {
-        // 正面钉死支持集合：`remote_supported_kind` 用的是列举式判据，将来若有人
-        // 新增一个 AgentKind 变体而其安装未全程端口化，这条断言会先失败，
-        // 而不是让那家 connector 静默进入远端支持集合。
+    fn remote_support_is_pinned_to_the_six_fully_ported_connectors() {
+        // 正面钉死支持集合。两条判据各管一半，都不是可以"顺手"扩大的：
+        //   - 内置方言三家走 `built_in_remote_kind` 的列举式 match
+        //   - 第二波三家走 `AgentConnector::port_ops()`——返回 Some 的前提是这家
+        //     连接器真的实现了 PortedConnectorOps（即它的 status/install/uninstall
+        //     全部接受端口），没端口化就根本写不出那个 Some
         let supported: Vec<String> = connectors::builtin()
             .iter()
-            .filter(|connector| remote_supported_kind(connector.descriptor().id()).is_some())
+            .filter(|connector| remote_plan(connector.as_ref()).is_some())
             .map(|connector| connector.descriptor().id().to_string())
             .collect();
 
@@ -1031,11 +1213,55 @@ mod tests {
             vec![
                 "claude-code".to_string(),
                 "codex".to_string(),
-                "cursor".to_string()
+                "cursor".to_string(),
+                "opencode".to_string(),
+                "hermes".to_string(),
+                "kimi-code".to_string(),
             ],
-            "远端支持集合只能是「安装/卸载/状态读取全程经 ConnectorFs 端口」的那三家"
+            "远端支持集合只能是「安装/卸载/状态读取全程经 ConnectorFs 端口」的那几家"
         );
-        assert!(remote_supported_kind("not-a-connector").is_none());
+        assert!(built_in_remote_kind("not-a-connector").is_none());
+    }
+
+    /// openclaw / grok 的负例必须被单独钉住：它们靠在目标机上运行**自身 CLI**
+    /// 写配置，而远端只有受限文件端点、没有远程执行原语。把它们顺手加进支持集合
+    /// 的后果不是"报个错"，而是在桌面机自己的磁盘上按目标机路径写文件然后报成功。
+    #[test]
+    fn openclaw_and_grok_stay_out_of_the_remote_support_set() {
+        for id in ["openclaw", "grok"] {
+            let connector = connectors::builtin()
+                .into_iter()
+                .find(|connector| connector.descriptor().id() == id)
+                .unwrap_or_else(|| panic!("{id} connector"));
+            assert!(
+                connector.port_ops().is_none(),
+                "{id} 不能实现 PortedConnectorOps：它需要在目标机上执行任意命令"
+            );
+            assert!(
+                remote_plan(connector.as_ref()).is_none(),
+                "{id} 不能进入远端支持集合"
+            );
+        }
+
+        // 并且 install 入口必须显式失败、不产生任何副作用（不只是"状态位为 false"）。
+        let fs_port = RecordingFs::new();
+        let detector = FakeDetector::new(&["openclaw", "grok"]);
+        let connectors = connectors::builtin();
+        for id in ["openclaw", "grok"] {
+            let error = install_remote_connector(
+                &detector,
+                &fs_port,
+                &connectors,
+                "host-42",
+                id,
+                None,
+                None,
+            )
+            .expect_err("不支持的连接器必须显式失败，而不是静默写出半套配置");
+            assert!(error.contains("host-42") && error.contains(id), "{error}");
+        }
+        assert_eq!(fs_port.calls(), 0, "拒绝时不得对目标机产生任何副作用");
+        assert_eq!(detector.call_count(), 0, "拒绝应先于任何远端调用");
     }
 
     #[test]
@@ -1239,6 +1465,254 @@ mod tests {
             "hook 命令必须指向目标机上的 skill 路径: {hook}"
         );
         let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());
+    }
+
+    /// ported_connector 从生产工厂里取一家第二波连接器。
+    fn ported_connector(id: &str) -> Arc<dyn AgentConnector> {
+        connectors::builtin()
+            .into_iter()
+            .find(|connector| connector.descriptor().id() == id)
+            .unwrap_or_else(|| panic!("{id} connector"))
+    }
+
+    #[test]
+    fn ported_connector_remote_status_reads_state_from_the_target_machine() {
+        let skill_source = bundled_skill_dir("ported-status");
+        let fs_port = RecordingFs::new()
+            .with_file(
+                "/home/remote/.kimi-code/mcp.json",
+                r#"{"mcpServers":{"superdev":{"command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}}}"#,
+            )
+            .with_dir("/home/remote/.kimi-code/skills/superdev")
+            .with_file("/home/remote/.kimi-code/skills/superdev/SKILL.md", "# SuperDev\n");
+        let ctx = build_remote_context(&detect_fixture(), Some(skill_source.clone()), None);
+
+        let status =
+            remote_status_for(ported_connector("kimi-code").as_ref(), &ctx, &fs_port, true);
+
+        assert!(
+            status.remote_supported,
+            "kimi-code 已全程端口化，必须支持远端"
+        );
+        assert!(
+            status.mcp_installed,
+            "配置里的 command/args/URL 与目标机 agent 完全一致，应报已安装"
+        );
+        assert_eq!(
+            status.mcp_command.as_deref(),
+            Some("/opt/superdev/superdev-agent")
+        );
+        assert_eq!(status.agent_url.as_deref(), Some("http://10.1.2.3:57117"));
+        assert!(status.skill_installed, "目标机上的 skill 目录已存在");
+        assert!(
+            !status.hook_installed,
+            "kimi-code 的 Session Hook 是手动能力，不该报成已安装"
+        );
+        assert!(fs_port.calls() >= 2, "状态读取必须真的问过目标机");
+        let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());
+    }
+
+    #[test]
+    fn a_ported_connector_entry_pointing_elsewhere_is_not_reported_as_installed() {
+        // 与内置方言那三家同一条性质：目标机上残留一条曾作为本机装出来的旧条目
+        // （指向 superdev-mcp + 本机默认端口）时必须报未安装，否则用户不会去点
+        // 安装，那台机器上的 kimi 永远连不上。
+        let fs_port = RecordingFs::new().with_file(
+            "/home/remote/.kimi-code/mcp.json",
+            r#"{"mcpServers":{"superdev":{"command":"/Applications/SuperDev.app/Contents/MacOS/superdev-mcp","env":{"SUPERDEV_AGENT_URL":"http://127.0.0.1:57017"}}}}"#,
+        );
+        let ctx = build_remote_context(&detect_fixture(), None, None);
+
+        let status =
+            remote_status_for(ported_connector("kimi-code").as_ref(), &ctx, &fs_port, true);
+
+        assert!(!status.mcp_installed);
+        assert_eq!(
+            status.mcp_command.as_deref(),
+            Some("/Applications/SuperDev.app/Contents/MacOS/superdev-mcp"),
+            "读到的 command 要如实回给前端，前端才能显示「装了但指向别处」"
+        );
+        assert_eq!(status.agent_url.as_deref(), Some("http://127.0.0.1:57017"));
+    }
+
+    /// HomedFakeDetector 与 FakeDetector 同义，但 home 指向调用方给定的**真实
+    /// 存在的空目录**——用来把「有没有绕过端口直连 std::fs」变成一条可观测的
+    /// 断言：任何一步走了本机文件系统，文件就会真的落在这个目录里。
+    struct HomedFakeDetector {
+        present: Vec<String>,
+        home: String,
+    }
+
+    impl HomedFakeDetector {
+        fn new(present: &[&str], home: &Path) -> Self {
+            Self {
+                present: present.iter().map(|value| value.to_string()).collect(),
+                home: home.to_string_lossy().into_owned(),
+            }
+        }
+    }
+
+    impl RemoteIntegrationDetector for HomedFakeDetector {
+        fn detect(&self, commands: &[String]) -> Result<RemoteDetectResponse, String> {
+            Ok(RemoteDetectResponse {
+                home: self.home.clone(),
+                commands: commands
+                    .iter()
+                    .map(|command| (command.clone(), self.present.contains(command)))
+                    .collect(),
+                agent: detect_fixture().agent,
+            })
+        }
+    }
+
+    /// empty_remote_home 造一个真实存在的空目录，冒充目标机 HOME。
+    fn empty_remote_home(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "remote-home-{}-{}-{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root).expect("create remote home");
+        root
+    }
+
+    #[test]
+    fn ported_connectors_remote_install_writes_remote_values_only_through_the_port() {
+        // 三家第二波连接器（方言在 connectors/*.rs，经 PortedConnectorOps 端口化）
+        // 各跑一遍完整远端安装，同时钉住两件事：
+        //   1. 写出的 command / args / SUPERDEV_AGENT_URL 全是**目标机**的值
+        //   2. 一次都没有绕过端口——目标机 HOME 在桌面机磁盘上是个真实存在的空
+        //      目录，任何一次 std::fs 写入都会让它不再为空
+        for (connector_id, cli, config_rel, skill_rel) in [
+            (
+                "opencode",
+                "opencode",
+                ".config/opencode/opencode.json",
+                ".config/opencode/skills/superdev/SKILL.md",
+            ),
+            (
+                "hermes",
+                "hermes",
+                ".hermes/config.yaml",
+                ".hermes/skills/superdev/SKILL.md",
+            ),
+            (
+                "kimi-code",
+                "kimi",
+                ".kimi-code/mcp.json",
+                ".kimi-code/skills/superdev/SKILL.md",
+            ),
+        ] {
+            let skill_source = bundled_skill_dir(connector_id);
+            let remote_home = empty_remote_home(connector_id);
+            let fs_port = RecordingFs::new();
+            let detector = HomedFakeDetector::new(&[cli], &remote_home);
+            let connectors = connectors::builtin();
+
+            let outcome = install_remote_connector(
+                &detector,
+                &fs_port,
+                &connectors,
+                "host-42",
+                connector_id,
+                Some(skill_source.clone()),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{connector_id} 远端安装失败: {error}"));
+            assert_eq!(outcome.connector_id, connector_id);
+
+            let config_path = remote_home.join(config_rel);
+            let written = fs_port
+                .read(&config_path.to_string_lossy())
+                .unwrap_or_else(|| panic!("{connector_id} 的配置必须被写到目标机 HOME 下"));
+            assert!(
+                written.contains("/opt/superdev/superdev-agent"),
+                "{connector_id} 的 command 必须是目标机 agent 的绝对路径: {written}"
+            );
+            assert!(
+                written.contains("http://10.1.2.3:57117"),
+                "{connector_id} 的 SUPERDEV_AGENT_URL 必须指向目标机，不是桌面机默认端口: {written}"
+            );
+            assert!(
+                mentions_mcp_subcommand(connector_id, &written),
+                "{connector_id} 缺 mcp 子命令的话目标机 agent 不会进入 MCP 模式，\
+                 用户会看到'安装成功'却永远连不上: {written}"
+            );
+            assert!(
+                fs_port
+                    .read(&remote_home.join(skill_rel).to_string_lossy())
+                    .is_some(),
+                "{connector_id} 的 skill 必须落到目标机的 skill 目录"
+            );
+
+            // 卸载走的是同一条 PortedConnectorOps 分支，同样必须只碰目标机：
+            // 只摘掉 superdev 条目、配置文件本身保留、skill 目录被删。
+            let removed = uninstall_remote_connector(
+                &detector,
+                &fs_port,
+                &connectors,
+                "host-42",
+                connector_id,
+                Some(skill_source.clone()),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{connector_id} 远端卸载失败: {error}"));
+            assert_eq!(removed.operation, ConnectorOperation::Uninstall);
+            let after = fs_port
+                .read(&config_path.to_string_lossy())
+                .unwrap_or_else(|| panic!("{connector_id} 的配置文件本身必须保留"));
+            assert!(
+                !after.contains("/opt/superdev/superdev-agent"),
+                "{connector_id} 的 superdev 条目必须被移除: {after}"
+            );
+            assert!(
+                fs_port
+                    .read(&remote_home.join(skill_rel).to_string_lossy())
+                    .is_none(),
+                "{connector_id} 目标机上的 skill 目录必须被删除"
+            );
+
+            let leaked: Vec<String> = std::fs::read_dir(&remote_home)
+                .expect("read remote home")
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            assert!(
+                leaked.is_empty(),
+                "{connector_id} 远端安装把文件写到了【桌面机】自己的磁盘上: {leaked:?}"
+            );
+
+            let _ = std::fs::remove_dir_all(&remote_home);
+            let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());
+        }
+    }
+
+    /// mentions_mcp_subcommand 按各家 schema 判断 `mcp` 子命令是否真的写进了配置。
+    ///
+    /// 不能统一用 `written.contains("mcp")`：opencode 的 schema 根键就叫 `mcp`，
+    /// kimi-code 的根键叫 `mcpServers`，那样断言恒真、测不出任何东西。
+    fn mentions_mcp_subcommand(connector_id: &str, written: &str) -> bool {
+        match connector_id {
+            "opencode" => {
+                let value: serde_json::Value =
+                    serde_json::from_str(written).expect("opencode json");
+                value["mcp"]["superdev"]["command"]
+                    == serde_json::json!(["/opt/superdev/superdev-agent", "mcp"])
+            }
+            "kimi-code" => {
+                let value: serde_json::Value =
+                    serde_json::from_str(written).expect("kimi-code json");
+                value["mcpServers"]["superdev"]["args"] == serde_json::json!(["mcp"])
+            }
+            // Hermes 是无损 YAML，没有现成的解析依赖；它的 args 写法固定为
+            // `args:` 后跟一个 `- mcp` 列表项（见 superdev_server_fields）。
+            "hermes" => written.contains("args:") && written.contains("- mcp"),
+            other => panic!("未覆盖的连接器: {other}"),
+        }
     }
 
     #[test]

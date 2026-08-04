@@ -20,7 +20,7 @@
 //     安装逻辑）的职责，本结构只提供哑的文件原语
 //   - 不在这里做重试/退避：一次方法调用只发一次 HTTP 请求，超时由 15s 预算兜底
 
-use super::fs_port::{BatchFile, ConnectorFs, FsStat, WriteLabels};
+use super::fs_port::{BatchFile, ConnectorFs, FsStat, WriteLabels, WritePolicy};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -161,14 +161,24 @@ impl RemoteAgentFs {
     }
 }
 
-/// StatResponse 对应 `GET fs/stat` 的响应体 `{exists, is_dir, size}`。
+/// StatResponse 对应 `GET fs/stat` 的响应体 `{exists, is_dir, is_symlink, size}`。
 ///
 /// size 字段本结构不关心（FsStat 端口契约里没有这一位），不声明它——多余的
 /// JSON key 会被 serde 直接忽略，不需要 `#[serde(default)]` 之类的样板。
+///
+/// `is_symlink` 反过来必须带 `#[serde(default)]`：它是后加的字段，目标机上可能
+/// 跑着不认识它的旧版 agent。缺省 false 的后果是「把符号链接看成普通文件」，
+/// 与该字段引入之前的行为一致（那时同样看不见链接），是安全的降级；若不给
+/// default，遇到旧 agent 会整个 stat 解析失败，把一次可降级的能力缺失升级成
+/// 硬报错。**这里的 default 与 ReadResponse 里被明令禁止的那个 default 不是
+/// 一回事**：那边缺省会把「读取成功」误判成「文件不存在」（语义反转），这边
+/// 只是退回旧行为。
 #[derive(Deserialize)]
 struct StatResponse {
     exists: bool,
     is_dir: bool,
+    #[serde(default)]
+    is_symlink: bool,
 }
 
 /// ReadResponse 只建模 `content` 一个字段。
@@ -283,6 +293,7 @@ impl ConnectorFs for RemoteAgentFs {
         Ok(FsStat {
             exists: parsed.exists,
             is_dir: parsed.is_dir,
+            is_symlink: parsed.is_symlink,
         })
     }
 
@@ -315,23 +326,51 @@ impl ConnectorFs for RemoteAgentFs {
         backup: bool,
         labels: WriteLabels<'_>,
     ) -> Result<Option<String>, String> {
+        self.write_atomic_with_policy(path, content, backup, labels, WritePolicy::default())
+    }
+
+    fn write_atomic_with_policy(
+        &self,
+        path: &Path,
+        content: &str,
+        backup: bool,
+        labels: WriteLabels<'_>,
+        policy: WritePolicy,
+    ) -> Result<Option<String>, String> {
         tracing::info!(
             host_id = %self.host_id,
             path = %path.display(),
             bytes = content.len(),
             backup,
+            require_regular_file = policy.require_regular_file,
+            restrict_new_file_mode = policy.restrict_new_file_mode,
             "remote fs write"
         );
+        /// WriteRequest 是 `PUT fs/write` 的请求体。
+        ///
+        /// 两个策略字段用 `skip_serializing_if` 而不是无条件序列化：默认策略下
+        /// 请求体必须与这两个字段引入之前**逐字节同形**，目标机上可能跑着不认识
+        /// 它们的旧版 agent（多余的 JSON key 虽然会被 Go 忽略，但"默认路径的线上
+        /// 报文没变过"是一条值得用测试钉住的性质，见
+        /// `write_atomic_default_policy_sends_no_extra_request_fields`）。
         #[derive(Serialize)]
         struct WriteRequest<'a> {
             path: String,
             content: &'a str,
             backup: bool,
+            #[serde(skip_serializing_if = "std::ops::Not::not")]
+            require_regular_file: bool,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            new_file_mode: Option<&'static str>,
         }
         let body = serde_json::to_string(&WriteRequest {
             path: path.to_string_lossy().into_owned(),
             content,
             backup,
+            require_regular_file: policy.require_regular_file,
+            // 取值是 Go 端点认得的枚举串，不是八进制数字——受限文件通道不接受
+            // 客户端下发任意权限位，服务端只承认自己定义的档位。
+            new_file_mode: policy.restrict_new_file_mode.then_some("restricted"),
         })
         .map_err(|error| format!("写入{}失败: 序列化请求失败: {error}", labels.write_object))?;
 
@@ -492,6 +531,7 @@ impl ConnectorFs for RemoteAgentFs {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fs_port::WriteTarget;
     use super::*;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Read, Write};
@@ -730,6 +770,111 @@ mod tests {
         assert_eq!(body["path"], "/home/x/.claude.json");
         assert_eq!(body["content"], "{}\n");
         assert_eq!(body["backup"], true);
+    }
+
+    /// 默认策略的写必须与本次扩展之前**逐字节同形**：请求体里不许多出任何键。
+    /// 这是 Task 8 既有三家（claude-code / codex / cursor）不回归的正面证据——
+    /// 目标机可能跑着不认识新字段的旧版 agent。
+    #[test]
+    fn write_atomic_default_policy_sends_no_extra_request_fields() {
+        let (base, rx) = spawn_fake_agent(|_req| ok(r#"{"backup_path":""}"#));
+        fs(base)
+            .write_atomic(
+                Path::new("/home/x/.claude.json"),
+                "{}\n",
+                true,
+                config_labels(),
+            )
+            .expect("write succeeds");
+
+        let request = rx.recv().expect("request recorded");
+        let body: serde_json::Value = serde_json::from_str(&request.body).expect("valid json");
+        let object = body.as_object().expect("object body");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["backup", "content", "path"],
+            "默认策略下请求体必须与新字段引入之前完全一致: {body}"
+        );
+    }
+
+    /// 配置文件策略必须把两条语义都送到服务端：非普通文件守卫 + 新建 0600。
+    /// 客户端自己先 stat 再写不算数（TOCTOU），所以这两个字段真的上线是唯一
+    /// 能验证的东西。
+    #[test]
+    fn write_atomic_config_policy_sends_guard_and_restricted_mode() {
+        let (base, rx) = spawn_fake_agent(|_req| ok(r#"{"backup_path":""}"#));
+        fs(base)
+            .write_atomic_with_policy(
+                Path::new("/home/x/.config/opencode/opencode.json"),
+                "{}\n",
+                true,
+                config_labels(),
+                WritePolicy::CONFIG_FILE,
+            )
+            .expect("write succeeds");
+
+        let request = rx.recv().expect("request recorded");
+        let body: serde_json::Value = serde_json::from_str(&request.body).expect("valid json");
+        assert_eq!(
+            body["require_regular_file"], true,
+            "符号链接守卫必须由服务端执行，字段没送上去就等于没有守卫: {body}"
+        );
+        assert_eq!(
+            body["new_file_mode"], "restricted",
+            "新建配置文件必须与本机一样落 0600: {body}"
+        );
+    }
+
+    /// stat 的 is_symlink 必须被真的解析出来；旧版 agent 不返回该字段时降级为
+    /// false 而不是整个响应解析失败。
+    #[test]
+    fn stat_parses_is_symlink_and_defaults_it_for_older_agents() {
+        let (base, _rx) =
+            spawn_fake_agent(|_req| ok(r#"{"exists":true,"is_dir":false,"is_symlink":true}"#));
+        let linked = fs(base)
+            .stat(Path::new("/home/x/.claude.json"))
+            .expect("stat succeeds");
+        assert!(linked.is_symlink);
+
+        let (base, _rx) = spawn_fake_agent(|_req| ok(r#"{"exists":true,"is_dir":false}"#));
+        let legacy = fs(base)
+            .stat(Path::new("/home/x/.claude.json"))
+            .expect("旧版 agent 不返回 is_symlink 时不能整体解析失败");
+        assert!(!legacy.is_symlink);
+    }
+
+    /// check_write_target 走 trait 默认实现（由 stat 推导）——这里验证它在远端
+    /// 真的按 stat 响应分档，尤其是「悬空符号链接（exists=false 但 is_symlink）
+    /// 必须判 Unsafe」这条顺序敏感的分支。
+    #[test]
+    fn check_write_target_maps_remote_stat_to_the_three_buckets() {
+        for (body, expected) in [
+            (r#"{"exists":false,"is_dir":false}"#, WriteTarget::Absent),
+            (
+                r#"{"exists":true,"is_dir":false,"is_symlink":false}"#,
+                WriteTarget::RegularFile,
+            ),
+            (
+                r#"{"exists":true,"is_dir":true,"is_symlink":false}"#,
+                WriteTarget::Unsafe,
+            ),
+            (
+                r#"{"exists":true,"is_dir":false,"is_symlink":true}"#,
+                WriteTarget::Unsafe,
+            ),
+            (
+                r#"{"exists":false,"is_dir":false,"is_symlink":true}"#,
+                WriteTarget::Unsafe,
+            ),
+        ] {
+            let (base, _rx) = spawn_fake_agent(move |_req| ok(body));
+            let target = fs(base)
+                .check_write_target(Path::new("/home/x/.claude.json"))
+                .expect("check succeeds");
+            assert_eq!(target, expected, "stat 响应 {body} 分档错误");
+        }
     }
 
     #[test]

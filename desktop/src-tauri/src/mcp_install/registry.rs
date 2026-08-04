@@ -16,6 +16,7 @@ use crate::mcp_install::contracts::{
     ContractError, IntegrationCapability, IntegrationOperationResult, IntegrationResult,
     IntegrationState, IntegrationStateStatus, SupportMode,
 };
+use crate::mcp_install::fs_port::ConnectorFs;
 use crate::mcp_install::{McpLaunchSpec, DEFAULT_AGENT_URL};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -335,6 +336,53 @@ pub trait AgentConnector: Send + Sync {
     fn cli_commands(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// port_ops 返回该连接器「文件操作全程经 [`ConnectorFs`] 端口」的那套实现。
+    ///
+    /// 返回 None（默认）表示这家连接器的读写没有全程端口化——要么它靠在目标机
+    /// 上运行自身 CLI 写配置（openclaw / grok），要么它还直连 `std::fs`。这类
+    /// 连接器**不能**在只有受限文件端点的远端机器上接入：那样的"安装"会在桌面机
+    /// 自己的磁盘上按目标机的路径写文件，然后报告成功。
+    ///
+    /// 之所以做成「实现方主动返回 Some(self)」而不是在编排侧维护一份 ID 清单：
+    /// 清单会与代码事实漂移（清单说支持、代码却没端口化，或反过来），而这个
+    /// 方法的返回值本身就是端口化那份实现的引用，两者不可能对不上。
+    fn port_ops(&self) -> Option<&dyn PortedConnectorOps> {
+        None
+    }
+}
+
+/// PortedConnectorOps 是「文件操作全程经端口」的连接器操作三件套。
+///
+/// 与 [`AgentConnector`] 上同名的 status / install / uninstall 是同一份实现的
+/// 两种绑定：`AgentConnector` 那三个方法恒绑定本机（`LocalFs`），本 trait 让
+/// 调用方显式指定端口，从而把同一套方言逻辑跑到远端机器上。
+///
+/// **不要**在实现里另写一份逻辑：那正是本次端口化要消灭的东西——方言必须是
+/// Rust 单源，`AgentConnector::install` 应当是 `install_with_fs(ctx, req, &LocalFs)`
+/// 这样的一行委托。
+pub trait PortedConnectorOps {
+    /// status_with_fs 是 [`AgentConnector::status`] 的显式端口版本。
+    fn status_with_fs(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        fs_port: &dyn ConnectorFs,
+    ) -> Result<ConnectorStatus, ConnectorError>;
+
+    /// install_with_fs 是 [`AgentConnector::install`] 的显式端口版本。
+    fn install_with_fs(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        request: ConnectorInstallRequest,
+        fs_port: &dyn ConnectorFs,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError>;
+
+    /// uninstall_with_fs 是 [`AgentConnector::uninstall`] 的显式端口版本。
+    fn uninstall_with_fs(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        fs_port: &dyn ConnectorFs,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError>;
 }
 
 /// RegistryError 描述注册、查找、支持检查或操作结果校验失败。

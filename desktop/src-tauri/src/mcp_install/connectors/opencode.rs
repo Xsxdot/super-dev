@@ -12,11 +12,13 @@
 
 use super::common;
 use crate::mcp_install::contracts::*;
+use crate::mcp_install::fs_port::{ConnectorFs, LocalFs};
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{executable_file_names, MergeResult};
 use jsonc_parser::cst::CstRootNode;
 use jsonc_parser::json;
 use jsonc_parser::{parse_to_serde_value, ParseOptions};
+#[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -80,7 +82,10 @@ fn find_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
 fn mcp_command(ctx: &ConnectorRuntimeContext) -> String {
     // jsonc-parser 0.26.3 的 CST string writer 不会转义 Windows 反斜杠。
     // Windows 接受正斜杠绝对路径，因此在生成边界统一规范化。
-    ctx.mcp_launch().command.to_string_lossy().replace('\\', "/")
+    ctx.mcp_launch()
+        .command
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// mcp_command_line 返回 OpenCode `command` 数组的完整内容：命令 + 启动规格 args。
@@ -260,6 +265,9 @@ impl AgentConnector for OpenCodeConnector {
         let cli = find_cli(ctx);
         let root = data_root(ctx);
         let config = config_path(ctx);
+        // detect 是【本机】操作，刻意保留直连 std::fs：远端场景下 CLI 存在性
+        // 一律来自目标机的 `/api/integrations/detect` 端点，编排层（remote_install）
+        // 从不调用连接器自己的 detect()，PortedConnectorOps 里也没有它。
         let hit = cli
             .or_else(|| root.is_dir().then_some(root))
             .or_else(|| config.exists().then_some(config));
@@ -279,6 +287,58 @@ impl AgentConnector for OpenCodeConnector {
     }
 
     fn status(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorStatus, ConnectorError> {
+        self.status_with_fs(ctx, &LocalFs)
+    }
+
+    fn install(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        request: ConnectorInstallRequest,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.install_with_fs(ctx, request, &LocalFs)
+    }
+
+    fn uninstall(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.uninstall_with_fs(ctx, &LocalFs)
+    }
+
+    fn port_ops(&self) -> Option<&dyn PortedConnectorOps> {
+        Some(self)
+    }
+
+    fn manual_instructions(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorManualInstructions, ConnectorError> {
+        let config = config_path(ctx);
+        let skill = skill_path(ctx);
+        Ok(ConnectorManualInstructions {
+            summary: "手动将 SuperDev 接入 OpenCode（本地 MCP schema）".into(),
+            steps: vec![
+                format!("编辑 OpenCode 配置：{}", config.display()),
+                "写入 mcp.superdev（type=local, command 数组, enabled, environment）".into(),
+                format!("确认 Skill 目录：{}", skill.display()),
+                "重启 OpenCode；如使用 plugin/startup 扩展，按需手动注册 Session Hook".into(),
+                "验证 MCP 列表中出现 superdev".into(),
+            ],
+            config_path: Some(common::path_string(&config)),
+            manual_config: Some(pasteable_mcp_config(ctx)),
+            verification_prompt: Some(
+                "重启 OpenCode 后确认本地 MCP superdev 已启用并可连接".into(),
+            ),
+        })
+    }
+}
+
+impl PortedConnectorOps for OpenCodeConnector {
+    fn status_with_fs(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        fs_port: &dyn ConnectorFs,
+    ) -> Result<ConnectorStatus, ConnectorError> {
         let started = Instant::now();
         tracing::debug!(
             connector_id = CONNECTOR_ID,
@@ -287,8 +347,8 @@ impl AgentConnector for OpenCodeConnector {
         );
         let config = config_path(ctx);
         let skill = skill_path(ctx);
-        let (mcp_status, mcp_message) = match fs::read_to_string(&config) {
-            Ok(content) => match mcp_configured(ctx, &content) {
+        let (mcp_status, mcp_message) = match fs_port.read_optional(&config) {
+            Ok(Some(content)) => match mcp_configured(ctx, &content) {
                 Ok(true) => (
                     IntegrationStateStatus::Configured,
                     Some("SuperDev MCP 已配置".into()),
@@ -327,7 +387,7 @@ impl AgentConnector for OpenCodeConnector {
                     return Err(error);
                 }
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+            Ok(None) => (
                 IntegrationStateStatus::Missing,
                 Some("MCP 配置文件不存在".into()),
             ),
@@ -345,9 +405,11 @@ impl AgentConnector for OpenCodeConnector {
                 ));
             }
         };
-        let skill_state = common::skill_status(ctx, &skill);
-        let (mcp_command, agent_url) = fs::read_to_string(&config)
+        let skill_state = common::skill_status(fs_port, ctx, &skill);
+        let (mcp_command, agent_url) = fs_port
+            .read_optional(&config)
             .ok()
+            .flatten()
             .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
             .map(|value| common::extract_json_mcp_runtime(&value))
             .unwrap_or((None, None));
@@ -382,10 +444,11 @@ impl AgentConnector for OpenCodeConnector {
         Ok(result)
     }
 
-    fn install(
+    fn install_with_fs(
         &self,
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
+        fs_port: &dyn ConnectorFs,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         let capability_count = request.capabilities.len();
@@ -400,7 +463,7 @@ impl AgentConnector for OpenCodeConnector {
 
         let (mcp_result, mcp_backup, mcp_message) =
             if request.capabilities.contains(&IntegrationCapability::Mcp) {
-                match common::mutate_config(CONNECTOR_ID, &config, |existing| {
+                match common::mutate_config_with_fs(fs_port, CONNECTOR_ID, &config, |existing| {
                     merge_opencode_jsonc(existing, ctx)
                 }) {
                     Ok(outcome) => {
@@ -457,7 +520,7 @@ impl AgentConnector for OpenCodeConnector {
                     }
                 }
             } else {
-                let status = self.status(ctx)?;
+                let status = self.status_with_fs(ctx, fs_port)?;
                 let mcp = status
                     .integrations
                     .iter()
@@ -476,7 +539,7 @@ impl AgentConnector for OpenCodeConnector {
                 )
             };
 
-        let status_after = self.status(ctx)?;
+        let status_after = self.status_with_fs(ctx, fs_port)?;
         let mcp_ready = status_after.integrations.iter().any(|item| {
             item.capability == IntegrationCapability::Mcp
                 && item.status == IntegrationStateStatus::Configured
@@ -491,9 +554,9 @@ impl AgentConnector for OpenCodeConnector {
                 Some("MCP 未就绪，已跳过 Skill".into()),
             )
         } else if request.capabilities.contains(&IntegrationCapability::Skill) {
-            common::install_skill(ctx, &skill)
+            common::install_skill(fs_port, ctx, &skill)
         } else {
-            let skill_state = common::skill_status(ctx, &skill);
+            let skill_state = common::skill_status(fs_port, ctx, &skill);
             common::integration_result(
                 IntegrationCapability::Skill,
                 match skill_state.status {
@@ -536,9 +599,10 @@ impl AgentConnector for OpenCodeConnector {
         Ok(outcome)
     }
 
-    fn uninstall(
+    fn uninstall_with_fs(
         &self,
         ctx: &ConnectorRuntimeContext,
+        fs_port: &dyn ConnectorFs,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         tracing::info!(
@@ -548,49 +612,53 @@ impl AgentConnector for OpenCodeConnector {
         );
         let config = config_path(ctx);
         let skill = skill_path(ctx);
-        let mcp_outcome =
-            match common::remove_config(CONNECTOR_ID, &config, remove_opencode_superdev) {
-                Ok(outcome) => outcome,
-                Err(error) if error.code() == "invalid_config" => {
-                    return Ok(ConnectorOperationOutcome {
-                        connector_id: CONNECTOR_ID.into(),
-                        operation: ConnectorOperation::Uninstall,
-                        result: ConnectorResult::Failed,
-                        integrations: vec![
-                            common::integration_result(
-                                IntegrationCapability::Mcp,
-                                IntegrationResult::Failed,
-                                Some(common::path_string(&config)),
-                                None,
-                                Some(error.message().into()),
-                            ),
-                            common::uninstall_skill(&skill),
-                            common::integration_result(
-                                IntegrationCapability::SessionHook,
-                                IntegrationResult::Skipped,
-                                None,
-                                None,
-                                Some("未管理 Session Hook".into()),
-                            ),
-                        ],
-                        manual_instructions: Some(self.manual_instructions(ctx)?),
-                        requires_restart: false,
-                        message: Some("OpenCode 卸载遇到无效配置".into()),
-                    });
-                }
-                Err(error) => {
-                    tracing::error!(
-                        connector_id = CONNECTOR_ID,
-                        operation = "uninstall",
-                        error_code = error.code(),
-                        duration_ms = started.elapsed().as_millis() as u64,
-                        "opencode uninstall failed"
-                    );
-                    return Err(error);
-                }
-            };
+        let mcp_outcome = match common::remove_config_with_fs(
+            fs_port,
+            CONNECTOR_ID,
+            &config,
+            remove_opencode_superdev,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) if error.code() == "invalid_config" => {
+                return Ok(ConnectorOperationOutcome {
+                    connector_id: CONNECTOR_ID.into(),
+                    operation: ConnectorOperation::Uninstall,
+                    result: ConnectorResult::Failed,
+                    integrations: vec![
+                        common::integration_result(
+                            IntegrationCapability::Mcp,
+                            IntegrationResult::Failed,
+                            Some(common::path_string(&config)),
+                            None,
+                            Some(error.message().into()),
+                        ),
+                        common::uninstall_skill(fs_port, &skill),
+                        common::integration_result(
+                            IntegrationCapability::SessionHook,
+                            IntegrationResult::Skipped,
+                            None,
+                            None,
+                            Some("未管理 Session Hook".into()),
+                        ),
+                    ],
+                    manual_instructions: Some(self.manual_instructions(ctx)?),
+                    requires_restart: false,
+                    message: Some("OpenCode 卸载遇到无效配置".into()),
+                });
+            }
+            Err(error) => {
+                tracing::error!(
+                    connector_id = CONNECTOR_ID,
+                    operation = "uninstall",
+                    error_code = error.code(),
+                    duration_ms = started.elapsed().as_millis() as u64,
+                    "opencode uninstall failed"
+                );
+                return Err(error);
+            }
+        };
 
-        let skill_result = common::uninstall_skill(&skill);
+        let skill_result = common::uninstall_skill(fs_port, &skill);
         let mcp_changed = mcp_outcome.changed;
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
         let changed = mcp_changed || skill_changed;
@@ -635,29 +703,6 @@ impl AgentConnector for OpenCodeConnector {
             "opencode uninstall finished"
         );
         Ok(outcome)
-    }
-
-    fn manual_instructions(
-        &self,
-        ctx: &ConnectorRuntimeContext,
-    ) -> Result<ConnectorManualInstructions, ConnectorError> {
-        let config = config_path(ctx);
-        let skill = skill_path(ctx);
-        Ok(ConnectorManualInstructions {
-            summary: "手动将 SuperDev 接入 OpenCode（本地 MCP schema）".into(),
-            steps: vec![
-                format!("编辑 OpenCode 配置：{}", config.display()),
-                "写入 mcp.superdev（type=local, command 数组, enabled, environment）".into(),
-                format!("确认 Skill 目录：{}", skill.display()),
-                "重启 OpenCode；如使用 plugin/startup 扩展，按需手动注册 Session Hook".into(),
-                "验证 MCP 列表中出现 superdev".into(),
-            ],
-            config_path: Some(common::path_string(&config)),
-            manual_config: Some(pasteable_mcp_config(ctx)),
-            verification_prompt: Some(
-                "重启 OpenCode 后确认本地 MCP superdev 已启用并可连接".into(),
-            ),
-        })
     }
 }
 
@@ -934,5 +979,4 @@ mod tests {
         );
         let _ = fs::remove_dir_all(home);
     }
-
 }

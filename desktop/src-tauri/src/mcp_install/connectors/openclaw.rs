@@ -13,6 +13,10 @@
 use super::common;
 use super::process::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
 use crate::mcp_install::contracts::*;
+// openclaw / grok 的读写没有全程经端口（它们靠目标机上运行自身 CLI 写配置），
+// 因此恒绑定本机实现：显式写出 LocalFs 而不是让 common 里藏一个默认值，
+// 「这家连接器只能装在本机」这件事就留在调用点上看得见。
+use crate::mcp_install::fs_port::LocalFs;
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{executable_file_names, mcp_server_json_value};
 use std::ffi::OsString;
@@ -189,9 +193,7 @@ fn entry_matches(ctx: &ConnectorRuntimeContext, value: &serde_json::Value) -> bo
         .and_then(|env| env.get("SUPERDEV_AGENT_URL"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    command == expected_command.as_ref()
-        && args == launch.args
-        && agent_url == launch.agent_url
+    command == expected_command.as_ref() && args == launch.args && agent_url == launch.agent_url
 }
 
 fn config_hint(ctx: &ConnectorRuntimeContext) -> Option<String> {
@@ -277,7 +279,7 @@ impl AgentConnector for OpenClawConnector {
                 Some("未找到 openclaw CLI，无法读取 MCP 状态".into()),
             ),
         };
-        let skill_state = common::skill_status(ctx, &skill);
+        let skill_state = common::skill_status(&LocalFs, ctx, &skill);
         // OpenClaw 通过 CLI 读取状态；已配置时回填期望的 SuperDev 运行时字段供设置页展示。
         let (mcp_command, agent_url) = if mcp_status == IntegrationStateStatus::Configured
             || mcp_status == IntegrationStateStatus::NeedsAction
@@ -516,9 +518,9 @@ impl AgentConnector for OpenClawConnector {
                 Some("MCP 未就绪，已跳过 Skill".into()),
             )
         } else if request.capabilities.contains(&IntegrationCapability::Skill) {
-            common::install_skill(ctx, &skill)
+            common::install_skill(&LocalFs, ctx, &skill)
         } else {
-            let skill_state = common::skill_status(ctx, &skill);
+            let skill_state = common::skill_status(&LocalFs, ctx, &skill);
             common::integration_result(
                 IntegrationCapability::Skill,
                 match skill_state.status {
@@ -611,7 +613,7 @@ impl AgentConnector for OpenClawConnector {
                                 None,
                                 Some("openclaw mcp unset 失败".into()),
                             ),
-                            common::uninstall_skill(&skill),
+                            common::uninstall_skill(&LocalFs, &skill),
                             common::integration_result(
                                 IntegrationCapability::SessionHook,
                                 IntegrationResult::Skipped,
@@ -637,7 +639,7 @@ impl AgentConnector for OpenClawConnector {
                 Some("未找到 openclaw CLI，请手动运行 openclaw mcp unset superdev".into());
         }
 
-        let skill_result = common::uninstall_skill(&skill);
+        let skill_result = common::uninstall_skill(&LocalFs, &skill);
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
         let changed = mcp_changed || skill_changed;
         let outcome = ConnectorOperationOutcome {
@@ -1147,5 +1149,4 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(home);
     }
-
 }

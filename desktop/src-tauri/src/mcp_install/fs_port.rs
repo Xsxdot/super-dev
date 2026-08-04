@@ -37,13 +37,70 @@ pub struct WriteLabels<'a> {
 
 /// FsStat 描述一个路径的存在性与类型。
 ///
-/// 只保留安装逻辑真正需要的两个位：是否存在、是否是目录。
+/// 只保留安装逻辑真正需要的三个位：是否存在、是否是目录、是否是符号链接。
+///
+/// **exists / is_dir 与 is_symlink 的语义刻意不同源**：前两者是「跟随符号链接」
+/// 的 stat 语义（安装逻辑问的是"这个位置最终有没有东西、是不是目录"），
+/// is_symlink 是「不跟随」的 lstat 语义（问的是"路径末段自身是不是一条链接"）。
+/// 两者同源就表达不了「这是一条指向普通文件的链接」这种情况——而那恰恰是配置
+/// 写入必须拒绝、却在跟随语义下看起来完全正常的目标。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FsStat {
-    /// exists 表示路径当前是否存在。
+    /// exists 表示路径当前是否存在（跟随符号链接；悬空链接为 false）。
     pub exists: bool,
-    /// is_dir 表示路径存在且是目录。
+    /// is_dir 表示路径存在且是目录（跟随符号链接）。
     pub is_dir: bool,
+    /// is_symlink 表示路径末段自身是一条符号链接（不跟随；悬空链接也为 true）。
+    pub is_symlink: bool,
+}
+
+/// WriteTarget 描述一个「打算原子写入的目标路径」当前处于什么状态。
+///
+/// 只有三档，对应 connector 配置写入前那道守卫真正需要区分的三种情况；
+/// 不透传具体文件类型（FIFO / 套接字 / 设备节点之间的差别对调用方毫无意义，
+/// 它们同属"不能写"）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteTarget {
+    /// Absent 表示目标不存在，可以安全创建。
+    Absent,
+    /// RegularFile 表示目标已存在且是普通文件，可以安全覆写。
+    RegularFile,
+    /// Unsafe 表示目标存在但不是普通文件（符号链接、目录、FIFO 等），必须拒绝。
+    Unsafe,
+}
+
+/// WritePolicy 表达一次原子写对「目标类型」与「新建文件权限」的额外要求。
+///
+/// 做成值对象而不是给 `write_atomic` 加两个裸 bool 参数，是为了让新增一档策略
+/// 不再动签名；也让调用点读起来是「按配置文件的规矩写」而不是「true, true」。
+///
+/// **两个字段都只对远端实现产生实际效果**，因为本机实现的既有行为本来就等价于
+/// 「已开启」：`atomic_write_file` 对新建文件恒用 0600，而它的「写临时文件 →
+/// rename 替换」路径会**替换**符号链接本身而不是穿过它写到被指向的文件。
+/// 远端 agent 的 write 端点默认是 0644 且不做类型守卫，必须由调用方显式要求。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WritePolicy {
+    /// require_regular_file 为 true 时，目标是符号链接或非普通文件必须被拒绝。
+    ///
+    /// **这条拒绝必须由写入端自己执行，不能靠调用方先 `check_write_target` 再
+    /// 写**：两次调用之间隔着 TOCTOU 窗口，攻击者可以在窗口内把目标替换成符号
+    /// 链接，客户端的判定形同虚设。`check_write_target` 的用途是把失败提前到
+    /// 「还没备份、还没建目录」的时刻并给出与本机一致的错误码，不是安全屏障。
+    pub require_regular_file: bool,
+    /// restrict_new_file_mode 为 true 时，**新建**文件必须落 0600。
+    ///
+    /// 只管新建：已存在文件的权限位归它自己所有，写入方不得擅自收紧——那同样是
+    /// 未经用户同意改动用户文件。
+    pub restrict_new_file_mode: bool,
+}
+
+impl WritePolicy {
+    /// CONFIG_FILE 是「智能体配置文件」这一类写入的策略：拒绝非普通文件目标，
+    /// 新建文件收紧到 0600（配置里可能含用户为其它 MCP server 配的 API key）。
+    pub const CONFIG_FILE: Self = Self {
+        require_regular_file: true,
+        restrict_new_file_mode: true,
+    };
 }
 
 /// BatchFile 描述一次批量写入中的单个文件。
@@ -89,6 +146,56 @@ pub trait ConnectorFs {
         labels: WriteLabels<'_>,
     ) -> Result<Option<String>, String>;
 
+    /// write_atomic_with_policy 是带写入策略的 [`ConnectorFs::write_atomic`]。
+    ///
+    /// 默认实现**忽略策略**并退化为普通 `write_atomic`。这个默认对本机实现是
+    /// 精确的（`LocalFs` 的既有行为本来就等价于策略全开，见 [`WritePolicy`]），
+    /// 对内存 fake 也是精确的（内存里既没有符号链接也没有权限位）；真正需要
+    /// 覆写它的只有远端实现——远端 write 端点的默认行为与本机不一致，策略必须
+    /// 随请求一起送到服务端去执行。
+    ///
+    /// **`policy.require_regular_file` 的拒绝动作必须发生在写入端**，不能由调用
+    /// 方先 `check_write_target` 再写就算数：那中间隔着 TOCTOU 窗口。理由详见
+    /// [`WritePolicy::require_regular_file`]。
+    fn write_atomic_with_policy(
+        &self,
+        path: &Path,
+        content: &str,
+        backup: bool,
+        labels: WriteLabels<'_>,
+        policy: WritePolicy,
+    ) -> Result<Option<String>, String> {
+        let _ = policy;
+        self.write_atomic(path, content, backup, labels)
+    }
+
+    /// check_write_target 判定 path 现在是不是一个可安全原子写入的目标。
+    ///
+    /// 用途是**把失败提前**：在建父目录、备份、写入之前就以调用方能翻译成稳定
+    /// 错误码的形式返回「目标不安全」，让本机与远端给出同一套错误文案。
+    ///
+    /// **它不是安全屏障**：判定与随后的写入之间存在 TOCTOU 窗口，真正的拒绝
+    /// 必须由写入端在 [`WritePolicy::require_regular_file`] 下自己执行。
+    ///
+    /// 默认实现由 [`ConnectorFs::stat`] 推导，对「stat 三位齐全」的实现精确；
+    /// `LocalFs` 覆写它是为了连 FIFO / 套接字 / 设备节点这类 `FsStat` 表达不了
+    /// 的非普通文件也一并判为 Unsafe，与端口化之前的 `symlink_metadata` 守卫
+    /// 逐条等价。
+    fn check_write_target(&self, path: &Path) -> Result<WriteTarget, String> {
+        let stat = self.stat(path)?;
+        // 顺序要紧：悬空符号链接的 exists 是 false，先判 is_symlink 才不会把它
+        // 当成「不存在，可放心创建」而写穿这条链接。
+        if stat.is_symlink {
+            Ok(WriteTarget::Unsafe)
+        } else if !stat.exists {
+            Ok(WriteTarget::Absent)
+        } else if stat.is_dir {
+            Ok(WriteTarget::Unsafe)
+        } else {
+            Ok(WriteTarget::RegularFile)
+        }
+    }
+
     /// mkdir_all 递归创建目录；已存在视为成功。
     fn mkdir_all(&self, path: &Path) -> Result<(), String>;
 
@@ -117,15 +224,40 @@ pub struct LocalFs;
 
 impl ConnectorFs for LocalFs {
     fn stat(&self, path: &Path) -> Result<FsStat, String> {
+        // is_symlink 单独取一次 lstat：`fs::metadata` 跟随链接，拿不到"末段自身
+        // 是不是链接"这一位。lstat 失败一律当 false——不存在的路径不是符号链接，
+        // 其它失败情况下面的 metadata 分支会如实报错，这里不越权。
+        let is_symlink = fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false);
         match fs::metadata(path) {
             Ok(metadata) => Ok(FsStat {
                 exists: true,
                 is_dir: metadata.is_dir(),
+                is_symlink,
             }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FsStat {
                 exists: false,
                 is_dir: false,
+                is_symlink,
             }),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn check_write_target(&self, path: &Path) -> Result<WriteTarget, String> {
+        // 与端口化之前 connectors/common.rs `mutate_config_inner` 的第一步逐条
+        // 等价：symlink_metadata（不跟随）→ 是链接或不是普通文件即拒绝，
+        // NotFound 视为「可创建」，其它 I/O 错误上报给调用方拼错误文案。
+        match fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    Ok(WriteTarget::Unsafe)
+                } else {
+                    Ok(WriteTarget::RegularFile)
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(WriteTarget::Absent),
             Err(error) => Err(error.to_string()),
         }
     }
@@ -245,7 +377,7 @@ fn apply_batch_permissions(_target: &Path, _executable: bool) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::super::create_unique_test_dir;
-    use super::{BatchFile, ConnectorFs, LocalFs, WriteLabels};
+    use super::{BatchFile, ConnectorFs, LocalFs, WriteLabels, WritePolicy, WriteTarget};
     use std::fs;
     use std::path::PathBuf;
 
@@ -519,6 +651,159 @@ mod tests {
         let missing_stat = LocalFs.stat(&dir.join("missing")).expect("stat missing");
         assert!(!missing_stat.exists);
         assert!(!missing_stat.is_dir);
+    }
+
+    /// stat 的 is_symlink 必须是 lstat 语义（看路径末段自身），而 exists/is_dir
+    /// 必须保持既有的跟随语义——两者同源就无法表达「这是一条指向普通文件的链接」，
+    /// connector 的符号链接守卫在远端就复刻不出来。
+    #[cfg(unix)]
+    #[test]
+    fn stat_reports_symlinks_without_changing_exists_and_is_dir_semantics() {
+        let dir = temp_dir();
+        let real = dir.join("real.json");
+        fs::write(&real, "{}").expect("seed real");
+        let link = dir.join("link.json");
+        std::os::unix::fs::symlink(&real, &link).expect("seed link");
+        let dangling = dir.join("dangling.json");
+        std::os::unix::fs::symlink(dir.join("gone.json"), &dangling).expect("seed dangling");
+
+        let link_stat = LocalFs.stat(&link).expect("stat link");
+        assert!(
+            link_stat.is_symlink,
+            "指向普通文件的链接必须被报成 is_symlink"
+        );
+        assert!(link_stat.exists, "exists 保持跟随语义：链接指向的文件存在");
+        assert!(!link_stat.is_dir);
+
+        let real_stat = LocalFs.stat(&real).expect("stat real");
+        assert!(!real_stat.is_symlink);
+        assert!(real_stat.exists);
+
+        let dangling_stat = LocalFs.stat(&dangling).expect("stat dangling");
+        assert!(
+            dangling_stat.is_symlink,
+            "悬空链接自身仍在，必须报 is_symlink，否则调用方会当成「不存在，可放心创建」而写穿它"
+        );
+        assert!(
+            !dangling_stat.exists,
+            "悬空链接跟随后读不到东西，exists 仍是 false"
+        );
+
+        let missing_stat = LocalFs.stat(&dir.join("nope.json")).expect("stat missing");
+        assert!(!missing_stat.is_symlink);
+    }
+
+    /// check_write_target 是 connectors/common.rs `mutate_config` 的守卫下沉到
+    /// 端口之后的形态，判据必须与改造前的 `symlink_metadata` 分支逐条对齐。
+    #[test]
+    fn check_write_target_classifies_missing_regular_dir_and_symlink() {
+        let dir = temp_dir();
+        let regular = dir.join("config.json");
+        fs::write(&regular, "{}").expect("seed regular");
+
+        assert_eq!(
+            LocalFs.check_write_target(&dir.join("missing.json")),
+            Ok(WriteTarget::Absent)
+        );
+        assert_eq!(
+            LocalFs.check_write_target(&regular),
+            Ok(WriteTarget::RegularFile)
+        );
+        assert_eq!(LocalFs.check_write_target(&dir), Ok(WriteTarget::Unsafe));
+
+        #[cfg(unix)]
+        {
+            let link = dir.join("link.json");
+            std::os::unix::fs::symlink(&regular, &link).expect("seed link");
+            assert_eq!(
+                LocalFs.check_write_target(&link),
+                Ok(WriteTarget::Unsafe),
+                "指向普通文件的符号链接同样不是可安全写入的目标——判定必须不跟随链接"
+            );
+        }
+    }
+
+    /// LocalFs 的新建文件权限本来就是 0600、已存在文件保留原 mode（由
+    /// `atomic_write_file` 负责）。这条测试把它钉成端口契约的一部分：远端实现
+    /// 要靠 `WritePolicy::restrict_new_file_mode` 去对齐的正是这个既有行为，
+    /// 一旦本地这边悄悄变了，两端就会以「都符合各自实现」的方式分叉。
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_creates_restricted_files_and_preserves_existing_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir();
+        let fresh = dir.join("fresh.json");
+        LocalFs
+            .write_atomic_with_policy(
+                &fresh,
+                "{}\n",
+                false,
+                config_labels(),
+                WritePolicy::CONFIG_FILE,
+            )
+            .expect("write fresh");
+        assert_eq!(
+            fs::metadata(&fresh)
+                .expect("fresh metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "新建配置文件必须落 0600"
+        );
+
+        let existing = dir.join("existing.json");
+        fs::write(&existing, "{}\n").expect("seed existing");
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o640)).expect("chmod existing");
+        LocalFs
+            .write_atomic_with_policy(
+                &existing,
+                "{\"v\":2}\n",
+                false,
+                config_labels(),
+                WritePolicy::CONFIG_FILE,
+            )
+            .expect("write existing");
+        assert_eq!(
+            fs::metadata(&existing)
+                .expect("existing metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640,
+            "已存在文件的权限位由目标自己决定，写入策略不得覆盖它"
+        );
+    }
+
+    /// 默认策略下 `write_atomic_with_policy` 必须与 `write_atomic` 完全同义——
+    /// 后者是前者的默认策略特例，两者分叉会让「同一次写为什么行为不同」变成
+    /// 一个没有出处的谜。
+    #[test]
+    fn write_atomic_with_default_policy_matches_plain_write_atomic() {
+        let dir = temp_dir();
+        let target = dir.join("config.json");
+        fs::write(&target, "old").expect("seed target");
+
+        let backup = LocalFs
+            .write_atomic_with_policy(
+                &target,
+                "new",
+                true,
+                config_labels(),
+                WritePolicy::default(),
+            )
+            .expect("write atomic");
+
+        assert_eq!(
+            backup,
+            Some(
+                dir.join("config.json.superdev-bak")
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+        assert_eq!(fs::read_to_string(&target).expect("read target"), "new");
     }
 
     #[test]

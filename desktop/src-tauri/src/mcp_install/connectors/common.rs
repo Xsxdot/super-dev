@@ -11,16 +11,18 @@
 //   - 不向日志写入配置路径或文件内容
 
 use crate::mcp_install::contracts::*;
+#[cfg(test)]
 use crate::mcp_install::fs_port::LocalFs;
+use crate::mcp_install::fs_port::{ConnectorFs, WritePolicy, WriteTarget};
 use crate::mcp_install::registry::*;
-// 一律用带 `_with_fs` / `_from_source` 的端口版本并显式传 LocalFs：不带后缀的同名
+// 一律用带 `_with_fs` / `_from_source` 的端口版本并显式传端口：不带后缀的同名
 // 函数只对测试可见，生产代码里「忘记传端口」会是编译错误而不是静默写到本机。
 use crate::mcp_install::{
-    atomic_write_file, backup_path, install_skill_dir_from_source, remove_skill_dir_with_fs,
-    skill_status_for_target, McpEntry, MergeResult, SkillInstallOutcome,
+    install_skill_dir_from_source, remove_skill_dir_with_fs, skill_status_for_target, McpEntry,
+    MergeResult, SkillInstallOutcome, CONFIG_WRITE_LABELS,
 };
+#[cfg(test)]
 use std::fs;
-use std::io;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -124,13 +126,14 @@ pub(super) fn entry(ctx: &ConnectorRuntimeContext) -> McpEntry {
 pub(super) fn extract_json_mcp_runtime(
     root: &serde_json::Value,
 ) -> (Option<String>, Option<String>) {
-    let Some(server) = root.get("mcpServers").and_then(|servers| servers.get("superdev")) else {
+    let Some(server) = root
+        .get("mcpServers")
+        .and_then(|servers| servers.get("superdev"))
+    else {
         return (None, None);
     };
     let command = match server.get("command") {
-        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => {
-            Some(value.clone())
-        }
+        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => Some(value.clone()),
         Some(serde_json::Value::Array(items)) => items
             .first()
             .and_then(|item| item.as_str())
@@ -190,15 +193,23 @@ pub(super) fn manual_hook_result(target_path: Option<String>) -> IntegrationOper
 /// skill_status 读取目标 Skill 目录相对 bundled 源的状态。
 ///
 /// 参数：
+///   - fs_port: **目标机**文件操作端口（本机装传 LocalFs，远端装传 RemoteAgentFs）
 ///   - ctx: 运行上下文（含 skill 源）
 ///   - skill_path: 目标 Skill 目录
 ///
 /// 返回：
 ///   - Skill 集成状态；路径仅出现在返回值中
-pub(super) fn skill_status(ctx: &ConnectorRuntimeContext, skill_path: &Path) -> IntegrationState {
-    // 本机连接器：文件操作统一经 LocalFs 端口（远端连接器由 Task 9 传入 RemoteAgentFs）。
+///
+/// 注意：
+///   - skill **源**恒在桌面端本机（随桌面端打包），只有目标目录在 fs_port 那一侧；
+///     `skill_status_for_target` 内部已经区分了这两者，本函数不需要额外处理
+pub(super) fn skill_status(
+    fs_port: &dyn ConnectorFs,
+    ctx: &ConnectorRuntimeContext,
+    skill_path: &Path,
+) -> IntegrationState {
     let (installed, matches, error) = skill_status_for_target(
-        &LocalFs,
+        fs_port,
         ctx.skill_source(),
         ctx.skill_source_error().map(str::to_string),
         skill_path,
@@ -230,18 +241,20 @@ pub(super) fn skill_status(ctx: &ConnectorRuntimeContext, skill_path: &Path) -> 
 /// install_skill 将 bundled SuperDev Skill 安装到目标目录。
 ///
 /// 参数：
+///   - fs_port: **目标机**文件操作端口
 ///   - ctx: 运行上下文
 ///   - skill_path: 目标 Skill 目录
 ///
 /// 返回：
 ///   - 映射后的集成操作结果；源不可用时返回 Failed
 pub(super) fn install_skill(
+    fs_port: &dyn ConnectorFs,
     ctx: &ConnectorRuntimeContext,
     skill_path: &Path,
 ) -> IntegrationOperationResult {
     let target = skill_path.to_string_lossy().into_owned();
     match ctx.skill_source() {
-        Some(source) => match install_skill_dir_from_source(&LocalFs, source, skill_path) {
+        Some(source) => match install_skill_dir_from_source(fs_port, source, skill_path) {
             Ok(outcome) => skill_outcome_to_result(outcome),
             Err(error) => integration_result(
                 IntegrationCapability::Skill,
@@ -264,13 +277,17 @@ pub(super) fn install_skill(
 /// uninstall_skill 删除目标 Skill 目录（幂等）。
 ///
 /// 参数：
+///   - fs_port: **目标机**文件操作端口
 ///   - skill_path: 目标 Skill 目录
 ///
 /// 返回：
 ///   - 已删除时为 Installed（表示卸载变更），不存在时为 AlreadyPresent 的语义用 Skipped
-pub(super) fn uninstall_skill(skill_path: &Path) -> IntegrationOperationResult {
+pub(super) fn uninstall_skill(
+    fs_port: &dyn ConnectorFs,
+    skill_path: &Path,
+) -> IntegrationOperationResult {
     let target = skill_path.to_string_lossy().into_owned();
-    match remove_skill_dir_with_fs(&LocalFs, skill_path) {
+    match remove_skill_dir_with_fs(fs_port, skill_path) {
         Ok(true) => integration_result(
             IntegrationCapability::Skill,
             IntegrationResult::Installed,
@@ -312,9 +329,26 @@ fn skill_outcome_to_result(outcome: SkillInstallOutcome) -> IntegrationOperation
     )
 }
 
-/// mutate_config 以固定安全顺序对配置文件执行格式相关变换。
+/// mutate_config 是 `mutate_config_with_fs(&LocalFs, ..)` 的旧签名封装。
+///
+/// **仅测试可见**：生产代码一律显式传端口，避免远端安装误调本地绑定版本而静默
+/// 改到桌面机自己的磁盘；保留它只是为了让既有测试零改动。
+#[cfg(test)]
+pub(super) fn mutate_config<F>(
+    connector_id: &str,
+    path: &Path,
+    transform: F,
+) -> Result<FileMutationOutcome, ConnectorError>
+where
+    F: FnOnce(Option<&str>) -> Result<MergeResult, ConnectorError>,
+{
+    mutate_config_with_fs(&LocalFs, connector_id, path, transform)
+}
+
+/// mutate_config_with_fs 以固定安全顺序对配置文件执行格式相关变换。
 ///
 /// 参数：
+///   - fs_port: **目标机**文件操作端口（本机装传 LocalFs，远端装传 RemoteAgentFs）
 ///   - connector_id: 连接器 ID（仅用于结构化日志）
 ///   - path: 配置目标路径
 ///   - transform: 读取到的 UTF-8 文本（不存在时为空）到 MergeResult 的纯函数
@@ -327,8 +361,9 @@ fn skill_outcome_to_result(outcome: SkillInstallOutcome) -> IntegrationOperation
 ///   2. 读取现有 UTF-8 或 NotFound 视为空
 ///   3. 先执行 transform，再考虑备份
 ///   4. changed=false 时直接返回，不写盘
-///   5. 创建父目录 → 备份 → atomic_write_file
-pub(super) fn mutate_config<F>(
+///   5. 创建父目录 → 备份 → 原子写
+pub(super) fn mutate_config_with_fs<F>(
+    fs_port: &dyn ConnectorFs,
     connector_id: &str,
     path: &Path,
     transform: F,
@@ -343,7 +378,7 @@ where
         "connector config mutation started"
     );
 
-    let result = mutate_config_inner(path, transform);
+    let result = mutate_config_inner(fs_port, path, transform);
     match &result {
         Ok(outcome) => tracing::info!(
             connector_id,
@@ -363,21 +398,26 @@ where
     result
 }
 
-fn mutate_config_inner<F>(path: &Path, transform: F) -> Result<FileMutationOutcome, ConnectorError>
+fn mutate_config_inner<F>(
+    fs_port: &dyn ConnectorFs,
+    path: &Path,
+    transform: F,
+) -> Result<FileMutationOutcome, ConnectorError>
 where
     F: FnOnce(Option<&str>) -> Result<MergeResult, ConnectorError>,
 {
     // 1. 拒绝符号链接与非普通文件；不存在的目标允许创建。
-    match fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() || !meta.is_file() {
-                return Err(ConnectorError::new(
-                    "unsafe_config_target",
-                    "配置目标不是可安全写入的普通文件",
-                ));
-            }
+    //    这里的 check 只负责**把失败提前**并给出与本机一致的错误码——真正的
+    //    拒绝由第 7 步 `WritePolicy::CONFIG_FILE` 在写入端执行，因为 check 与
+    //    write 之间隔着 TOCTOU 窗口（详见 WritePolicy::require_regular_file）。
+    match fs_port.check_write_target(path) {
+        Ok(WriteTarget::Absent) | Ok(WriteTarget::RegularFile) => {}
+        Ok(WriteTarget::Unsafe) => {
+            return Err(ConnectorError::new(
+                "unsafe_config_target",
+                "配置目标不是可安全写入的普通文件",
+            ));
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
             return Err(ConnectorError::new(
                 "config_stat_failed",
@@ -387,9 +427,8 @@ where
     }
 
     // 2. 读取 UTF-8 或将 NotFound 视为空输入。
-    let existing = match fs::read_to_string(path) {
-        Ok(content) => Some(content),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+    let existing = match fs_port.read_optional(path) {
+        Ok(content) => content,
         Err(error) => {
             return Err(ConnectorError::new(
                 "config_read_failed",
@@ -411,25 +450,33 @@ where
 
     // 5. 创建父目录。
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
+        fs_port.mkdir_all(parent).map_err(|error| {
             ConnectorError::new("config_parent_failed", format!("创建配置目录失败: {error}"))
         })?;
     }
 
-    // 6. 仅在原文件存在时备份。
-    let backup = if path.exists() {
-        let backup = backup_path(path);
-        fs::copy(path, &backup).map_err(|error| {
-            ConnectorError::new("config_backup_failed", format!("备份配置文件失败: {error}"))
+    // 6+7. 备份（仅在原文件存在时）+ 原子写入，由端口一次完成。
+    //
+    // 端口把这两步合成了一次调用，只回一个错误串，因此「是备份失败还是写入
+    // 失败」只能靠 labels 给的前缀分辨——这与 remote_fs.rs `wrap_write_failure`
+    // 用的是同一手法，且两侧的判据串都是本仓库自己的常量。分辨结果只影响
+    // ConnectorError 的 code（两个 code 都是既有的、调用方在用的），文案本身
+    // 无论走哪个分支都与端口化之前逐字节相同。
+    let backup = fs_port
+        .write_atomic_with_policy(
+            path,
+            &merged.content,
+            true,
+            CONFIG_WRITE_LABELS,
+            WritePolicy::CONFIG_FILE,
+        )
+        .map_err(|error| {
+            if error.starts_with(CONFIG_WRITE_LABELS.backup_failure) {
+                ConnectorError::new("config_backup_failed", error)
+            } else {
+                ConnectorError::new("config_write_failed", error)
+            }
         })?;
-        Some(backup.to_string_lossy().into_owned())
-    } else {
-        None
-    };
-
-    // 7. 原子写入。
-    atomic_write_file(path, merged.content.as_bytes(), "配置文件")
-        .map_err(|error| ConnectorError::new("config_write_failed", error))?;
 
     Ok(FileMutationOutcome {
         changed: true,
@@ -437,10 +484,14 @@ where
     })
 }
 
-/// remove_config 通过变换函数删除配置中的托管条目。
+/// remove_config_with_fs 通过变换函数删除配置中的托管条目。
 ///
-/// 参数与返回语义同 mutate_config；transform 负责生成删除后的文本。
-pub(super) fn remove_config<F>(
+/// 参数与返回语义同 [`mutate_config_with_fs`]；transform 负责生成删除后的文本。
+///
+/// 没有同名旧签名封装：它没有按旧签名调用的既有测试，直接加端口首参即可
+/// （与 Task 6 对 `read_config_status` 的处理同一判据）。
+pub(super) fn remove_config_with_fs<F>(
+    fs_port: &dyn ConnectorFs,
     connector_id: &str,
     path: &Path,
     transform: F,
@@ -454,7 +505,7 @@ where
         operation = "remove_config",
         "connector config removal started"
     );
-    let result = mutate_config_inner(path, transform);
+    let result = mutate_config_inner(fs_port, path, transform);
     match &result {
         Ok(outcome) => tracing::info!(
             connector_id,
@@ -523,6 +574,99 @@ mod tests {
         })
         .expect_err("directory must fail");
         assert_eq!(error.code(), "unsafe_config_target");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// 符号链接目标必须与端口化之前一样被拒（错误码 + 文案都不变）。
+    ///
+    /// 端口化之前这条守卫是 `fs::symlink_metadata` 直判；现在走
+    /// `ConnectorFs::check_write_target`，判据换了位置，行为不能换。
+    #[cfg(unix)]
+    #[test]
+    fn mutate_config_rejects_a_symlink_target_without_writing() {
+        let root = test_dir("symlink-target");
+        let real = root.join("real.json");
+        fs::write(&real, "{}\n").unwrap();
+        let link = root.join("config.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let error = mutate_config("fixture", &link, |_| {
+            Ok(MergeResult {
+                content: "{\"pwned\":true}\n".into(),
+                changed: true,
+            })
+        })
+        .expect_err("symlink must fail");
+
+        assert_eq!(error.code(), "unsafe_config_target");
+        assert_eq!(
+            fs::read_to_string(&real).unwrap(),
+            "{}\n",
+            "被拒绝的写入不得穿过链接改动被指向的文件"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// 备份失败与写入失败必须落到**两个不同**的稳定错误码上。
+    ///
+    /// 端口化之后这两步被 `ConnectorFs::write_atomic` 合成了一次调用、只回一个
+    /// 错误串，`mutate_config_inner` 靠 `CONFIG_WRITE_LABELS.backup_failure` 前缀
+    /// 分辨。这条测试就是那个前缀判据的守卫：有人"顺手统一"了备份文案，备份失败
+    /// 会被静默报成 config_write_failed。
+    #[cfg(unix)]
+    #[test]
+    fn mutate_config_separates_backup_failure_from_write_failure_codes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // 备份失败：备份目标位置放一个非空目录 → fs::copy 必然失败。
+        let root = test_dir("backup-failure");
+        let path = root.join("config.json");
+        fs::write(&path, "{}\n").unwrap();
+        fs::create_dir_all(root.join("config.json.superdev-bak").join("occupied")).unwrap();
+        let error = mutate_config("fixture", &path, |_| {
+            Ok(MergeResult {
+                content: "{\"v\":2}\n".into(),
+                changed: true,
+            })
+        })
+        .expect_err("backup must fail");
+        assert_eq!(error.code(), "config_backup_failed");
+        assert!(
+            error.message().starts_with("备份配置文件失败: "),
+            "备份失败文案必须逐字节复原端口化之前的写法: {}",
+            error.message()
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{}\n",
+            "备份失败必须在写入之前中止，原文件不能被改动"
+        );
+        let _ = fs::remove_dir_all(root);
+
+        // 写入失败：父目录只读 + 目标尚不存在（因此根本不会走备份那一步）。
+        let root = test_dir("write-failure");
+        let locked = root.join("locked");
+        fs::create_dir_all(&locked).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+        // root 用户无视目录权限位，这条分支在那种环境下造不出来；探测一次而不是
+        // 假设，避免在 root 容器里给出一条假绿。
+        let writable_anyway = fs::write(locked.join(".probe"), "x").is_ok();
+        if !writable_anyway {
+            let error = mutate_config("fixture", &locked.join("config.json"), |_| {
+                Ok(MergeResult {
+                    content: "{}\n".into(),
+                    changed: true,
+                })
+            })
+            .expect_err("write into a read-only directory must fail");
+            assert_eq!(error.code(), "config_write_failed");
+            assert!(
+                !error.message().starts_with("备份"),
+                "目标不存在时根本不该走备份分支: {}",
+                error.message()
+            );
+        }
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
         let _ = fs::remove_dir_all(root);
     }
 

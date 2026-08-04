@@ -12,6 +12,7 @@
 
 use super::common;
 use crate::mcp_install::contracts::*;
+use crate::mcp_install::fs_port::{ConnectorFs, LocalFs};
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{
     executable_file_names, mcp_server_json_value, merge_json_config, remove_json_superdev_config,
@@ -19,6 +20,7 @@ use crate::mcp_install::{
 // DEFAULT_AGENT_URL 只剩测试在用：生产路径已全部改走 ctx.mcp_launch()。
 #[cfg(test)]
 use crate::mcp_install::DEFAULT_AGENT_URL;
+#[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -118,21 +120,23 @@ fn mcp_configured(ctx: &ConnectorRuntimeContext, content: &str) -> Result<bool, 
 
 /// install_mcp 通过安全突变写入 mcpServers.superdev。
 fn install_mcp(
+    fs_port: &dyn ConnectorFs,
     ctx: &ConnectorRuntimeContext,
 ) -> Result<common::FileMutationOutcome, ConnectorError> {
     let path = config_path(ctx);
     let entry = common::entry(ctx);
-    common::mutate_config(CONNECTOR_ID, &path, |existing| {
+    common::mutate_config_with_fs(fs_port, CONNECTOR_ID, &path, |existing| {
         merge_json_config(existing, &entry).map_err(map_merge_error)
     })
 }
 
 /// remove_mcp 仅移除 mcpServers.superdev。
 fn remove_mcp(
+    fs_port: &dyn ConnectorFs,
     ctx: &ConnectorRuntimeContext,
 ) -> Result<common::FileMutationOutcome, ConnectorError> {
     let path = config_path(ctx);
-    common::remove_config(CONNECTOR_ID, &path, |existing| {
+    common::remove_config_with_fs(fs_port, CONNECTOR_ID, &path, |existing| {
         remove_json_superdev_config(existing).map_err(map_merge_error)
     })
 }
@@ -165,6 +169,9 @@ impl AgentConnector for KimiCodeConnector {
         let cli = find_cli(ctx);
         let root = data_root(ctx);
         let config = config_path(ctx);
+        // detect 是【本机】操作，刻意保留直连 std::fs：远端场景下 CLI 存在性
+        // 一律来自目标机的 `/api/integrations/detect` 端点，编排层从不调用连接器
+        // 自己的 detect()。
         let hit = cli
             .or_else(|| root.is_dir().then_some(root))
             .or_else(|| config.exists().then_some(config));
@@ -184,6 +191,60 @@ impl AgentConnector for KimiCodeConnector {
     }
 
     fn status(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorStatus, ConnectorError> {
+        self.status_with_fs(ctx, &LocalFs)
+    }
+
+    fn install(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        request: ConnectorInstallRequest,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.install_with_fs(ctx, request, &LocalFs)
+    }
+
+    fn uninstall(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.uninstall_with_fs(ctx, &LocalFs)
+    }
+
+    fn port_ops(&self) -> Option<&dyn PortedConnectorOps> {
+        Some(self)
+    }
+
+    fn manual_instructions(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorManualInstructions, ConnectorError> {
+        let config = config_path(ctx);
+        let skill = skill_path(ctx);
+        Ok(ConnectorManualInstructions {
+            summary: "手动将 SuperDev 接入 Kimi Code".into(),
+            steps: vec![
+                format!("将以下 mcpServers.superdev 写入 {}", config.display()),
+                format!("确认 Skill 目录存在：{}", skill.display()),
+                "重启 Kimi Code 使 MCP 生效".into(),
+                "在 Kimi Code TUI 输入 `/mcp` 确认 superdev 已被发现".into(),
+                "如需检查或调整 MCP 配置，在 TUI 输入 `/mcp-config`".into(),
+                "按需手动配置 Session Hook（本连接器不自动写入 Hook）".into(),
+            ],
+            config_path: Some(common::path_string(&config)),
+            manual_config: Some(pasteable_mcp_config(ctx)),
+            verification_prompt: Some(
+                "重启 Kimi Code 后在 TUI 输入 /mcp，确认 superdev 出现；使用 /mcp-config 检查配置"
+                    .into(),
+            ),
+        })
+    }
+}
+
+impl PortedConnectorOps for KimiCodeConnector {
+    fn status_with_fs(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        fs_port: &dyn ConnectorFs,
+    ) -> Result<ConnectorStatus, ConnectorError> {
         let started = Instant::now();
         tracing::debug!(
             connector_id = CONNECTOR_ID,
@@ -192,8 +253,8 @@ impl AgentConnector for KimiCodeConnector {
         );
         let config = config_path(ctx);
         let skill = skill_path(ctx);
-        let (mcp_status, mcp_message) = match fs::read_to_string(&config) {
-            Ok(content) => match mcp_configured(ctx, &content) {
+        let (mcp_status, mcp_message) = match fs_port.read_optional(&config) {
+            Ok(Some(content)) => match mcp_configured(ctx, &content) {
                 Ok(true) => (
                     IntegrationStateStatus::Configured,
                     Some("SuperDev MCP 已配置".into()),
@@ -232,7 +293,7 @@ impl AgentConnector for KimiCodeConnector {
                     return Err(error);
                 }
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+            Ok(None) => (
                 IntegrationStateStatus::Missing,
                 Some("MCP 配置文件不存在".into()),
             ),
@@ -250,7 +311,7 @@ impl AgentConnector for KimiCodeConnector {
                 ));
             }
         };
-        let skill_state = common::skill_status(ctx, &skill);
+        let skill_state = common::skill_status(fs_port, ctx, &skill);
         // Hook 始终手动：状态侧标记 Missing，操作侧返回 NeedsAction。
         let hook_state = IntegrationState {
             capability: IntegrationCapability::SessionHook,
@@ -259,8 +320,10 @@ impl AgentConnector for KimiCodeConnector {
             message: Some("Session Hook 需手动配置".into()),
         };
         // 仅在可读 JSON 时回填运行时字段；不在成功路径塞全局 message，避免设置页误显示告警。
-        let (mcp_command, agent_url) = fs::read_to_string(&config)
+        let (mcp_command, agent_url) = fs_port
+            .read_optional(&config)
             .ok()
+            .flatten()
             .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
             .map(|value| common::extract_json_mcp_runtime(&value))
             .unwrap_or((None, None));
@@ -290,10 +353,11 @@ impl AgentConnector for KimiCodeConnector {
         Ok(result)
     }
 
-    fn install(
+    fn install_with_fs(
         &self,
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
+        fs_port: &dyn ConnectorFs,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         let capability_count = request.capabilities.len();
@@ -308,7 +372,7 @@ impl AgentConnector for KimiCodeConnector {
         let skill = skill_path(ctx);
         let (mcp_result, mcp_backup, mcp_message) =
             if request.capabilities.contains(&IntegrationCapability::Mcp) {
-                match install_mcp(ctx) {
+                match install_mcp(fs_port, ctx) {
                     Ok(outcome) => (
                         if outcome.changed {
                             IntegrationResult::Installed
@@ -358,7 +422,7 @@ impl AgentConnector for KimiCodeConnector {
                 }
             } else {
                 // 未请求 MCP 时只读状态，避免重试其它能力时改写用户配置。
-                let status = self.status(ctx)?;
+                let status = self.status_with_fs(ctx, fs_port)?;
                 let mcp = status
                     .integrations
                     .iter()
@@ -379,7 +443,7 @@ impl AgentConnector for KimiCodeConnector {
 
         // Skill 安装门控：必须先用 post-write status 证明 MCP 已配置。
         // 否则会在半配置状态下写入 Skill，造成「Skill 在但 MCP 不可用」的假成功。
-        let status_after = self.status(ctx)?;
+        let status_after = self.status_with_fs(ctx, fs_port)?;
         let mcp_ready = status_after.integrations.iter().any(|item| {
             item.capability == IntegrationCapability::Mcp
                 && item.status == IntegrationStateStatus::Configured
@@ -394,7 +458,7 @@ impl AgentConnector for KimiCodeConnector {
                 Some("MCP 未就绪，已跳过 Skill".into()),
             )
         } else if request.capabilities.contains(&IntegrationCapability::Skill) {
-            let result = common::install_skill(ctx, &skill);
+            let result = common::install_skill(fs_port, ctx, &skill);
             tracing::info!(
                 connector_id = CONNECTOR_ID,
                 capability = "skill",
@@ -403,7 +467,7 @@ impl AgentConnector for KimiCodeConnector {
             );
             result
         } else {
-            let skill_state = common::skill_status(ctx, &skill);
+            let skill_state = common::skill_status(fs_port, ctx, &skill);
             common::integration_result(
                 IntegrationCapability::Skill,
                 match skill_state.status {
@@ -449,9 +513,10 @@ impl AgentConnector for KimiCodeConnector {
         Ok(outcome)
     }
 
-    fn uninstall(
+    fn uninstall_with_fs(
         &self,
         ctx: &ConnectorRuntimeContext,
+        fs_port: &dyn ConnectorFs,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         tracing::info!(
@@ -462,7 +527,7 @@ impl AgentConnector for KimiCodeConnector {
         let config = config_path(ctx);
         let skill = skill_path(ctx);
 
-        let mcp_outcome = match remove_mcp(ctx) {
+        let mcp_outcome = match remove_mcp(fs_port, ctx) {
             Ok(outcome) => outcome,
             Err(error) if error.code() == "unsafe_config_target" => {
                 tracing::error!(
@@ -475,7 +540,7 @@ impl AgentConnector for KimiCodeConnector {
             }
             Err(error) if error.code() == "invalid_config" => {
                 // 畸形配置不覆盖、不备份；MCP 卸载标记 Failed。
-                let skill_result = common::uninstall_skill(&skill);
+                let skill_result = common::uninstall_skill(fs_port, &skill);
                 let changed = matches!(skill_result.result, IntegrationResult::Installed);
                 return Ok(ConnectorOperationOutcome {
                     connector_id: CONNECTOR_ID.into(),
@@ -515,7 +580,7 @@ impl AgentConnector for KimiCodeConnector {
             }
         };
 
-        let skill_result = common::uninstall_skill(&skill);
+        let skill_result = common::uninstall_skill(fs_port, &skill);
         let mcp_changed = mcp_outcome.changed;
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
         let changed = mcp_changed || skill_changed;
@@ -560,31 +625,6 @@ impl AgentConnector for KimiCodeConnector {
             "kimi code uninstall finished"
         );
         Ok(outcome)
-    }
-
-    fn manual_instructions(
-        &self,
-        ctx: &ConnectorRuntimeContext,
-    ) -> Result<ConnectorManualInstructions, ConnectorError> {
-        let config = config_path(ctx);
-        let skill = skill_path(ctx);
-        Ok(ConnectorManualInstructions {
-            summary: "手动将 SuperDev 接入 Kimi Code".into(),
-            steps: vec![
-                format!("将以下 mcpServers.superdev 写入 {}", config.display()),
-                format!("确认 Skill 目录存在：{}", skill.display()),
-                "重启 Kimi Code 使 MCP 生效".into(),
-                "在 Kimi Code TUI 输入 `/mcp` 确认 superdev 已被发现".into(),
-                "如需检查或调整 MCP 配置，在 TUI 输入 `/mcp-config`".into(),
-                "按需手动配置 Session Hook（本连接器不自动写入 Hook）".into(),
-            ],
-            config_path: Some(common::path_string(&config)),
-            manual_config: Some(pasteable_mcp_config(ctx)),
-            verification_prompt: Some(
-                "重启 Kimi Code 后在 TUI 输入 /mcp，确认 superdev 出现；使用 /mcp-config 检查配置"
-                    .into(),
-            ),
-        })
     }
 }
 
@@ -845,5 +885,4 @@ mod tests {
         );
         let _ = fs::remove_dir_all(home);
     }
-
 }

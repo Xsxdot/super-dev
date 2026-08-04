@@ -12,8 +12,10 @@
 
 use super::common;
 use crate::mcp_install::contracts::*;
+use crate::mcp_install::fs_port::{ConnectorFs, LocalFs};
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{executable_file_names, MergeResult};
+#[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -142,7 +144,12 @@ fn mcp_entry_matches(ctx: &ConnectorRuntimeContext, entry: &Mapping) -> bool {
     // 下不比对 args，会把「命令对了但缺 mcp 子命令」的坏配置误判成已配置。
     let args: Vec<String> = entry
         .get_sequence("args")
-        .map(|sequence| sequence.values().filter_map(|item| scalar_string(&item)).collect())
+        .map(|sequence| {
+            sequence
+                .values()
+                .filter_map(|item| scalar_string(&item))
+                .collect()
+        })
         .unwrap_or_default();
     let agent_url = entry
         .get_mapping("env")
@@ -694,13 +701,21 @@ fn remove_hermes_owned(existing: Option<&str>) -> Result<MergeResult, ConnectorE
     })
 }
 
-fn read_doc(path: &Path) -> Result<Option<Document>, ConnectorError> {
-    match fs::read_to_string(path) {
-        Ok(content) if content.trim().is_empty() => Ok(None),
-        Ok(content) => Document::from_str(&content).map(Some).map_err(|error| {
+/// read_doc 读取并解析【目标机】上的 Hermes YAML 配置。
+///
+/// 参数：
+///   - fs_port: 目标机文件操作端口
+///   - path: 配置文件路径
+///
+/// 返回：
+///   - 文件不存在或内容全为空白时 Ok(None)；解析失败时 invalid_config
+fn read_doc(fs_port: &dyn ConnectorFs, path: &Path) -> Result<Option<Document>, ConnectorError> {
+    match fs_port.read_optional(path) {
+        Ok(Some(content)) if content.trim().is_empty() => Ok(None),
+        Ok(Some(content)) => Document::from_str(&content).map(Some).map_err(|error| {
             ConnectorError::new("invalid_config", format!("Hermes YAML 无法解析: {error}"))
         }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Ok(None) => Ok(None),
         Err(error) => Err(ConnectorError::new(
             "config_read_failed",
             format!("读取 Hermes 配置失败: {error}"),
@@ -749,11 +764,14 @@ fn mcp_status_from_doc(
     }
 }
 
-fn hook_trust_status(ctx: &ConnectorRuntimeContext) -> (IntegrationStateStatus, Option<String>) {
+fn hook_trust_status(
+    fs_port: &dyn ConnectorFs,
+    ctx: &ConnectorRuntimeContext,
+) -> (IntegrationStateStatus, Option<String>) {
     let path = allowlist_path(ctx);
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    let content = match fs_port.read_optional(&path) {
+        Ok(Some(content)) => content,
+        Ok(None) => {
             return (
                 IntegrationStateStatus::NeedsAction,
                 Some("Session Hook 已写入，请在 Hermes 中信任后重启".into()),
@@ -800,6 +818,7 @@ fn hook_trust_status(ctx: &ConnectorRuntimeContext) -> (IntegrationStateStatus, 
 }
 
 fn hook_status_from_doc(
+    fs_port: &dyn ConnectorFs,
     ctx: &ConnectorRuntimeContext,
     doc: Option<&Document>,
 ) -> (IntegrationStateStatus, Option<String>) {
@@ -837,7 +856,7 @@ fn hook_status_from_doc(
         }
     }
     if found {
-        hook_trust_status(ctx)
+        hook_trust_status(fs_port, ctx)
     } else {
         (
             IntegrationStateStatus::Missing,
@@ -865,6 +884,9 @@ impl AgentConnector for HermesConnector {
         let cli = find_cli(ctx);
         let root = data_root(ctx);
         let config = config_path(ctx);
+        // detect 是【本机】操作，刻意保留直连 std::fs：远端场景下 CLI 存在性
+        // 一律来自目标机的 `/api/integrations/detect` 端点，编排层从不调用连接器
+        // 自己的 detect()。
         let hit = cli
             .or_else(|| root.is_dir().then_some(root))
             .or_else(|| config.exists().then_some(config));
@@ -884,6 +906,61 @@ impl AgentConnector for HermesConnector {
     }
 
     fn status(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorStatus, ConnectorError> {
+        self.status_with_fs(ctx, &LocalFs)
+    }
+
+    fn install(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        request: ConnectorInstallRequest,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.install_with_fs(ctx, request, &LocalFs)
+    }
+
+    fn uninstall(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.uninstall_with_fs(ctx, &LocalFs)
+    }
+
+    fn port_ops(&self) -> Option<&dyn PortedConnectorOps> {
+        Some(self)
+    }
+
+    fn manual_instructions(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorManualInstructions, ConnectorError> {
+        let config = config_path(ctx);
+        let skill = skill_path(ctx);
+        // 恢复指引与自动安装共用同一 YAML 生成路径，避免带空格路径的引用规则漂移。
+        let mcp = merge_hermes_mcp(None, ctx)?.content;
+        let manual = merge_hermes_hook(Some(&mcp), ctx)?.content;
+        Ok(ConnectorManualInstructions {
+            summary: "手动将 SuperDev 写入 Hermes YAML 并信任 Hook".into(),
+            steps: vec![
+                format!("编辑 {}", config.display()),
+                format!("写入 mcp_servers.superdev 与 hooks.{HOOK_EVENT} 标记条目"),
+                format!("确认 Skill 目录：{}", skill.display()),
+                "运行 `hermes hooks list` 检查 Hook，在 Hermes 提示时信任并重启".into(),
+                "若 Hook 未生效，运行 `hermes hooks doctor` 诊断".into(),
+            ],
+            config_path: Some(common::path_string(&config)),
+            manual_config: Some(manual),
+            verification_prompt: Some(
+                "重启并信任后确认 superdev MCP 可用，Session Hook 不再提示信任".into(),
+            ),
+        })
+    }
+}
+
+impl PortedConnectorOps for HermesConnector {
+    fn status_with_fs(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        fs_port: &dyn ConnectorFs,
+    ) -> Result<ConnectorStatus, ConnectorError> {
         let started = Instant::now();
         tracing::debug!(
             connector_id = CONNECTOR_ID,
@@ -892,10 +969,10 @@ impl AgentConnector for HermesConnector {
         );
         let config = config_path(ctx);
         let skill = skill_path(ctx);
-        let doc = read_doc(&config)?;
+        let doc = read_doc(fs_port, &config)?;
         let (mcp_status, mcp_message) = mcp_status_from_doc(ctx, doc.as_ref());
-        let (hook_status, hook_message) = hook_status_from_doc(ctx, doc.as_ref());
-        let skill_state = common::skill_status(ctx, &skill);
+        let (hook_status, hook_message) = hook_status_from_doc(fs_port, ctx, doc.as_ref());
+        let skill_state = common::skill_status(fs_port, ctx, &skill);
         let (mcp_command, agent_url) = if mcp_status == IntegrationStateStatus::Configured
             || mcp_status == IntegrationStateStatus::NeedsAction
         {
@@ -936,10 +1013,11 @@ impl AgentConnector for HermesConnector {
         Ok(result)
     }
 
-    fn install(
+    fn install_with_fs(
         &self,
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
+        fs_port: &dyn ConnectorFs,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         let capability_count = request.capabilities.len();
@@ -959,7 +1037,7 @@ impl AgentConnector for HermesConnector {
             .contains(&IntegrationCapability::SessionHook);
 
         let (mcp_result, mcp_backup, mcp_message) = if want_mcp {
-            match common::mutate_config(CONNECTOR_ID, &config, |existing| {
+            match common::mutate_config_with_fs(fs_port, CONNECTOR_ID, &config, |existing| {
                 merge_hermes_mcp(existing, ctx)
             }) {
                 Ok(outcome) => {
@@ -1021,7 +1099,7 @@ impl AgentConnector for HermesConnector {
                 }
             }
         } else {
-            let status = self.status(ctx)?;
+            let status = self.status_with_fs(ctx, fs_port)?;
             let mcp = status
                 .integrations
                 .iter()
@@ -1037,7 +1115,7 @@ impl AgentConnector for HermesConnector {
             )
         };
 
-        let status_after = self.status(ctx)?;
+        let status_after = self.status_with_fs(ctx, fs_port)?;
         let mcp_ready = status_after.integrations.iter().any(|item| {
             item.capability == IntegrationCapability::Mcp
                 && item.status == IntegrationStateStatus::Configured
@@ -1052,9 +1130,9 @@ impl AgentConnector for HermesConnector {
                 Some("MCP 未就绪，已跳过 Skill".into()),
             )
         } else if want_skill {
-            common::install_skill(ctx, &skill)
+            common::install_skill(fs_port, ctx, &skill)
         } else {
-            let skill_state = common::skill_status(ctx, &skill);
+            let skill_state = common::skill_status(fs_port, ctx, &skill);
             common::integration_result(
                 IntegrationCapability::Skill,
                 match skill_state.status {
@@ -1089,11 +1167,12 @@ impl AgentConnector for HermesConnector {
                 Some("Skill 未就绪，已跳过 Hook".into()),
             )
         } else if want_hook {
-            match common::mutate_config(CONNECTOR_ID, &config, |existing| {
+            match common::mutate_config_with_fs(fs_port, CONNECTOR_ID, &config, |existing| {
                 merge_hermes_hook(existing, ctx)
             }) {
                 Ok(mutation) => {
-                    let (status, message) = hook_status_from_doc(ctx, read_doc(&config)?.as_ref());
+                    let (status, message) =
+                        hook_status_from_doc(fs_port, ctx, read_doc(fs_port, &config)?.as_ref());
                     let result = match status {
                         IntegrationStateStatus::Configured if mutation.changed => {
                             IntegrationResult::Installed
@@ -1121,7 +1200,8 @@ impl AgentConnector for HermesConnector {
                 ),
             }
         } else {
-            let (status, message) = hook_status_from_doc(ctx, read_doc(&config)?.as_ref());
+            let (status, message) =
+                hook_status_from_doc(fs_port, ctx, read_doc(fs_port, &config)?.as_ref());
             common::integration_result(
                 IntegrationCapability::SessionHook,
                 match status {
@@ -1166,9 +1246,10 @@ impl AgentConnector for HermesConnector {
         Ok(outcome)
     }
 
-    fn uninstall(
+    fn uninstall_with_fs(
         &self,
         ctx: &ConnectorRuntimeContext,
+        fs_port: &dyn ConnectorFs,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         tracing::info!(
@@ -1178,7 +1259,12 @@ impl AgentConnector for HermesConnector {
         );
         let config = config_path(ctx);
         let skill = skill_path(ctx);
-        let mcp_outcome = match common::remove_config(CONNECTOR_ID, &config, remove_hermes_owned) {
+        let mcp_outcome = match common::remove_config_with_fs(
+            fs_port,
+            CONNECTOR_ID,
+            &config,
+            remove_hermes_owned,
+        ) {
             Ok(outcome) => outcome,
             Err(error) if error.code() == "invalid_config" => {
                 return Ok(ConnectorOperationOutcome {
@@ -1193,7 +1279,7 @@ impl AgentConnector for HermesConnector {
                             None,
                             Some(error.message().into()),
                         ),
-                        common::uninstall_skill(&skill),
+                        common::uninstall_skill(fs_port, &skill),
                         common::integration_result(
                             IntegrationCapability::SessionHook,
                             IntegrationResult::Failed,
@@ -1218,7 +1304,7 @@ impl AgentConnector for HermesConnector {
                 return Err(error);
             }
         };
-        let skill_result = common::uninstall_skill(&skill);
+        let skill_result = common::uninstall_skill(fs_port, &skill);
         let changed =
             mcp_outcome.changed || matches!(skill_result.result, IntegrationResult::Installed);
         let outcome = ConnectorOperationOutcome {
@@ -1266,32 +1352,6 @@ impl AgentConnector for HermesConnector {
             "hermes uninstall finished"
         );
         Ok(outcome)
-    }
-
-    fn manual_instructions(
-        &self,
-        ctx: &ConnectorRuntimeContext,
-    ) -> Result<ConnectorManualInstructions, ConnectorError> {
-        let config = config_path(ctx);
-        let skill = skill_path(ctx);
-        // 恢复指引与自动安装共用同一 YAML 生成路径，避免带空格路径的引用规则漂移。
-        let mcp = merge_hermes_mcp(None, ctx)?.content;
-        let manual = merge_hermes_hook(Some(&mcp), ctx)?.content;
-        Ok(ConnectorManualInstructions {
-            summary: "手动将 SuperDev 写入 Hermes YAML 并信任 Hook".into(),
-            steps: vec![
-                format!("编辑 {}", config.display()),
-                format!("写入 mcp_servers.superdev 与 hooks.{HOOK_EVENT} 标记条目"),
-                format!("确认 Skill 目录：{}", skill.display()),
-                "运行 `hermes hooks list` 检查 Hook，在 Hermes 提示时信任并重启".into(),
-                "若 Hook 未生效，运行 `hermes hooks doctor` 诊断".into(),
-            ],
-            config_path: Some(common::path_string(&config)),
-            manual_config: Some(manual),
-            verification_prompt: Some(
-                "重启并信任后确认 superdev MCP 可用，Session Hook 不再提示信任".into(),
-            ),
-        })
     }
 }
 
@@ -1776,5 +1836,4 @@ hooks:
         );
         let _ = fs::remove_dir_all(home);
     }
-
 }

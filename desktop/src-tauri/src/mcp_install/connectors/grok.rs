@@ -19,6 +19,10 @@
 use super::common;
 use super::process::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
 use crate::mcp_install::contracts::*;
+// openclaw / grok 的读写没有全程经端口（它们靠目标机上运行自身 CLI 写配置），
+// 因此恒绑定本机实现：显式写出 LocalFs 而不是让 common 里藏一个默认值，
+// 「这家连接器只能装在本机」这件事就留在调用点上看得见。
+use crate::mcp_install::fs_port::LocalFs;
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{executable_file_names, MergeResult};
 // DEFAULT_AGENT_URL 只剩测试在用：生产路径已全部改走 ctx.mcp_launch()。
@@ -233,7 +237,7 @@ fn install_skill_mapped(
             ),
         );
     }
-    let result = common::install_skill(ctx, skill);
+    let result = common::install_skill(&LocalFs, ctx, skill);
     if matches!(result.result, IntegrationResult::Failed) {
         tracing::error!(
             connector_id = CONNECTOR_ID,
@@ -633,7 +637,7 @@ fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
             }
         }
     }
-    match common::mutate_config(CONNECTOR_ID, &path, |_old| {
+    match common::mutate_config_with_fs(&LocalFs, CONNECTOR_ID, &path, |_old| {
         Ok(MergeResult {
             content: hook_file_body(&skill),
             changed: true,
@@ -957,7 +961,7 @@ fn grok_install_body(
         } else if request.capabilities.contains(&IntegrationCapability::Skill) {
             install_skill_mapped(ctx, &skill)
         } else {
-            let skill_state = common::skill_status(ctx, &skill);
+            let skill_state = common::skill_status(&LocalFs, ctx, &skill);
             common::integration_result(
                 IntegrationCapability::Skill,
                 match skill_state.status {
@@ -1037,7 +1041,7 @@ fn grok_uninstall_body(
         let hook_changed = matches!(hook_result.result, IntegrationResult::Installed);
         let hook_needs_action = matches!(hook_result.result, IntegrationResult::NeedsAction);
         let hook_failed = matches!(hook_result.result, IntegrationResult::Failed);
-        let skill_result = common::uninstall_skill(&skill);
+        let skill_result = common::uninstall_skill(&LocalFs, &skill);
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
         let skill_failed = matches!(skill_result.result, IntegrationResult::Failed);
         if skill_failed {
@@ -1334,7 +1338,7 @@ impl AgentConnector for GrokConnector {
             (None, None)
         };
 
-        let skill_state = common::skill_status(ctx, &skill_path(ctx));
+        let skill_state = common::skill_status(&LocalFs, ctx, &skill_path(ctx));
         let hook_state = hook_status(ctx);
         let result = ConnectorStatus {
             integrations: vec![
