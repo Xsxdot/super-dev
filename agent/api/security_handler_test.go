@@ -218,3 +218,42 @@ func TestWithSecurityDoesNotInjectPrincipalOnBypassPath(t *testing.T) {
 	_, ok := principal()
 	require.False(t, ok, "bypass 路径不应注入 Principal")
 }
+
+// TestSecurityTokensListAndRevoke 覆盖多凭据模型的按条吊销闭环：列出（绝不含
+// hash）→ 吊销一条 → 该凭据立即失效、其余凭据不受影响 → 未命中 404。
+func TestSecurityTokensListAndRevoke(t *testing.T) {
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), BootstrapToken: "bootstrap", RequireAuth: true})
+	require.NoError(t, err)
+	defer app.Close()
+
+	recA, err := app.securityStore.AppendTokenRecord("CP-A", "cp-a-token")
+	require.NoError(t, err)
+	recB, err := app.securityStore.AppendTokenRecord("CP-B", "cp-b-token")
+	require.NoError(t, err)
+
+	list := httptestDo(t, app, http.MethodGet, "/api/security/tokens", nil)
+	require.Equal(t, http.StatusOK, list.Code)
+	assert.Contains(t, list.Body.String(), recA.ID)
+	assert.Contains(t, list.Body.String(), `"name":"CP-B"`)
+	// 红线：凭据散列绝不出现在列表响应里。
+	assert.NotContains(t, list.Body.String(), `"hash"`)
+	assert.NotContains(t, list.Body.String(), recA.Hash)
+
+	// 吊销必须是管理员操作：无凭据调用 404/401 之前先被 withSecurity 拦下。
+	anon := httptestDoWithHeader(t, app, http.MethodDelete, "/api/security/tokens/"+recA.ID, nil, map[string]string{"Authorization": ""})
+	require.Equal(t, http.StatusUnauthorized, anon.Code)
+
+	revoke := httptestDo(t, app, http.MethodDelete, "/api/security/tokens/"+recA.ID, nil)
+	require.Equal(t, http.StatusOK, revoke.Code)
+
+	// 被吊销凭据立即失效；另一条不受影响（互不吊销彼此的隔离性）。
+	_, ok := app.securityStore.VerifyTokenPrincipal("cp-a-token")
+	assert.False(t, ok, "revoked token must no longer authenticate")
+	rec, ok := app.securityStore.VerifyTokenPrincipal("cp-b-token")
+	require.True(t, ok, "unrelated token must survive the revocation")
+	assert.Equal(t, recB.ID, rec.ID)
+
+	missing := httptestDo(t, app, http.MethodDelete, "/api/security/tokens/no-such-id", nil)
+	require.Equal(t, http.StatusNotFound, missing.Code)
+	assert.Contains(t, missing.Body.String(), `"code":"token_record_not_found"`)
+}

@@ -933,6 +933,11 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exec/health", a.execHealth)
 	mux.HandleFunc("GET /api/security/health", a.securityHealth)
 	mux.HandleFunc("POST /api/security/provision", a.provisionSecurity)
+	// 凭据管理面（多凭据模型的按条吊销闭环）：与 health/provision 不同，这两条
+	// **不在** bypass 白名单里（securityBypassPath 是精确匹配表），受 withSecurity
+	// 保护——列出/吊销凭据是管理员操作，绝不能匿名可达。
+	mux.HandleFunc("GET /api/security/tokens", a.listSecurityTokens)
+	mux.HandleFunc("DELETE /api/security/tokens/{id}", a.revokeSecurityToken)
 	// 纳管既有 agent（Task 7）：接入方此刻没有任何凭据，Create/Get 与
 	// provision 同理必须进 bypass 白名单；Exchange 校验一次性 adoption token
 	// 本身即准入凭证，也进白名单，见 security_handler.go securityBypassPath。

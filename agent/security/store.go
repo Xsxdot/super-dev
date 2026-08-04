@@ -281,6 +281,23 @@ func (s *Store) AppendTokenRecord(name, token string) (TokenRecord, error) {
 	return record, nil
 }
 
+// ListTokenRecords 返回全部长期凭据记录的展示副本（Hash 已清空）。
+//
+// 返回：
+//   - 记录切片副本，按落盘顺序；每条 Hash 字段被显式清空——本方法服务于
+//     「列出以便按条吊销」的管理面，凭据散列没有任何展示价值，多暴露一分
+//     只多一分泄漏面
+func (s *Store) ListTokenRecords() []TokenRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]TokenRecord, 0, len(s.state.TokenRecords))
+	for _, rec := range s.state.TokenRecords {
+		rec.Hash = ""
+		out = append(out, rec)
+	}
+	return out
+}
+
 // RevokeToken 按 ID 删除一条长期凭据记录，使该控制面的 token 立即失效。
 //
 // 参数：

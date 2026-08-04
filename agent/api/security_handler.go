@@ -14,9 +14,11 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/xsxdot/super-dev/agent/security"
 )
@@ -75,11 +77,69 @@ func (a *App) provisionSecurity(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, security.ErrTokenRequired):
 			jsonError(w, http.StatusBadRequest, "token is required")
 		default:
-			jsonError(w, http.StatusInternalServerError, err.Error())
+			// provision 在 bypass 白名单里（调用方无凭据）：内部错误详情
+			// （多半含本机路径的 I/O 错误）只落服务器日志，不回显给匿名调用方
+			// ——与两个 adoption 匿名端点同一条纪律。
+			log.Printf("[SuperDev] security: provision 内部错误：%v", err)
+			jsonError(w, http.StatusInternalServerError, "provision failed")
 		}
 		return
 	}
 	jsonOK(w, resp)
+}
+
+// securityTokenRecordView 是凭据列表端点的响应条目——刻意不含 Hash 字段：
+// 凭据散列对「列出以便吊销」的管理面没有任何展示价值。
+type securityTokenRecordView struct {
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	IssuedAt time.Time `json:"issued_at"`
+}
+
+// listSecurityTokens 处理 GET /api/security/tokens。
+//
+// 列出全部远程控制面长期凭据记录（id/name/issued_at），供操作员核对与按条吊销。
+// 受 withSecurity 保护（不在 bypass 白名单），任何已认证控制面均可查看——
+// 与「任何控制面都可裁决审批」同一信任模型：能拿到凭据的都是管理员。
+func (a *App) listSecurityTokens(w http.ResponseWriter, r *http.Request) {
+	if a.securityStore == nil {
+		jsonError(w, http.StatusServiceUnavailable, "security store unavailable")
+		return
+	}
+	records := a.securityStore.ListTokenRecords()
+	views := make([]securityTokenRecordView, 0, len(records))
+	for _, rec := range records {
+		views = append(views, securityTokenRecordView{ID: rec.ID, Name: rec.Name, IssuedAt: rec.IssuedAt})
+	}
+	jsonOK(w, map[string]any{"tokens": views})
+}
+
+// revokeSecurityToken 处理 DELETE /api/security/tokens/{id}。
+//
+// 按条吊销一个控制面的长期凭据（多凭据模型的最小止损闭环：某控制面凭据泄露/
+// 机器丢失时，不必再用 force_reinstall 把所有控制面的凭据一起打掉）。
+//
+// 注意：
+//   - 允许吊销请求方自己正在用的那条记录（自断后路是操作员的合法决定），
+//     日志会记录吊销方 Principal 供审计追溯
+func (a *App) revokeSecurityToken(w http.ResponseWriter, r *http.Request) {
+	if a.securityStore == nil {
+		jsonError(w, http.StatusServiceUnavailable, "security store unavailable")
+		return
+	}
+	id := r.PathValue("id")
+	if err := a.securityStore.RevokeToken(id); err != nil {
+		if errors.Is(err, security.ErrTokenRecordNotFound) {
+			jsonCodeError(w, http.StatusNotFound, "token_record_not_found", "token record not found", nil)
+			return
+		}
+		log.Printf("[SuperDev] security: 吊销凭据失败 id=%s：%v", id, err)
+		jsonError(w, http.StatusInternalServerError, "revoke failed")
+		return
+	}
+	name, principalType, principalID := principalFromRequest(r)
+	log.Printf("[SuperDev] security: 凭据记录已被吊销 id=%s by=%s(%s/%s)", id, name, principalType, principalID)
+	jsonOK(w, map[string]string{"status": "revoked"})
 }
 
 // withSecurity 是全 API 的鉴权中间件：除 bypass 白名单外一律要求凭据（鉴权恒定开启）。
