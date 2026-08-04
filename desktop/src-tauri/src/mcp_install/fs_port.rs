@@ -12,11 +12,28 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// BATCH_WRITE_LABEL 是批量写入时落到错误文案里的标签。
+/// WriteLabels 是调用方交给端口、用于拼装写入失败文案的词汇。
 ///
-/// 批量写的调用方只有 skill 目录安装一处，失败文案本来就是端口化之后新增的，
-/// 不存在需要复原的旧文案，因此用固定中性词而不再多加一个参数。
-const BATCH_WRITE_LABEL: &str = "文件";
+/// 为什么是两个字段而不是一个：一次 `write_atomic` 内部含「备份 → 写临时文件 →
+/// 权限 → flush → sync → 替换 → 同步父目录」多步，端口只回一个字符串，调用方无从
+/// 判断失败在哪一步，也就无法在外层补出改造前那种用户看得懂的文案。而备份与写入
+/// 这两条路径在改造前用的**就不是同一个名词**（配置文件一族两边都叫「配置文件」，
+/// hook 一族写入叫「hook 配置文件」、备份叫「hook 配置」），单个标签无法同时命中，
+/// 所以拆成两个字段各自复原。
+///
+/// **不要因为觉得它多余而合并或删掉**：那会让写失败退化成不带对象的通用报错，
+/// 且同一产品里不同 connector 的措辞会分叉。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WriteLabels<'a> {
+    /// write_object 是写入失败文案里的**对象名词**，被拼进「写入临时{}失败」
+    /// 「创建{}临时文件失败」等多种模板，因此只能是名词、不能是整句。
+    pub write_object: &'a str,
+    /// backup_failure 是备份失败的**完整文案**（不含 `": {原因}"` 部分）。
+    ///
+    /// 这里放整句而不是名词，是因为改造前各处备份文案的措辞（含「备份」与名词之间
+    /// 有没有空格）并不统一，只有让调用方给整句才能逐字节复原。
+    pub backup_failure: &'a str,
+}
 
 /// FsStat 描述一个路径的存在性与类型。
 ///
@@ -63,25 +80,24 @@ pub trait ConnectorFs {
     /// 返回备份文件路径（未备份时为 None）。备份命名规则由 backup_path 决定，
     /// 两端必须逐字节一致，否则同一台机器上本地装与远端装会留下两套备份名。
     ///
-    /// label 是**这次写的是什么文件**的中性名词（如「配置文件」「hook 配置文件」），
-    /// 由实现拼进自己产出的错误串。它存在的唯一理由是：一次 write_atomic 内部含
-    /// 「备份 → 写临时文件 → 权限 → flush → sync → 替换 → 同步父目录」七步，失败时
-    /// 只回一个字符串，调用方无从判断是哪一步，也就无法在外层补出「备份配置文件失败」
-    /// 这种改造前就有的、用户看得懂的文案。**不要因为觉得它多余而删掉**——删掉会让
-    /// 所有写失败退化成不带对象的通用报错，且同一产品里不同 connector 的措辞会分叉。
+    /// labels 是调用方给的失败文案词汇，用途与「为什么必须有」见 [`WriteLabels`]。
     fn write_atomic(
         &self,
         path: &Path,
         content: &str,
         backup: bool,
-        label: &str,
+        labels: WriteLabels<'_>,
     ) -> Result<Option<String>, String>;
 
     /// mkdir_all 递归创建目录；已存在视为成功。
     fn mkdir_all(&self, path: &Path) -> Result<(), String>;
 
     /// write_batch 把一批文件写进 dir，按需创建各文件的父目录。
-    fn write_batch(&self, dir: &Path, files: &[BatchFile]) -> Result<(), String>;
+    ///
+    /// label 与 [`WriteLabels::write_object`] 同义：这次批量写的是什么文件（如
+    /// 「skill 文件」）。端口不知道自己在搬什么，名词只能由调用方给；失败文案里
+    /// 还会带上出问题的那个相对路径，否则排障时只知道「有个文件写失败了」。
+    fn write_batch(&self, dir: &Path, files: &[BatchFile], label: &str) -> Result<(), String>;
 
     /// rename 把 from 改名为 to。
     fn rename(&self, from: &Path, to: &Path) -> Result<(), String>;
@@ -127,18 +143,19 @@ impl ConnectorFs for LocalFs {
         path: &Path,
         content: &str,
         backup: bool,
-        label: &str,
+        labels: WriteLabels<'_>,
     ) -> Result<Option<String>, String> {
         // 只有目标已存在时才有旧内容可备份；与改造前 install_to_path /
         // install_session_hook 里的 `if path.exists()` 判断保持同一语义。
         let backup_path = if backup && path.exists() {
             let backup = super::backup_path(path);
-            fs::copy(path, &backup).map_err(|error| format!("备份{label}失败: {error}"))?;
+            fs::copy(path, &backup)
+                .map_err(|error| format!("{}: {error}", labels.backup_failure))?;
             Some(backup.to_string_lossy().to_string())
         } else {
             None
         };
-        super::atomic_write_file(path, content.as_bytes(), label)?;
+        super::atomic_write_file(path, content.as_bytes(), labels.write_object)?;
         Ok(backup_path)
     }
 
@@ -146,7 +163,7 @@ impl ConnectorFs for LocalFs {
         fs::create_dir_all(path).map_err(|error| error.to_string())
     }
 
-    fn write_batch(&self, dir: &Path, files: &[BatchFile]) -> Result<(), String> {
+    fn write_batch(&self, dir: &Path, files: &[BatchFile], label: &str) -> Result<(), String> {
         for file in files {
             // write_batch 的契约是「写进 dir 之内」；rel_path 一旦含 `..` 或是
             // 绝对路径就会写到 dir 之外。远端 write-batch 端点对同一件事做了校验，
@@ -158,7 +175,10 @@ impl ConnectorFs for LocalFs {
                     format!("创建文件目录失败 {}: {error}", file.rel_path.display())
                 })?;
             }
-            super::atomic_write_file(&target, &file.content, BATCH_WRITE_LABEL)?;
+            // 改造前 copy_dir_recursive 的失败文案带着源/目标路径对；批量写没有源
+            // 路径可带，但「是哪个文件写失败」必须留住，否则排障只剩一句通用报错。
+            super::atomic_write_file(&target, &file.content, label)
+                .map_err(|error| format!("写入 {} 失败: {error}", file.rel_path.display()))?;
             apply_batch_permissions(&target, file.executable)?;
         }
         Ok(())
@@ -225,12 +245,20 @@ fn apply_batch_permissions(_target: &Path, _executable: bool) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::super::create_unique_test_dir;
-    use super::{BatchFile, ConnectorFs, LocalFs};
+    use super::{BatchFile, ConnectorFs, LocalFs, WriteLabels};
     use std::fs;
     use std::path::PathBuf;
 
     fn temp_dir() -> PathBuf {
         create_unique_test_dir("superdev-fs-port-test")
+    }
+
+    /// config_labels 复刻 mcp_install 侧 MCP 配置文件那一族的文案词汇。
+    fn config_labels() -> WriteLabels<'static> {
+        WriteLabels {
+            write_object: "配置文件",
+            backup_failure: "备份配置文件失败",
+        }
     }
 
     #[test]
@@ -240,7 +268,7 @@ mod tests {
         fs::write(&target, "old").expect("seed target");
 
         let backup = LocalFs
-            .write_atomic(&target, "new", true, "配置文件")
+            .write_atomic(&target, "new", true, config_labels())
             .expect("write atomic");
 
         let backup = backup.expect("existing target must be backed up");
@@ -258,7 +286,7 @@ mod tests {
         let target = dir.join("fresh.json");
 
         let backup = LocalFs
-            .write_atomic(&target, "created", true, "配置文件")
+            .write_atomic(&target, "created", true, config_labels())
             .expect("write atomic");
 
         assert_eq!(backup, None);
@@ -272,12 +300,76 @@ mod tests {
         let target = dir.join("missing-parent").join("config.json");
 
         let error = LocalFs
-            .write_atomic(&target, "{}\n", true, "配置文件")
+            .write_atomic(&target, "{}\n", true, config_labels())
             .expect_err("missing parent must fail");
 
         assert!(
             error.contains("配置文件"),
             "写失败文案必须带上调用方给的对象名词，否则用户只看到通用报错: {error}"
+        );
+    }
+
+    /// 备份失败文案必须与改造前逐字节相同——含 mcp_install 侧两族常量的实际取值。
+    ///
+    /// 改造前这两条是手写的，措辞并不统一（配置一族是「备份配置文件失败」，hook
+    /// 一族是「备份 hook 配置失败」，「备份」后多一个空格）。端口化把备份动作吞进
+    /// write_atomic 之后，这两条只能靠调用方给的 backup_failure 复原；这里直接用
+    /// 生产常量断言，避免将来有人"顺手统一"措辞而悄悄改掉用户可见文案。
+    #[test]
+    fn write_atomic_backup_failure_reuses_the_callers_exact_wording() {
+        for (labels, expected) in [
+            (super::super::CONFIG_WRITE_LABELS, "备份配置文件失败: "),
+            (super::super::HOOK_WRITE_LABELS, "备份 hook 配置失败: "),
+        ] {
+            let dir = temp_dir();
+            let target = dir.join("config.json");
+            fs::write(&target, "old").expect("seed target");
+            // 备份目标位置放一个目录 → fs::copy 必然失败，逼出备份失败分支。
+            fs::create_dir_all(dir.join("config.json.superdev-bak").join("occupied"))
+                .expect("occupy backup path");
+
+            let error = LocalFs
+                .write_atomic(&target, "new", true, labels)
+                .expect_err("backup must fail");
+
+            assert!(
+                error.starts_with(expected),
+                "备份失败文案必须逐字节复原改造前的写法，期望以 {expected:?} 开头: {error}"
+            );
+            assert_eq!(
+                fs::read_to_string(&target).expect("read target"),
+                "old",
+                "备份失败必须在写入之前中止，原文件不能被改动"
+            );
+        }
+    }
+
+    #[test]
+    fn write_batch_failure_names_the_offending_file() {
+        let dir = temp_dir();
+        let root = dir.join("skill");
+        // 目标文件位置放一个非空目录 → 临时文件改名替换必然失败。
+        fs::create_dir_all(root.join("SKILL.md").join("occupied")).expect("occupy target");
+
+        let error = LocalFs
+            .write_batch(
+                &root,
+                &[BatchFile {
+                    rel_path: PathBuf::from("SKILL.md"),
+                    content: b"# SuperDev\n".to_vec(),
+                    executable: false,
+                }],
+                "skill 文件",
+            )
+            .expect_err("replacing a directory must fail");
+
+        assert!(
+            error.contains("SKILL.md"),
+            "批量写失败必须指明是哪个文件，否则排障只剩一句通用报错: {error}"
+        );
+        assert!(
+            error.contains("skill 文件"),
+            "批量写失败必须带上调用方给的对象名词: {error}"
         );
     }
 
@@ -288,7 +380,7 @@ mod tests {
         fs::write(&target, "old").expect("seed target");
 
         let backup = LocalFs
-            .write_atomic(&target, "new", false, "配置文件")
+            .write_atomic(&target, "new", false, config_labels())
             .expect("write atomic");
 
         assert_eq!(backup, None);
@@ -335,6 +427,7 @@ mod tests {
                         executable: true,
                     },
                 ],
+                "skill 文件",
             )
             .expect("write batch");
 
@@ -380,6 +473,7 @@ mod tests {
                     content: b"nope\n".to_vec(),
                     executable: false,
                 }],
+                "skill 文件",
             )
             .expect_err("escaping rel_path must fail");
 

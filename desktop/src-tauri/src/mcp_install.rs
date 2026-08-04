@@ -33,17 +33,29 @@ use tauri::{AppHandle, Manager, State};
 
 const DEFAULT_AGENT_URL: &str = "http://127.0.0.1:57017";
 
-/// CONFIG_WRITE_LABEL 是 MCP 配置文件写入失败时出现在文案里的对象名词。
+/// CONFIG_WRITE_LABELS 是 MCP 配置文件写入失败时的文案词汇。
 ///
-/// 这类名词是调用方的词汇（端口不知道自己在写哪一类业务文件），经
-/// `ConnectorFs::write_atomic` 的 label 参数传下去，让「备份配置文件失败」
-/// 「写入临时配置文件失败」这些改造前就有的文案保持不变。
+/// 这类词汇是调用方的（端口不知道自己在写哪一类业务文件），经
+/// `ConnectorFs::write_atomic` 传下去，让「备份配置文件失败」「写入临时配置文件失败」
+/// 这些改造前就有的文案逐字节保持不变。
 /// 第二波 connector 的 `connectors/common.rs` 直调 atomic_write_file 时用的是
 /// 同一个词，两族措辞必须一致，改这里请一并核对那边。
-const CONFIG_WRITE_LABEL: &str = "配置文件";
+const CONFIG_WRITE_LABELS: fs_port::WriteLabels<'static> = fs_port::WriteLabels {
+    write_object: "配置文件",
+    backup_failure: "备份配置文件失败",
+};
 
-/// HOOK_WRITE_LABEL 是 SessionStart hook 配置写入失败时的对象名词。
-const HOOK_WRITE_LABEL: &str = "hook 配置文件";
+/// HOOK_WRITE_LABELS 是 SessionStart hook 配置写入失败时的文案词汇。
+///
+/// 注意两个字段的名词**故意不一致**（写入用「hook 配置文件」、备份用「hook 配置」，
+/// 且「备份」后带一个空格）：这是改造前两处手写文案的原样，不是笔误，不要"统一"掉。
+const HOOK_WRITE_LABELS: fs_port::WriteLabels<'static> = fs_port::WriteLabels {
+    write_object: "hook 配置文件",
+    backup_failure: "备份 hook 配置失败",
+};
+
+/// SKILL_BATCH_WRITE_LABEL 是 skill 目录批量写入失败时的对象名词。
+const SKILL_BATCH_WRITE_LABEL: &str = "skill 文件";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpEntry {
@@ -1026,7 +1038,7 @@ fn uninstall_from_path_with_fs(
         return Ok((false, None));
     }
     // 走到这里说明文件刚被读到过，write_atomic 必然备份并返回 Some。
-    let backup = fs_port.write_atomic(path, &removed.content, true, CONFIG_WRITE_LABEL)?;
+    let backup = fs_port.write_atomic(path, &removed.content, true, CONFIG_WRITE_LABELS)?;
     Ok((true, backup))
 }
 
@@ -1150,7 +1162,7 @@ fn install_to_path_with_fs(
             .mkdir_all(parent)
             .map_err(|err| format!("创建配置目录失败: {err}"))?;
     }
-    let backup_path = fs_port.write_atomic(path, &merged.content, true, CONFIG_WRITE_LABEL)?;
+    let backup_path = fs_port.write_atomic(path, &merged.content, true, CONFIG_WRITE_LABELS)?;
     Ok(ConfigInstallOutcome {
         installed: true,
         already_present: false,
@@ -1215,7 +1227,7 @@ fn install_skill_dir_with_fs(
         fs_port,
         source_files,
         target,
-        |temp| fs_port.write_batch(temp, source_files),
+        |temp| fs_port.write_batch(temp, source_files, SKILL_BATCH_WRITE_LABEL),
         |from, to| fs_port.rename(from, to),
     )
 }
@@ -1609,7 +1621,7 @@ fn install_session_hook_with_fs(
             .mkdir_all(parent)
             .map_err(|err| format!("创建 hook 配置目录失败: {err}"))?;
     }
-    let backup_path = fs_port.write_atomic(hook_path, &merged.content, true, HOOK_WRITE_LABEL)?;
+    let backup_path = fs_port.write_atomic(hook_path, &merged.content, true, HOOK_WRITE_LABELS)?;
     Ok(SessionHookOutcome {
         installed: true,
         already_present: false,
@@ -1691,7 +1703,7 @@ fn remove_session_hook_with_fs(
     let out = serde_json::to_string_pretty(&root)
         .map_err(|err| format!("序列化配置失败(JSON): {err}"))?
         + "\n";
-    fs_port.write_atomic(hook_path, &out, true, HOOK_WRITE_LABEL)?;
+    fs_port.write_atomic(hook_path, &out, true, HOOK_WRITE_LABELS)?;
     Ok(true)
 }
 
