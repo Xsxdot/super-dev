@@ -30,18 +30,51 @@ var integrationConfigRoots = []string{
 	".openclaw", ".hermes", ".kimi-code", ".grok",
 }
 
+// integrationConfigFiles 是白名单里的**精确文件**条目（同样是 home 相对）。
+//
+// 为什么必须与 integrationConfigRoots 分开而不是往那份清单里加一行：
+// integrationConfigRoots 的匹配是「等于根，或以 根+分隔符 开头」的**目录树**语义。
+// 把 ".claude.json" 按目录根处理，会连带放行 ".claude.json/任意子路径"——而
+// ".claude.json" 完全可以在目标机上被造成一个目录，那样整棵子树就都进了白名单。
+// 本清单只放行**恰好等于**该文件的路径。
+//
+// 为什么需要它：Claude Code 的 MCP 配置是 ~/.claude.json（见桌面端
+// mcp_install.rs 的 AgentKind::ClaudeCode config_path），它是一个**文件**，
+// 既不等于 ".claude"、也不以 ".claude/" 开头——而那条边界检查当初正是为了
+// 「.claudex 不是 .claude」写的，顺带也把它挡在了外面。
+//
+// 与 integrationConfigRoots 同为「数据同步义务，非逻辑双写」：这两份清单必须
+// 与 desktop/src-tauri/src/mcp_install 及其 connectors 的默认路径保持一致。
+// 光靠这条注释已经漏过一次（.claude.json），因此另有
+// TestIntegrationPathAllowedCoversEveryDesktopConnectorPath 用桌面端**实际
+// 产出**的路径清单做跨栈校验，见该测试头注释。
+var integrationConfigFiles = []string{".claude.json"}
+
 // errIntegrationPathDenied 是路径白名单拒绝时返回的 sentinel error。
 var errIntegrationPathDenied = errors.New("path not allowed")
 
-// matchIntegrationRoot 在 integrationConfigRoots 中查找 cleaned（已 Clean 的
-// 绝对路径）命中的白名单根，返回该根的绝对路径。前缀比较含边界检查：cleaned
-// 必须等于 rootAbs，或以 rootAbs+分隔符 为前缀，避免 ".claudex" 误判命中
-// ".claude"。
+// matchIntegrationRoot 在白名单中查找 cleaned（已 Clean 的绝对路径）命中的条目，
+// 返回该条目的绝对路径（后续 EvalSymlinks 收敛的边界锚点就是它）。
+//
+// 两类条目语义不同：
+//   - integrationConfigRoots 是**目录树**：cleaned 必须等于 rootAbs，或以
+//     rootAbs+分隔符 为前缀。边界检查是为了避免 ".claudex" 误判命中 ".claude"
+//   - integrationConfigFiles 是**精确文件**：只有 cleaned 恰好等于它才算命中，
+//     其下任何子路径一律不匹配（理由见该变量头注释）
+//
+// 两类不会重叠（文件条目不是任何目录根的前缀，反之亦然），因此匹配顺序无关；
+// 目录树先查只是因为它是绝大多数请求的形态。
 func matchIntegrationRoot(home, cleaned string) (string, bool) {
 	for _, root := range integrationConfigRoots {
 		rootAbs := filepath.Join(home, root)
 		if cleaned == rootAbs || strings.HasPrefix(cleaned, rootAbs+string(filepath.Separator)) {
 			return rootAbs, true
+		}
+	}
+	for _, file := range integrationConfigFiles {
+		fileAbs := filepath.Join(home, file)
+		if cleaned == fileAbs {
+			return fileAbs, true
 		}
 	}
 	return "", false

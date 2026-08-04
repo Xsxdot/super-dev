@@ -1,0 +1,80 @@
+# desktop-connector-paths.txt 是【桌面端实际会在目标机上碰到的路径】的落盘清单。
+#
+# 生成方：desktop/src-tauri 的
+#   mcp_install::remote_install::tests::desktop_connector_paths_fixture_matches_what_the_connectors_actually_touch
+# 它真的跑一遍六家 remote-supported 连接器的 install + status + uninstall，把
+# ConnectorFs 端口收到的每一个路径记下来，再并上八家（含 openclaw / grok）
+# status()/manual_instructions() 自报的路径。**不是手写清单**——所以它会带上
+# 手写时绝对想不起来的东西（skill 唯一临时目录、hermes 的 hook 信任文件）。
+#
+# 消费方：agent/api 的
+#   TestIntegrationPathAllowedCoversEveryDesktopConnectorPath
+# 断言每一条都能过 integrationPathAllowed。两条测试一上一下，构成
+# integrationConfigRoots / integrationConfigFiles「数据同步义务」的执行机制：
+# connector 改了默认路径 → 上面那条先红（清单过期）→ 更新本文件 → 下面那条
+# 紧接着红（新路径不在白名单里）。光靠注释已经漏过一次（~/.claude.json）。
+#
+# 路径是 home 相对、正斜杠。`.superdev-tmp-PID-NANOS-N` 是归一化后的临时目录名
+# （真实名字带进程号与纳秒时间戳，逐次不同；白名单的裁决与那串数字无关）。
+#
+# 改这个文件请跑上面那条 Rust 测试确认，不要手工编辑。
+.claude
+.claude.json
+.claude/settings.json
+.claude/skills
+.claude/skills/.superdev.superdev-tmp-PID-NANOS-N
+.claude/skills/.superdev.superdev-tmp-PID-NANOS-N/SKILL.md
+.claude/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/run-hook.cmd
+.claude/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/session-start
+.claude/skills/superdev
+.claude/skills/superdev/hooks/session-start
+.codex
+.codex/config.toml
+.codex/hooks.json
+.codex/skills
+.codex/skills/.superdev.superdev-tmp-PID-NANOS-N
+.codex/skills/.superdev.superdev-tmp-PID-NANOS-N/SKILL.md
+.codex/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/run-hook.cmd
+.codex/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/session-start
+.codex/skills/superdev
+.codex/skills/superdev/hooks/session-start
+.config/opencode
+.config/opencode/opencode.json
+.config/opencode/skills
+.config/opencode/skills/.superdev.superdev-tmp-PID-NANOS-N
+.config/opencode/skills/.superdev.superdev-tmp-PID-NANOS-N/SKILL.md
+.config/opencode/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/run-hook.cmd
+.config/opencode/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/session-start
+.config/opencode/skills/superdev
+.cursor
+.cursor/hooks.json
+.cursor/mcp.json
+.cursor/skills
+.cursor/skills/.superdev.superdev-tmp-PID-NANOS-N
+.cursor/skills/.superdev.superdev-tmp-PID-NANOS-N/SKILL.md
+.cursor/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/run-hook.cmd
+.cursor/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/session-start
+.cursor/skills/superdev
+.cursor/skills/superdev/hooks/session-start
+.grok/config.toml
+.grok/hooks/superdev-session-start.json
+.grok/skills/superdev
+.hermes
+.hermes/config.yaml
+.hermes/shell-hooks-allowlist.json
+.hermes/skills
+.hermes/skills/.superdev.superdev-tmp-PID-NANOS-N
+.hermes/skills/.superdev.superdev-tmp-PID-NANOS-N/SKILL.md
+.hermes/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/run-hook.cmd
+.hermes/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/session-start
+.hermes/skills/superdev
+.kimi-code
+.kimi-code/mcp.json
+.kimi-code/skills
+.kimi-code/skills/.superdev.superdev-tmp-PID-NANOS-N
+.kimi-code/skills/.superdev.superdev-tmp-PID-NANOS-N/SKILL.md
+.kimi-code/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/run-hook.cmd
+.kimi-code/skills/.superdev.superdev-tmp-PID-NANOS-N/hooks/session-start
+.kimi-code/skills/superdev
+.openclaw/openclaw.json
+.openclaw/skills/superdev

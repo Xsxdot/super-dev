@@ -14,9 +14,12 @@
 package api
 
 import (
+	"bufio"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -155,5 +158,150 @@ func TestIntegrationDeleteAllowedSymlinkEscape(t *testing.T) {
 	}
 	if _, err := integrationDeleteAllowed(home, filepath.Join(home, ".claude/skills/docs/superdev")); err == nil {
 		t.Fatal("delete through symlink escape (still inside home, outside the matched root) must be denied")
+	}
+}
+
+// desktopConnectorPathsFixture 是桌面端实际会在目标机上碰到的路径清单，由
+// desktop/src-tauri 那边的测试生成，见文件头注释。
+const desktopConnectorPathsFixture = "testdata/desktop-connector-paths.txt"
+
+// readDesktopConnectorPaths 读取跨栈路径清单（忽略空行与 # 注释行）。
+func readDesktopConnectorPaths(t *testing.T) []string {
+	t.Helper()
+	file, err := os.Open(desktopConnectorPathsFixture)
+	if err != nil {
+		t.Fatalf("读取桌面端路径清单失败（它由 desktop/src-tauri 的测试生成）：%v", err)
+	}
+	defer file.Close()
+	var paths []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		paths = append(paths, line)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("扫描桌面端路径清单失败：%v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("桌面端路径清单为空——它一旦被清空，这条跨栈校验就变成空转")
+	}
+	return paths
+}
+
+// TestIntegrationPathAllowedCoversEveryDesktopConnectorPath 是白名单「数据同步
+// 义务」的执行机制的下半段。
+//
+// 上半段在 desktop/src-tauri：那条测试真的跑一遍六家 remote-supported 连接器的
+// install + status + uninstall，把 ConnectorFs 端口收到的每一个路径落进
+// testdata/desktop-connector-paths.txt，并在路径变了时先红。本测试读同一份清单，
+// 断言每一条都能过 integrationPathAllowed。
+//
+// 判据因此是「桌面端**真实**用的路径」而不是「测试作者记得的路径」——后者正是
+// 这次漏掉 ~/.claude.json 的原因：integrationConfigRoots 的头注释写着「与桌面端
+// 一一对应」，但注释不是机制，而 .claude.json 是个**文件**、既不等于 ".claude"
+// 也不以 ".claude/" 开头，被那条为「.claudex 不是 .claude」写的边界检查一并挡掉，
+// 而两栈各自的测试都照不出来（Rust 侧用内存 fake、没有白名单；Go 侧从来没收到过
+// 这个路径）。
+func TestIntegrationPathAllowedCoversEveryDesktopConnectorPath(t *testing.T) {
+	home := t.TempDir()
+	for _, rel := range readDesktopConnectorPaths(t) {
+		candidate := filepath.Join(home, filepath.FromSlash(rel))
+		if _, err := integrationPathAllowed(home, candidate); err != nil {
+			t.Errorf("桌面端会在目标机上读写 %s，但白名单拒绝了它：%v\n"+
+				"→ 把对应条目加进 integrationConfigRoots（目录树）或 integrationConfigFiles（精确文件）",
+				rel, err)
+		}
+	}
+}
+
+// TestIntegrationDeleteAllowedOnDesktopConnectorPaths 钉住窄删除白名单对上面
+// 那份清单的裁决，两个方向都钉。
+//
+// 卸载真正要删的是各家的 skill 目录（<root>/skills/superdev），必须放行。
+//
+// 已知缺口（本轮**有意未修**，见 task-9b 报告）：skill 安装用的唯一临时目录名
+// 形如 `.superdev.superdev-tmp-<pid>-<nanos>-<n>`，以 "." 开头，不满足删除白名单
+// 的 basename 判据（superdev / superdev.*），因此远端删不掉。后果有限——成功路径
+// 上临时目录是被 rename 成目标目录的（guard 已 disarm，根本不发 delete），只有
+// **安装失败**那条路径才会尝试删它，且那次删除本身是 best-effort（失败只 warn）。
+// 代价是失败的远端安装会在目标机上留下一个隐藏临时目录。修它要放宽一条**安全**
+// 白名单，值得单独决策，不适合在修复波里顺手做。
+// **如果你修了它，请把下面这条 false 断言一起改掉。**
+func TestIntegrationDeleteAllowedOnDesktopConnectorPaths(t *testing.T) {
+	home := t.TempDir()
+	for _, rel := range readDesktopConnectorPaths(t) {
+		base := filepath.Base(rel)
+		isSkillRoot := base == "superdev" && strings.Contains(rel, "/skills/")
+		isTempSkillDir := strings.HasPrefix(base, ".superdev.superdev-tmp-")
+		if !isSkillRoot && !isTempSkillDir {
+			continue
+		}
+		candidate := filepath.Join(home, filepath.FromSlash(rel))
+		_, err := integrationDeleteAllowed(home, candidate)
+		if isSkillRoot {
+			if err != nil {
+				t.Errorf("卸载要删的 skill 目录 %s 被删除白名单拒绝：%v", rel, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("临时 skill 目录 %s 现在可删了——缺口已修的话请更新本测试的注释与断言", rel)
+		}
+	}
+}
+
+// TestIntegrationConfigFileEntryIsExactMatchOnly 覆盖精确文件白名单条目的边界。
+//
+// 关键性质：它**不能**退化成目录树语义。".claude.json" 在目标机上完全可以是一个
+// 目录，按目录根处理会把整棵子树放进白名单——那正是不能简单把它加进
+// integrationConfigRoots 的原因。
+func TestIntegrationConfigFileEntryIsExactMatchOnly(t *testing.T) {
+	home := t.TempDir()
+	cases := []struct {
+		path string
+		ok   bool
+	}{
+		{filepath.Join(home, ".claude.json"), true},
+		// 子路径：精确条目不得放行任何"其下"的东西。
+		{filepath.Join(home, ".claude.json", "nested.txt"), false},
+		{filepath.Join(home, ".claude.json", "..", ".ssh", "id_rsa"), false},
+		// 前缀边界：与 ".claudex" 不是 ".claude" 同一条纪律。
+		{filepath.Join(home, ".claude.jsonx"), false},
+		{filepath.Join(home, ".claude.jso"), false},
+		{filepath.Join(home, ".claude.json.bak"), false},
+	}
+	for _, c := range cases {
+		_, err := integrationPathAllowed(home, c.path)
+		if c.ok && err != nil {
+			t.Errorf("%s 应放行，却被拒：%v", c.path, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("%s 应拒绝，却放行了", c.path)
+		}
+	}
+}
+
+// TestIntegrationConfigFileEntryRejectsSymlinkEscape 覆盖精确文件条目同样受
+// Task 2 那道 EvalSymlinks 收敛保护：把 ~/.claude.json 做成指向 home 之外的
+// 符号链接必须被拒，不能借道写到白名单外的真实目标。
+func TestIntegrationConfigFileEntryRejectsSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 建符号链接需要额外权限")
+	}
+	home := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "stolen.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("seed outside target: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(home, ".claude.json")); err != nil {
+		t.Fatalf("seed symlink: %v", err)
+	}
+
+	if _, err := integrationPathAllowed(home, filepath.Join(home, ".claude.json")); err == nil {
+		t.Fatal("指向 home 之外的 ~/.claude.json 符号链接必须被拒，否则受限通道能借道读写任意文件")
 	}
 }
