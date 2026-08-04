@@ -23,7 +23,7 @@ pub mod registry;
 pub mod remote_fs;
 pub mod remote_install;
 
-use fs_port::{BatchFile, ConnectorFs, LocalFs};
+use fs_port::{BatchFile, ConnectorFs, LocalFs, WritePolicy};
 use serde::Serialize;
 use serde_json::json;
 use std::ffi::{OsStr, OsString};
@@ -1289,7 +1289,15 @@ fn uninstall_from_path_with_fs(
         return Ok((false, None));
     }
     // 走到这里说明文件刚被读到过，write_atomic 必然备份并返回 Some。
-    let backup = fs_port.write_atomic(path, &removed.content, true, CONFIG_WRITE_LABELS)?;
+    // 策略只带「新建收紧到 0600」这一位：这条路径的目标必然已存在（刚读到过），
+    // 新建档位实际用不上，写出来是为了让四处内置方言写入的策略保持同一形状。
+    let backup = fs_port.write_atomic_with_policy(
+        path,
+        &removed.content,
+        true,
+        CONFIG_WRITE_LABELS,
+        WritePolicy::RESTRICTED_NEW_FILE,
+    )?;
     Ok((true, backup))
 }
 
@@ -1413,7 +1421,16 @@ fn install_to_path_with_fs(
             .mkdir_all(parent)
             .map_err(|err| format!("创建配置目录失败: {err}"))?;
     }
-    let backup_path = fs_port.write_atomic(path, &merged.content, true, CONFIG_WRITE_LABELS)?;
+    // RESTRICTED_NEW_FILE 而不是 CONFIG_FILE：本机这条路径没有符号链接守卫，
+    // 远端也不能有（理由见 WritePolicy::RESTRICTED_NEW_FILE）。这里要对齐的是
+    // 「新建配置文件本机 0600 / 远端 0644」这条真实分叉。
+    let backup_path = fs_port.write_atomic_with_policy(
+        path,
+        &merged.content,
+        true,
+        CONFIG_WRITE_LABELS,
+        WritePolicy::RESTRICTED_NEW_FILE,
+    )?;
     Ok(ConfigInstallOutcome {
         installed: true,
         already_present: false,
@@ -1872,7 +1889,15 @@ fn install_session_hook_with_fs(
             .mkdir_all(parent)
             .map_err(|err| format!("创建 hook 配置目录失败: {err}"))?;
     }
-    let backup_path = fs_port.write_atomic(hook_path, &merged.content, true, HOOK_WRITE_LABELS)?;
+    // hook 配置（如 ~/.claude/settings.json）与 MCP 配置同属"新建要收紧"的一类：
+    // 里面可能有用户为其它 MCP server 配的 API key。
+    let backup_path = fs_port.write_atomic_with_policy(
+        hook_path,
+        &merged.content,
+        true,
+        HOOK_WRITE_LABELS,
+        WritePolicy::RESTRICTED_NEW_FILE,
+    )?;
     Ok(SessionHookOutcome {
         installed: true,
         already_present: false,
@@ -1954,7 +1979,13 @@ fn remove_session_hook_with_fs(
     let out = serde_json::to_string_pretty(&root)
         .map_err(|err| format!("序列化配置失败(JSON): {err}"))?
         + "\n";
-    fs_port.write_atomic(hook_path, &out, true, HOOK_WRITE_LABELS)?;
+    fs_port.write_atomic_with_policy(
+        hook_path,
+        &out,
+        true,
+        HOOK_WRITE_LABELS,
+        WritePolicy::RESTRICTED_NEW_FILE,
+    )?;
     Ok(true)
 }
 

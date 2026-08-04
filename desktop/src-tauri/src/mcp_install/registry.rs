@@ -346,7 +346,18 @@ pub trait AgentConnector: Send + Sync {
     ///
     /// 之所以做成「实现方主动返回 Some(self)」而不是在编排侧维护一份 ID 清单：
     /// 清单会与代码事实漂移（清单说支持、代码却没端口化，或反过来），而这个
-    /// 方法的返回值本身就是端口化那份实现的引用，两者不可能对不上。
+    /// 方法的返回值本身就是那套实现的引用，指不到别处去。
+    ///
+    /// **但返回 Some(self) 不是通行证，它只证明签名收了端口，不证明函数体用了
+    /// 端口**——一家连接器完全可以在 `install_with_fs` 里继续 `std::fs::write`，
+    /// 编译器不会有意见。真正提供保证的是另外两道，新增端口化连接器时必须
+    /// 一起做到：
+    ///   1. 该文件顶部的 `use std::fs` 标成 `#[cfg(test)]`（生产代码里再出现
+    ///      `fs::` 就是编译错误），本机专属的探测保持直连时要逐处注明理由
+    ///   2. `remote_install.rs` 的
+    ///      `ported_connectors_remote_install_writes_remote_values_only_through_the_port`
+    ///      把「目标机 HOME」设成桌面机上一个真实存在的空目录，装完卸完断言它
+    ///      仍为空——任何一次绕过端口的写入都会让它不再为空
     fn port_ops(&self) -> Option<&dyn PortedConnectorOps> {
         None
     }

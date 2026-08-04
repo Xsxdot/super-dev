@@ -801,7 +801,7 @@ pub fn skill_source_pair(resolved: Result<PathBuf, String>) -> (Option<PathBuf>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp_install::fs_port::{BatchFile, FsStat, WriteLabels};
+    use crate::mcp_install::fs_port::{BatchFile, FsStat, WriteLabels, WritePolicy};
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
@@ -811,6 +811,14 @@ mod tests {
         files: RefCell<BTreeMap<PathBuf, String>>,
         dirs: RefCell<Vec<PathBuf>>,
         calls: RefCell<usize>,
+        /// policies 记录每次原子写收到的 (路径, 策略)。
+        ///
+        /// **必须记，且 RecordingFs 必须覆写 `write_atomic_with_policy`**：策略
+        /// 是从调用方一路传到远端 write 端点的，`LocalFs` 对它恒为 no-op、
+        /// trait 默认实现直接把它丢掉，于是「调用方忘了传策略」在本机与内存
+        /// fake 上都毫无症状——远端却会因此丢掉服务端符号链接守卫、新建配置
+        /// 从 0600 退回 0644。这份记录是那条传递链唯一的观测点。
+        policies: RefCell<Vec<(PathBuf, WritePolicy)>>,
     }
 
     impl RecordingFs {
@@ -819,6 +827,7 @@ mod tests {
                 files: RefCell::new(BTreeMap::new()),
                 dirs: RefCell::new(Vec::new()),
                 calls: RefCell::new(0),
+                policies: RefCell::new(Vec::new()),
             }
         }
 
@@ -840,6 +849,17 @@ mod tests {
 
         fn read(&self, path: &str) -> Option<String> {
             self.files.borrow().get(&PathBuf::from(path)).cloned()
+        }
+
+        /// policy_for 返回某个路径最后一次写入时收到的策略。
+        fn policy_for(&self, path: &str) -> Option<WritePolicy> {
+            let target = PathBuf::from(path);
+            self.policies
+                .borrow()
+                .iter()
+                .rev()
+                .find(|(written, _)| written == &target)
+                .map(|(_, policy)| *policy)
         }
 
         fn hit(&self) {
@@ -869,10 +889,26 @@ mod tests {
             &self,
             path: &Path,
             content: &str,
+            backup: bool,
+            labels: WriteLabels<'_>,
+        ) -> Result<Option<String>, String> {
+            // 与 RemoteAgentFs 同一结构：无策略版是「默认策略」的特例，落地只有
+            // 一份，免得两条路径记录的东西不一致。
+            self.write_atomic_with_policy(path, content, backup, labels, WritePolicy::default())
+        }
+
+        fn write_atomic_with_policy(
+            &self,
+            path: &Path,
+            content: &str,
             _backup: bool,
             _labels: WriteLabels<'_>,
+            policy: WritePolicy,
         ) -> Result<Option<String>, String> {
             self.hit();
+            self.policies
+                .borrow_mut()
+                .push((path.to_path_buf(), policy));
             self.files
                 .borrow_mut()
                 .insert(path.to_path_buf(), content.to_string());
@@ -1648,6 +1684,15 @@ mod tests {
                     .is_some(),
                 "{connector_id} 的 skill 必须落到目标机的 skill 目录"
             );
+            // 策略必须一路传到端口：`connectors/common.rs` 里那一处
+            // WritePolicy::CONFIG_FILE 是生产代码里唯一的传递点，丢了它远端就
+            // 同时失去服务端符号链接守卫（require_regular_file）与「新建配置
+            // 0600」（restrict_new_file_mode），而本机侧毫无症状。
+            assert_eq!(
+                fs_port.policy_for(&config_path.to_string_lossy()),
+                Some(WritePolicy::CONFIG_FILE),
+                "{connector_id} 的配置写入必须带上 CONFIG_FILE 策略"
+            );
 
             // 卸载走的是同一条 PortedConnectorOps 分支，同样必须只碰目标机：
             // 只摘掉 superdev 条目、配置文件本身保留、skill 目录被删。
@@ -1713,6 +1758,45 @@ mod tests {
             "hermes" => written.contains("args:") && written.contains("- mcp"),
             other => panic!("未覆盖的连接器: {other}"),
         }
+    }
+
+    #[test]
+    fn built_in_remote_install_restricts_new_config_file_mode() {
+        // 内置方言三家（claude-code / codex / cursor）在本机新建配置是 0600
+        // （atomic_write_file），而远端 agent 的 write 端点默认是 0644——这条
+        // 分叉只能靠 restrict_new_file_mode 送到服务端消除。MCP 配置与 hook
+        // 配置两条写入路径都要带上，漏一条就有一半的配置仍是 0644。
+        //
+        // 刻意断言 RESTRICTED_NEW_FILE 而不是 CONFIG_FILE：这两条路径在**本机侧
+        // 从来没有**符号链接守卫，加上它会让远端比本机更严，把 dotfiles 仓库用
+        // 符号链接管理 ~/.claude.json 的用户挡在门外（理由见 WritePolicy 的 doc）。
+        let skill_source = bundled_skill_dir("builtin-policy");
+        let fs_port = RecordingFs::new();
+        let detector = FakeDetector::new(&["claude"]);
+        let connectors = connectors::builtin();
+
+        install_remote_connector(
+            &detector,
+            &fs_port,
+            &connectors,
+            "host-42",
+            "claude-code",
+            Some(skill_source.clone()),
+            None,
+        )
+        .expect("remote install");
+
+        for path in [
+            "/home/remote/.claude.json",
+            "/home/remote/.claude/settings.json",
+        ] {
+            assert_eq!(
+                fs_port.policy_for(path),
+                Some(WritePolicy::RESTRICTED_NEW_FILE),
+                "{path} 的远端写入必须要求新建落 0600，且不得附带本机没有的符号链接守卫"
+            );
+        }
+        let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());
     }
 
     #[test]

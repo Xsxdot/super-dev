@@ -905,6 +905,12 @@ impl AgentConnector for HermesConnector {
         Ok(result)
     }
 
+    /// status 是 `status_with_fs(ctx, &LocalFs)` —— **恒绑定本机**。
+    ///
+    /// 拿一个远端 ctx（home 指向目标机）调它，会去读**桌面机自己**磁盘上那些
+    /// 路径，把读到的内容当成目标机状态返回，且不会有任何报错。远端场景一律走
+    /// `PortedConnectorOps::status_with_fs` 并显式传 `RemoteAgentFs`
+    /// （`remote_install::ported_remote_status` 是唯一入口）。
     fn status(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorStatus, ConnectorError> {
         self.status_with_fs(ctx, &LocalFs)
     }
