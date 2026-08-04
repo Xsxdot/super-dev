@@ -20,9 +20,14 @@
 // 边界：
 //   - 本代理路径在 withSecurity 之后（调用方是已认证的本机桌面），绝不进
 //     bypass 白名单；目标机侧对应端点是否匿名可达是目标机自己的判定
-//   - 本代理是哑管道：不解析、不校验被转发的 rest 段或请求体，白名单校验
-//     （integrationPathAllowed / integrationDeleteAllowed）只在目标机 Task 4
-//     handler 里执行一次，代理层重复校验只会造成两地维护、逻辑漂移
+//   - 本代理是哑管道：不解析、不校验被转发的 rest 段或请求体的 integrations
+//     业务语义，白名单校验（integrationPathAllowed / integrationDeleteAllowed）
+//     只在目标机 Task 4 handler 里执行一次，代理层重复业务校验只会造成两地
+//     维护、逻辑漂移。但路由完整性属于代理自己的职责——{rest...} 通配段经
+//     mux 解码后可能含形如 %2E%2E 的百分号编码 dot segment，拼接后必须收敛
+//     到 /api/integrations/ 前缀之内，否则调用方能借这条通配打到目标机
+//     /api/integrations/ 之外的任意端点，还携带 nodetransport 为该 host 注入
+//     的凭据；这不是「加 integrations 语义校验」，是代理不能被越权当跳板
 //   - 桌面侧的 Authorization 头（本机 token）绝不透传给目标机：转发请求头
 //     由本 handler 从空白重新构造，不拷贝调用方任何请求头；目标机凭据由
 //     nodetransport 按其自身 Agent Secret 独立注入（与纳管代理同一纪律）
@@ -36,8 +41,13 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path"
+	"strings"
 	"time"
 )
+
+// integrationsProxyBasePath 是本代理允许转发到的目标机路径前缀。
+const integrationsProxyBasePath = "/api/integrations"
 
 // integrationsProxyTimeout 是单次 integrations 代理转发的总预算。
 //
@@ -65,9 +75,13 @@ const maxIntegrationsProxyResponseBytes = 8 << 20
 //     剩余路径段（如 "detect"、"fs/stat"、"fs/write-batch"）
 //
 // 注意：
-//   - 目标路径为 "/api/integrations/" + rest，RawQuery 非空时原样拼接在后面——
-//     不经过 url.Values 解析再编码，避免百分号编码被规范化成不同但语义等价的
-//     形式（虽然语义不变，但没必要引入这一步不确定性）
+//   - 目标路径为 "/api/integrations/" + rest 经 path.Clean 收敛后的结果，
+//     RawQuery 非空时原样拼接在后面——查询串不经过 url.Values 解析再编码，
+//     避免百分号编码被规范化成不同但语义等价的形式（虽然语义不变，但没必要
+//     引入这一步不确定性）；path.Clean 只作用于 "?" 之前的路径部分，query
+//     完全不受影响
+//   - rest 解码后若含 dot segment 使收敛结果逃出 /api/integrations/ 前缀，
+//     直接 404，不发起任何转发（见文件头注释「路由完整性」）
 //   - method 与调用方请求一致地转发，不区分 GET/PUT/POST/DELETE
 func (a *App) proxyAgentIntegrations(w http.ResponseWriter, r *http.Request) {
 	hostID := r.PathValue("host_id")
@@ -81,7 +95,18 @@ func (a *App) proxyAgentIntegrations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetPath := "/api/integrations/" + r.PathValue("rest")
+	// path.Clean 折叠 rest 段里可能出现的 dot segment——mux 对多段通配值做
+	// 解码，调用方可以用 "%2E%2E" 令 r.PathValue("rest") 拿到字面量 ".."，
+	// 裸 "../" 会被 mux 的 cleanPath 重定向拦下，但百分号编码形式不会：那道
+	// 重定向跑在转义前的原始请求路径上，看不到解码后才出现的 ".."。不收敛
+	// 这一步，"../../security/health" 这类 rest 就能让 targetPath 逃出
+	// /api/integrations/ 前缀，把请求连同 nodetransport 为该 host 注入的凭据
+	// 一起打到目标机任意端点。
+	targetPath := path.Clean(integrationsProxyBasePath + "/" + r.PathValue("rest"))
+	if targetPath != integrationsProxyBasePath && !strings.HasPrefix(targetPath, integrationsProxyBasePath+"/") {
+		jsonError(w, http.StatusNotFound, "not found")
+		return
+	}
 	if q := r.URL.RawQuery; q != "" {
 		targetPath += "?" + q
 	}
@@ -109,7 +134,10 @@ func (a *App) proxyAgentIntegrations(w http.ResponseWriter, r *http.Request) {
 	resp, _, _, err := a.doAgentRequestSchemeAware(ctx, hostID, r.Method, targetPath, headers, forwardBody)
 	if err != nil {
 		// 传输层故障（拨号/握手/超时），与目标机业务错误是不同故障域，见文件头注释。
-		// 错误信息只含传输层描述，不含请求体内容，不会泄漏被转发的文件路径/内容。
+		// 下面这行日志和 502 响应体都会带上 targetPath（可能含 ?path=<文件路径>）
+		// 与 err.Error()（*url.Error 的消息里可能含完整目标 URL）——这是可接受的：
+		// 路径不是 token/密钥，目标机自己的 handler 也把路径打进日志（见
+		// handler_integrations_fs.go:106）；绝不落的是请求体内容（被转发的文件内容本身）。
 		log.Printf("[SuperDev] integrations: 代理转发失败 host=%s %s %s：%v", hostID, r.Method, targetPath, err)
 		jsonCodeError(w, http.StatusBadGateway, "integration_target_unreachable", err.Error(), nil)
 		return

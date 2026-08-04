@@ -155,6 +155,22 @@ func TestIntegrationsProxyUnknownHost404(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, resp.Code)
 }
 
+// TestIntegrationsProxyRejectsPercentEncodedDotSegmentEscape 钉死路由完整性：
+// {rest...} 通配段经 mux 解码后可能含形如 %2E%2E 的百分号编码 dot segment，
+// 裸 "../" 会被 mux 的 cleanPath 重定向拦下，但百分号编码形式不会（那道重定向
+// 跑在转义前的原始路径上）。必须 404，且断言 fake transport 完全没被调用——
+// 仅断言 404 不够，404 也可能来自「未知 host」分支，这里用已知 host 排除歧义。
+func TestIntegrationsProxyRejectsPercentEncodedDotSegmentEscape(t *testing.T) {
+	tr := &integrationsProxyFakeTransport{status: http.StatusOK, body: `{}`}
+	app, hostID := newIntegrationsProxyTestApp(t, tr)
+
+	resp := httptestDo(t, app, http.MethodGet, "/api/agents/"+hostID+"/integrations/%2E%2E/%2E%2E/security/health", nil)
+
+	require.Equal(t, http.StatusNotFound, resp.Code)
+	assert.Empty(t, tr.gotMethod, "越界路径必须在转发前就被拒绝，fake transport 不应被调用")
+	assert.Empty(t, tr.gotPath, "越界路径必须在转发前就被拒绝，fake transport 不应被调用")
+}
+
 // TestIntegrationsProxyRejectsAnonymousRequest 覆盖鉴权红线：本代理路径绝不进
 // securityBypassPath，匿名请求必须 401（与 adoption 代理同一红线）。
 func TestIntegrationsProxyRejectsAnonymousRequest(t *testing.T) {
