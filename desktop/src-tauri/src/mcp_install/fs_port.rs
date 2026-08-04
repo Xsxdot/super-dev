@@ -110,10 +110,11 @@ impl WritePolicy {
     ///
     /// 给 `mcp_install.rs` 那几条内置方言写入路径（`install_to_path` /
     /// `install_session_hook` / `uninstall_from_path`）用。它们在本机侧**从来没有**
-    /// 符号链接守卫（全文件搜不到 `symlink_metadata`），因此远端也不能有：
-    /// 用 dotfiles 仓库把 `~/.claude.json` 做成符号链接是很常见的配置方式，
-    /// 本机装得进去、远端却被 409 挡下，就是把「两侧语义打架」从权限位挪到了
-    /// 目标类型上，而不是消除它。
+    /// 符号链接守卫（整个 `mcp_install.rs` 搜不到 `symlink_metadata`），因此远端
+    /// 也不能有——**本轮的红线是"不改本机行为"，那么远端也不该单方面变得更严**：
+    /// 给这几条路径套上 [`WritePolicy::CONFIG_FILE`]，只会把「两侧语义打架」从
+    /// 权限位挪到目标类型上，而不是消除它。要加这道守卫，得先在本机侧加、并
+    /// 单独评估它对既有用户配置的影响。
     ///
     /// 它要修的是另一条真实分叉：这几条路径本机新建文件是 0600
     /// （`atomic_write_file`），远端 agent 的 write 端点默认却是 0644。

@@ -811,6 +811,12 @@ mod tests {
         files: RefCell<BTreeMap<PathBuf, String>>,
         dirs: RefCell<Vec<PathBuf>>,
         calls: RefCell<usize>,
+        /// touched 记录每一次端口调用碰到的【目标机】路径。
+        ///
+        /// 用途只有一个：给跨栈一致性测试提供「桌面端**实际**会在目标机上读写
+        /// 哪些路径」这份清单，而不是靠测试作者记得哪些路径。见
+        /// `desktop_connector_paths_fixture_matches_what_the_connectors_actually_touch`。
+        touched: RefCell<Vec<PathBuf>>,
         /// policies 记录每次原子写收到的 (路径, 策略)。
         ///
         /// **必须记，且 RecordingFs 必须覆写 `write_atomic_with_policy`**：策略
@@ -827,6 +833,7 @@ mod tests {
                 files: RefCell::new(BTreeMap::new()),
                 dirs: RefCell::new(Vec::new()),
                 calls: RefCell::new(0),
+                touched: RefCell::new(Vec::new()),
                 policies: RefCell::new(Vec::new()),
             }
         }
@@ -865,11 +872,21 @@ mod tests {
         fn hit(&self) {
             *self.calls.borrow_mut() += 1;
         }
+
+        /// touch 记录一次端口调用碰到的路径（hit 之外单独一份，因为 hit 只计数）。
+        fn touch(&self, path: &Path) {
+            self.touched.borrow_mut().push(path.to_path_buf());
+        }
+
+        fn touched_paths(&self) -> Vec<PathBuf> {
+            self.touched.borrow().clone()
+        }
     }
 
     impl ConnectorFs for RecordingFs {
         fn stat(&self, path: &Path) -> Result<FsStat, String> {
             self.hit();
+            self.touch(path);
             let is_dir = self.dirs.borrow().iter().any(|dir| dir == path);
             let exists = is_dir || self.files.borrow().contains_key(path);
             // 内存 fake 里不存在符号链接这种东西，恒为 false。
@@ -882,6 +899,7 @@ mod tests {
 
         fn read_optional(&self, path: &Path) -> Result<Option<String>, String> {
             self.hit();
+            self.touch(path);
             Ok(self.files.borrow().get(path).cloned())
         }
 
@@ -906,6 +924,7 @@ mod tests {
             policy: WritePolicy,
         ) -> Result<Option<String>, String> {
             self.hit();
+            self.touch(path);
             self.policies
                 .borrow_mut()
                 .push((path.to_path_buf(), policy));
@@ -917,12 +936,17 @@ mod tests {
 
         fn mkdir_all(&self, path: &Path) -> Result<(), String> {
             self.hit();
+            self.touch(path);
             self.dirs.borrow_mut().push(path.to_path_buf());
             Ok(())
         }
 
         fn write_batch(&self, dir: &Path, files: &[BatchFile], _label: &str) -> Result<(), String> {
             self.hit();
+            self.touch(dir);
+            for file in files {
+                self.touch(&dir.join(&file.rel_path));
+            }
             self.dirs.borrow_mut().push(dir.to_path_buf());
             for file in files {
                 self.files.borrow_mut().insert(
@@ -935,6 +959,8 @@ mod tests {
 
         fn rename(&self, from: &Path, to: &Path) -> Result<(), String> {
             self.hit();
+            self.touch(from);
+            self.touch(to);
             let moved: Vec<(PathBuf, String)> = self
                 .files
                 .borrow()
@@ -958,6 +984,7 @@ mod tests {
 
         fn list_relative_files(&self, dir: &Path) -> Result<Vec<PathBuf>, String> {
             self.hit();
+            self.touch(dir);
             Ok(self
                 .files
                 .borrow()
@@ -968,6 +995,7 @@ mod tests {
 
         fn remove_dir_all(&self, path: &Path) -> Result<(), String> {
             self.hit();
+            self.touch(path);
             self.files
                 .borrow_mut()
                 .retain(|file, _| !file.starts_with(path));
@@ -1501,6 +1529,175 @@ mod tests {
             "hook 命令必须指向目标机上的 skill 路径: {hook}"
         );
         let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());
+    }
+
+    /// FIXTURE_HOME 是跨栈路径清单里冒充「目标机 HOME」的固定前缀。
+    const FIXTURE_HOME: &str = "/superdev-fixture-home";
+
+    /// DESKTOP_PATHS_FIXTURE 是跨栈路径清单的落盘位置。
+    ///
+    /// 放在 agent 的 testdata 下，是因为消费方是 Go 测试；Rust 这边只负责生成
+    /// 与校验它是否还与代码事实一致。
+    const DESKTOP_PATHS_FIXTURE: &str = "../../agent/api/testdata/desktop-connector-paths.txt";
+
+    /// FixtureDetector 回一份 home 指向 FIXTURE_HOME、且**所有 CLI 都存在**的
+    /// detect 响应——要让六家都真的走完文件操作，才能收集到全部路径。
+    struct FixtureDetector;
+
+    impl RemoteIntegrationDetector for FixtureDetector {
+        fn detect(&self, commands: &[String]) -> Result<RemoteDetectResponse, String> {
+            Ok(RemoteDetectResponse {
+                home: FIXTURE_HOME.to_string(),
+                commands: commands.iter().map(|name| (name.clone(), true)).collect(),
+                agent: detect_fixture().agent,
+            })
+        }
+    }
+
+    /// normalize_fixture_path 把绝对路径转成 home 相对、正斜杠、且**去掉易变段**
+    /// 的形态。
+    ///
+    /// 临时目录名里带进程号与纳秒时间戳（`unique_temp_candidate`），逐次都不同，
+    /// 直接落进清单会让这条测试每跑一次就红一次。归一成固定 token 不削弱判据：
+    /// 白名单对它的裁决只取决于「在哪个根下 + basename 前缀」，与那串数字无关。
+    fn normalize_fixture_path(path: &Path) -> Option<String> {
+        let text = path.to_string_lossy().replace('\\', "/");
+        let rel = text.strip_prefix(FIXTURE_HOME)?.trim_start_matches('/');
+        if rel.is_empty() {
+            return None;
+        }
+        let normalized = rel
+            .split('/')
+            .map(|segment| match segment.find(".superdev-tmp-") {
+                Some(index) => format!("{}.superdev-tmp-PID-NANOS-N", &segment[..index]),
+                None => segment.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        Some(normalized)
+    }
+
+    /// collect_target_machine_paths 收集「桌面端会在目标机上碰到的全部路径」。
+    ///
+    /// 两个来源，都不是手写清单：
+    ///   1. 真的跑一遍六家 remote-supported 连接器的 **install + status + uninstall**，
+    ///      把端口收到的每个路径记下来——这一条会自动带上手写清单绝对想不起来的
+    ///      东西（skill 的唯一临时目录、备份目录、hermes 的 hook 信任文件）
+    ///   2. 八家（含 openclaw / grok）各自 `status()` 上报的 target_path 与
+    ///      `manual_instructions()` 的 config_path——那两家今天不走远端，但将来
+    ///      若接入，路径漂移问题一样存在，先纳入判据
+    fn collect_target_machine_paths() -> Vec<String> {
+        let skill_source = bundled_skill_dir("cross-stack-paths");
+        let fs_port = RecordingFs::new();
+        let connectors = connectors::builtin();
+        let detector = FixtureDetector;
+
+        for connector in &connectors {
+            let id = connector.descriptor().id();
+            if remote_plan(connector.as_ref()).is_none() {
+                continue;
+            }
+            install_remote_connector(
+                &detector,
+                &fs_port,
+                &connectors,
+                "fixture-host",
+                id,
+                Some(skill_source.clone()),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{id} fixture install: {error}"));
+            uninstall_remote_connector(
+                &detector,
+                &fs_port,
+                &connectors,
+                "fixture-host",
+                id,
+                Some(skill_source.clone()),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{id} fixture uninstall: {error}"));
+        }
+        detect_remote_agents(
+            &detector,
+            &fs_port,
+            &connectors,
+            "fixture-host",
+            Some(skill_source.clone()),
+            None,
+        )
+        .expect("fixture detect");
+
+        let mut paths: Vec<String> = fs_port
+            .touched_paths()
+            .iter()
+            .filter_map(|path| normalize_fixture_path(path))
+            .collect();
+
+        // 第二个来源：连接器自报的路径，覆盖 openclaw / grok 这两家不走远端的。
+        let ctx = ConnectorRuntimeContext::new(
+            PathBuf::from(FIXTURE_HOME),
+            Vec::new(),
+            Vec::new(),
+            PathBuf::from("/opt/superdev/superdev-agent"),
+            Some(skill_source.clone()),
+            None,
+        );
+        for connector in &connectors {
+            if let Ok(status) = connector.status(&ctx) {
+                for item in &status.integrations {
+                    if let Some(target) = item.target_path.as_ref() {
+                        if let Some(rel) = normalize_fixture_path(Path::new(target)) {
+                            paths.push(rel);
+                        }
+                    }
+                }
+            }
+            if let Ok(manual) = connector.manual_instructions(&ctx) {
+                if let Some(config) = manual.config_path.as_ref() {
+                    if let Some(rel) = normalize_fixture_path(Path::new(config)) {
+                        paths.push(rel);
+                    }
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    /// 跨栈一致性：桌面端**实际**会在目标机上碰到的路径清单必须与落盘 fixture 一致。
+    ///
+    /// 这条测试是「白名单数据同步义务」的执行机制的**上半段**：下半段是 Go 侧的
+    /// `TestIntegrationPathAllowedCoversEveryDesktopConnectorPath`，它读同一份
+    /// fixture 并断言每一条都能过 `integrationPathAllowed`。
+    ///
+    /// 为什么要落盘一个 fixture 而不是让 Go 直接调 Rust：两栈没有共同的运行时。
+    /// 落盘 + 双向校验的效果是——connector 改了默认路径 → 本条测试先红（fixture
+    /// 过期）→ 开发者更新 fixture → Go 侧那条紧接着红（新路径不在白名单里）。
+    /// 单靠 `integrationConfigRoots` 头注释那句「与桌面端一一对应」已经漏过一次
+    /// （`~/.claude.json`），注释不是机制。
+    #[test]
+    fn desktop_connector_paths_fixture_matches_what_the_connectors_actually_touch() {
+        let actual = collect_target_machine_paths();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(DESKTOP_PATHS_FIXTURE);
+        let recorded = std::fs::read_to_string(&fixture).unwrap_or_default();
+        let expected: Vec<String> = recorded
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_string)
+            .collect();
+
+        assert_eq!(
+            actual,
+            expected,
+            "桌面端在目标机上会碰到的路径变了。请把下面这份清单更新进 {}\n{}",
+            fixture.display(),
+            actual.join("\n")
+        );
     }
 
     /// ported_connector 从生产工厂里取一家第二波连接器。
