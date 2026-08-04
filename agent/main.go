@@ -4,6 +4,8 @@
 //   - 解析命令行标志（--addr 监听地址，--data 数据目录，--install-binaries 安装二进制目录）
 //   - 创建和启动 HTTP API 服务
 //   - 管理应用生命周期
+//   - `mcp` 子命令：分派到 agent/mcp.RunStdioMain 以 stdio MCP server 运行，
+//     使远端机器仅靠这一个二进制即可完成编程智能体接入
 //
 // 边界：
 //   - 不处理具体的 HTTP 路由逻辑，由 api 包提供
