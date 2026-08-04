@@ -25,7 +25,7 @@
   </a>
 </p>
 
-> **观看完整流程：** 选择 AI 工具、安装 MCP、新增主机，让 AI 创建项目、服务、环境、流水线和部署，完成必要审批，并得到共享运行态总览：[gosuper.dev/#demo](https://gosuper.dev/#demo)。
+> **看真实排障实录：** 从用户描述的现象出发，读实时日志，在已经运行的进程上打断点，批准一次重启，最后用浏览器验证结果：[gosuper.dev/#troubleshooting](https://gosuper.dev/#troubleshooting)。
 
 <p align="center">
   <img alt="Platform: macOS first" src="https://img.shields.io/badge/platform-macOS%20first-111827" />

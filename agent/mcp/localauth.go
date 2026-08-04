@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -75,10 +76,23 @@ func (s *LocalFileTokenSource) Token(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("agent unavailable: %w", err)
 	}
 	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return "", fmt.Errorf("read security health: %w", err)
+	}
+	// 明文请求打到纯 TLS 监听器（未启用 loopback 明文豁免的旧版 agent，或远端
+	// TLS agent 配了 http:// 地址）时，不识别就只剩一条 JSON 解码谜语错误。
+	if isTLSRequiredResponse(resp.StatusCode, raw) {
+		log.Printf("[SuperDev] mcp: 自举明文请求被 %s 的 TLS 监听器拒绝，需改用 https:// 或升级 agent", s.agentURL)
+		return "", fmt.Errorf("agent at %s requires TLS and rejected plaintext HTTP; set SUPERDEV_AGENT_URL to https:// (or upgrade the agent to enable the loopback plaintext exemption)", s.agentURL)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("security health returned status %d", resp.StatusCode)
+	}
 	var health struct {
 		LocalTokenPath string `json:"local_token_path"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+	if err := json.Unmarshal(raw, &health); err != nil {
 		return "", fmt.Errorf("decode security health: %w", err)
 	}
 	if health.LocalTokenPath == "" {

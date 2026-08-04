@@ -2039,6 +2039,43 @@ pub fn detect_coding_agents(
 }
 
 #[cfg(test)]
+static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// create_unique_test_dir 为单个测试独占创建一个空的临时目录。
+///
+/// 参数：
+///   - prefix: 目录名前缀，用于区分不同测试模块的产物
+///
+/// 返回：
+///   - 独占创建成功的目录路径
+///
+/// 注意：
+///   - 仅靠 SystemTime 纳秒值无法保证唯一：macOS 上 CLOCK_REALTIME 实际只有
+///     1 微秒粒度（纳秒值末三位恒为 0），`cargo test` 并行启动的多个测试线程
+///     极易落在同一微秒。因此这里叠加进程 id 与进程内自增计数器。
+///   - 必须用 `create_dir` 而不是 `create_dir_all`：后者对已存在目录返回 Ok，
+///     会把"目录名撞车"静默降级成"两个测试共用一个目录"，让一个测试看见另一个
+///     测试在飞的临时文件。独占创建保证撞车必然暴露为 AlreadyExists 并重试。
+#[cfg(test)]
+fn create_unique_test_dir(prefix: &str) -> PathBuf {
+    for _ in 0..64 {
+        let counter = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("{prefix}-{}-{nanos}-{counter}", std::process::id()));
+        match fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("mkdir temp {}: {error}", dir.display()),
+        }
+    }
+    panic!("无法为测试分配唯一临时目录(prefix={prefix})");
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
@@ -2685,16 +2722,42 @@ SUPERDEV_AGENT_URL = "http://127.0.0.1:57017"
     }
 
     fn tempfile_dir() -> std::path::PathBuf {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!(
-            "superdev-mcp-install-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).expect("mkdir temp");
-        dir
+        create_unique_test_dir("superdev-mcp-install-test")
+    }
+
+    /// 测试目录工厂在并行下必须给出互不相同的目录。
+    ///
+    /// 回归背景：旧实现只用 SystemTime 纳秒值命名并用 create_dir_all 创建，
+    /// 而 macOS 的 CLOCK_REALTIME 只有微秒粒度，多个测试线程会拿到同一目录，
+    /// 导致 atomic_write_file_failure_preserves_original_and_cleans_temp
+    /// 扫到别的测试在飞的 .superdev-tmp- 文件而偶发失败。
+    #[test]
+    fn tempfile_dir_is_unique_across_parallel_tests() {
+        const THREADS: usize = 16;
+        const PER_THREAD: usize = 8;
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+        let handles = (0..THREADS)
+            .map(|_| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    (0..PER_THREAD).map(|_| tempfile_dir()).collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let dirs = handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("join temp dir allocator"))
+            .collect::<Vec<_>>();
+
+        let unique = dirs.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            unique.len(),
+            THREADS * PER_THREAD,
+            "并行分配的测试目录出现重名，测试之间会互相看到对方的临时文件"
+        );
     }
 }
 
@@ -2888,15 +2951,6 @@ mod path_tests {
     }
 
     fn tempfile_dir() -> std::path::PathBuf {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!(
-            "superdev-sidecar-path-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&dir).expect("mkdir temp");
-        dir
+        create_unique_test_dir("superdev-sidecar-path-test")
     }
 }

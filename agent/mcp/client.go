@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -25,6 +26,13 @@ import (
 
 	"github.com/xsxdot/super-dev/agent/model"
 )
+
+// isTLSRequiredResponse 识别「明文请求打到 TLS 监听器」的固定失败形态：
+// Go 标准库 TLS 监听器对明文 HTTP 回明文 400 + 固定提示语。
+// 识别它是为了把不可读的解码/状态错误换成「改用 https:// 或升级 agent」的指引。
+func isTLSRequiredResponse(status int, body []byte) bool {
+	return status == http.StatusBadRequest && bytes.Contains(body, []byte("HTTP request to an HTTPS server"))
+}
 
 // AgentClient 描述 MCP 需要的本机 agent 能力。
 type AgentClient interface {
@@ -1024,6 +1032,14 @@ func (c *HTTPAgentClient) do(req *http.Request, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if isTLSRequiredResponse(resp.StatusCode, raw) {
+			// 目标 agent 是纯 TLS 监听（未启用 loopback 明文豁免的旧版本，或远端
+			// TLS agent 被误配了 http:// 地址）。不识别这个形态时错误面是一条
+			// 不可读的 "400 Bad Request"，在这里换成可执行的指引。
+			log.Printf("[SuperDev] mcp: 明文请求被 %s 的 TLS 监听器拒绝，需改用 https:// 或升级 agent", req.URL.Host)
+			return fmt.Errorf("agent at %s requires TLS and rejected plaintext HTTP; set SUPERDEV_AGENT_URL to https:// (or upgrade the agent to enable the loopback plaintext exemption)", req.URL.Host)
+		}
 		var body struct {
 			Code     string            `json:"code"`
 			Error    string            `json:"error"`
@@ -1031,7 +1047,7 @@ func (c *HTTPAgentClient) do(req *http.Request, out any) error {
 			Plan     OperationPlan     `json:"plan"`
 			Approval OperationApproval `json:"approval"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&body)
+		_ = json.Unmarshal(raw, &body)
 		if body.Error == "" {
 			body.Error = resp.Status
 		}

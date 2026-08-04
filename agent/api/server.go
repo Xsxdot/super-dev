@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -1067,23 +1068,47 @@ func (a *App) Handler() http.Handler {
 //   - addr: 监听地址，如 ":8080"
 //
 // 返回：
-//   - ListenAndServe 返回的错误
+//   - 监听失败或 Serve 返回的错误
 func (a *App) Start(addr string) error {
 	a.loadRegisteredProjects()
 	a.loadManagedDeployments()
 	a.startProcessReconcileLoop()
 	a.startAutostartOnce()
 	a.startManagedDeploymentReconciler()
-	server := &http.Server{Addr: addr, Handler: a.Handler()}
-	tlsConfig, enabled, err := a.tlsConfigForListen()
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	if enabled {
-		server.TLSConfig = tlsConfig
-		return server.ListenAndServeTLS("", "")
+	return a.Serve(ln)
+}
+
+// Serve 在给定 listener 上提供 agent HTTP(S) 服务。
+//
+// 参数：
+//   - ln: 已建立的 TCP listener（测试可注入随机端口 listener）
+//
+// 返回：
+//   - http.Server.Serve 返回的错误
+//
+// 注意：
+//   - TLS 姿态开启时并非纯 TLS 监听，而是同端口按首字节嗅探协议：TLS 流量正常
+//     握手，明文流量仅当对端为 loopback 时放行（见 schemeSniffingListener）。
+//     这是本机客户端（superdev-mcp、桌面端探测、webview 前端）在 agent 被
+//     provision 成 tls_mode=auto 后仍能工作的关键——本机信任边界由文件系统
+//     承担（local-access-token），TLS 只服务跨机链路的机密性，loopback 强制
+//     TLS 不增加安全、只会把无法信任自签证书的本机客户端整体挡死。
+func (a *App) Serve(ln net.Listener) error {
+	server := &http.Server{Handler: a.Handler()}
+	tlsConfig, enabled, err := a.tlsConfigForListen()
+	if err != nil {
+		ln.Close()
+		return err
 	}
-	return server.ListenAndServe()
+	if enabled {
+		log.Printf("[SuperDev] api: TLS 监听已启用（同端口 loopback 明文豁免生效） addr=%s", ln.Addr())
+		return server.Serve(newSchemeSniffingListener(ln, tlsConfig))
+	}
+	return server.Serve(ln)
 }
 
 func (a *App) tlsConfigForListen() (*tls.Config, bool, error) {

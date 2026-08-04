@@ -25,7 +25,7 @@
   </a>
 </p>
 
-> **Watch the workflow:** choose an AI agent, install MCP, add a host, let AI create the project, services, environments, pipeline and deployment, approve operations, and arrive at the shared runtime overview: [gosuper.dev/#demo](https://gosuper.dev/#demo).
+> **See it in action:** step through a real troubleshooting run — from the user's symptom, to live logs, to a breakpoint on the already-running process, to an approved restart, to browser verification: [gosuper.dev/#troubleshooting](https://gosuper.dev/#troubleshooting).
 
 <p align="center">
   <img alt="Platform: macOS first" src="https://img.shields.io/badge/platform-macOS%20first-111827" />
