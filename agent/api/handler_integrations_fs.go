@@ -211,6 +211,9 @@ func (a *App) integrationsFsList(w http.ResponseWriter, r *http.Request) {
 }
 
 // integrationsFsWrite 处理 PUT /api/integrations/fs/write：白名单内原子写，可选备份。
+//
+// 权限位：目标已存在时沿用它原有的权限位（不放宽也不收紧）；只有新建文件
+// 才用 0o644 默认值——理由与细节见函数体内 mode 计算前的注释。
 func (a *App) integrationsFsWrite(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path    string `json:"path"`
@@ -243,27 +246,47 @@ func (a *App) integrationsFsWrite(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "mkdir failed")
 		return
 	}
+
+	// 目标已存在时必须沿用它原有的权限位，不能被这次写入悄悄放宽——用户可能
+	// 手工把 ~/.claude/settings.json 收紧成 0600（里面可能有为其它 MCP
+	// server 配置的 API key），一次远端写入不该把它放宽回 0644；这与本文件
+	// copyFile 把备份统一写成 0o600 的理由（宁紧勿松）是同一条红线，写入
+	// 目标本身也不能例外。只有新建文件才用 0o644 默认值。
+	//
+	// 这里是相对 brief Step 3 范例代码（硬编码 0o644）的一处明确授权偏离
+	// ——人类已裁决：保留原有权限，不要为了字面忠于 brief 把它改回硬编码。
+	info, statErr := os.Stat(target)
+	targetExists := statErr == nil
+	mode := os.FileMode(0o644)
+	switch {
+	case targetExists:
+		mode = info.Mode().Perm()
+	case statErr != nil && !os.IsNotExist(statErr):
+		// stat 失败但不是"不存在"这种正常情况（权限异常等未知状态）：
+		// fail-safe 收紧到 0o600，不要静默沿用放宽的 0o644 默认值。
+		log.Printf("[SuperDev] integrations: 写入前 stat 异常，回退更紧权限 path=%s：%v", target, statErr)
+		mode = 0o600
+	}
+
 	backupPath := ""
-	if req.Backup {
-		if _, statErr := os.Stat(target); statErr == nil {
-			// 只在目标已存在时才有旧内容可备份；命名规则见 integrationBackupPath
-			// 头注释，必须与桌面端 Rust backup_path() 逐字节一致。
-			backupPath = integrationBackupPath(target)
-			if err := copyFile(target, backupPath); err != nil {
-				log.Printf("[SuperDev] integrations: 备份失败 path=%s：%v", target, err)
-				jsonError(w, http.StatusInternalServerError, "backup failed")
-				return
-			}
+	if req.Backup && targetExists {
+		// 只在目标已存在时才有旧内容可备份；命名规则见 integrationBackupPath
+		// 头注释，必须与桌面端 Rust backup_path() 逐字节一致。
+		backupPath = integrationBackupPath(target)
+		if err := copyFile(target, backupPath); err != nil {
+			log.Printf("[SuperDev] integrations: 备份失败 path=%s：%v", target, err)
+			jsonError(w, http.StatusInternalServerError, "backup failed")
+			return
 		}
 	}
-	if err := atomicWriteFile(target, []byte(req.Content), 0o644); err != nil {
+	if err := atomicWriteFile(target, []byte(req.Content), mode); err != nil {
 		log.Printf("[SuperDev] integrations: 原子写失败 path=%s：%v", target, err)
 		jsonError(w, http.StatusInternalServerError, "write failed")
 		return
 	}
 	name, _, _ := principalFromRequest(r)
-	log.Printf("[SuperDev] integrations: 已写入 path=%s bytes=%d backup=%v by=%s",
-		target, len(req.Content), backupPath != "", name)
+	log.Printf("[SuperDev] integrations: 已写入 path=%s bytes=%d backup=%v mode=%s by=%s",
+		target, len(req.Content), backupPath != "", mode, name)
 	jsonOK(w, map[string]string{"backup_path": backupPath})
 }
 
@@ -419,20 +442,37 @@ func (a *App) integrationsFsWriteBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 // integrationRelPathSafe 校验 write-batch 单个 rel_path 的基本格式：非空、
-// 不以 "/" 开头（不允许伪装成绝对路径）、不含 ".." 路径段（不允许跳出 dir
-// 本身）。这只是格式层面的快速失败；真正的越权屏障仍是随后对拼接结果调用的
+// 不以 "/" 开头（不允许伪装成绝对路径）、不含 ".." 段（不允许跳出 dir 本身）。
+// 这只是格式层面的快速失败；真正的越权屏障仍是随后对拼接结果调用的
 // integrationPathAllowed（拦住 dir 内部符号链接逃逸这类字符串检查发现不了的
 // 情况）。
+//
+// 反斜杠/冒号显式拒绝 + filepath.IsLocal 双重把关：
+//   - 本 agent 二进制会被编译到 Windows 远端机器上运行，那里 "\" 是真正的
+//     路径分隔符、"C:" 是真正的盘符前缀。如果只按 "/" 切分再逐段比较 ".."
+//     （旧实现），像 "..\\..\\..\\settings.json" 这样的 rel_path 在切分时是
+//     单个 segment（不含 "/"），会被误判为安全，随后 filepath.Join 在
+//     Windows 目标机上把它解析成真实的上级目录——外层 integrationPathAllowed
+//     仍然会挡住越出白名单根的部分（所以不是白名单逃逸），但会落在请求的
+//     dir 之外、调用方以为自己在写别的 connector 目录，污染面比预期大得多。
+//   - filepath.IsLocal 是标准库提供的、按当前编译目标 GOOS 语义判断
+//     "Join(base, path) 保证不逃出 base" 的权威实现，覆盖了空路径/绝对路径/
+//     ".." 段这几条（原来的手写检查因此被它取代而不是叠加）。但它的判断会
+//     随 GOOS 变化：本进程在类 Unix 系统（包括跑本文件单测的开发机）上编译
+//     时，反斜杠只是普通文件名字符、不是分隔符，IsLocal 不会把
+//     "..\\..\\x" 或 "C:x" 判定为不安全——这类攻击 payload 只有在 Windows
+//     编译产物上才会真正逃逸。为了让 integrationRelPathSafe 这个纯函数的
+//     判断不随 GOOS 变化（且能在非 Windows 开发机上用单元测试直接锁住这类
+//     payload），显式拒绝反斜杠与冒号，不依赖 IsLocal 在当前平台是否认得
+//     它们。
 func integrationRelPathSafe(relPath string) bool {
-	if relPath == "" || strings.HasPrefix(relPath, "/") {
+	if relPath == "" {
 		return false
 	}
-	for _, segment := range strings.Split(relPath, "/") {
-		if segment == ".." {
-			return false
-		}
+	if strings.ContainsAny(relPath, "\\:") {
+		return false
 	}
-	return true
+	return filepath.IsLocal(relPath)
 }
 
 // integrationsFsDelete 处理 DELETE /api/integrations/fs：递归删除窄白名单内的

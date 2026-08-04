@@ -3,7 +3,11 @@
 // 职责：
 //   - 验证 stat/read/list/write/rename/write-batch/delete 的成功路径契约字段
 //   - 验证每个端点至少一条白名单外 403 用例，覆盖 `..` 逃逸与符号链接逃逸
-//   - 验证 write-batch 的文件数/总字节上限、rel_path 格式校验
+//   - 验证 write-batch 的文件数/总字节上限、rel_path 格式校验（含
+//     integrationRelPathSafe 纯函数的跨平台表驱动测试，覆盖 Windows 专属的
+//     反斜杠/盘符逃逸构造——这些构造在 macOS 上跑 filepath.Join 不会重现，
+//     所以直接测纯函数而不是只走 HTTP 层）
+//   - 验证 write 对已存在文件的权限位保留（不悄悄放宽）
 //   - 验证 delete 窄白名单（仅 skills/superdev* 放行）
 //   - 验证匿名请求 401（鉴权红线，任选一端点覆盖即可，其余端点共用同一中间件）
 //
@@ -21,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -349,6 +354,50 @@ func TestIntegrationsFsWriteAtomicNoTempFileLeftBehind(t *testing.T) {
 	require.Equal(t, "atomic.json", entries[0].Name())
 }
 
+// TestIntegrationsFsWritePreservesExistingFileMode 覆盖评审 Important#1：
+// 目标文件已存在时，写入不能悄悄把它的权限位放宽到硬编码的 0o644——例如用户
+// 手工把 ~/.claude/settings.json 收紧成 0600（其中可能有为其它 MCP server
+// 配置的 API key），一次远端写入不该把它放宽回全局可读。
+func TestIntegrationsFsWritePreservesExistingFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 不支持 Unix 权限位语义")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude")
+	target := filepath.Join(dir, "settings.json")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(target, []byte(`{"v":1}`), 0o600))
+
+	resp := doWriteRequest(t, app, target, `{"v":2}`, false)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "已存在文件的权限位必须原样保留，不能被写入放宽")
+
+	content, err := os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, `{"v":2}`, string(content))
+}
+
+// TestIntegrationsFsWriteNewFileDefaultsTo0644 覆盖新建文件（目标此前不存在）
+// 仍然使用 0o644 默认权限——权限保留逻辑只对「已存在」的目标生效，不影响
+// 新建文件的既有行为。
+func TestIntegrationsFsWriteNewFileDefaultsTo0644(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 不支持 Unix 权限位语义")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "fresh-mode.json")
+
+	resp := doWriteRequest(t, app, target, `{"a":1}`, false)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o644), info.Mode().Perm(), "新建文件必须使用 0o644 默认权限")
+}
+
 // TestIntegrationsFsRenameMovesFile 覆盖 rename 成功路径。
 func TestIntegrationsFsRenameMovesFile(t *testing.T) {
 	app, home := newIntegrationsFsTestApp(t)
@@ -488,6 +537,39 @@ func TestIntegrationsFsWriteBatchRejectsRelPathStartingWithSlash(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, resp.Code)
 }
 
+// TestIntegrationRelPathSafe 是 integrationRelPathSafe 的表驱动纯函数测试，
+// 覆盖评审 Important#2：Windows 专属的反斜杠/盘符逃逸构造
+// （"..\\..\\x"、"C:x" 等）在 macOS/Linux 上跑 filepath.Join 不会重现
+// （反斜杠、冒号在类 Unix 系统上只是普通文件名字符），必须直接测这个纯函数
+// 本身，而不是只走 HTTP 层——否则本仓库在非 Windows 开发机上跑测试永远看
+// 不到这类 payload 被拒绝，直到有人真的在 Windows 远端机器上触发。
+func TestIntegrationRelPathSafe(t *testing.T) {
+	cases := []struct {
+		name    string
+		relPath string
+		want    bool
+	}{
+		{name: "空字符串", relPath: "", want: false},
+		{name: "普通文件名", relPath: "SKILL.md", want: true},
+		{name: "多层子目录", relPath: "hooks/session-start", want: true},
+		{name: "多层子目录含点号但非逃逸", relPath: "a/./b.txt", want: true},
+		{name: "以斜杠开头_伪装绝对路径", relPath: "/etc/passwd", want: false},
+		{name: "单个ddot段_跳出dir", relPath: "../../etc/passwd", want: false},
+		{name: "中间夹带ddot段", relPath: "a/../../b", want: false},
+		{name: "Windows反斜杠ddot逃逸", relPath: `..\..\..\settings.json`, want: false},
+		{name: "Windows前导反斜杠", relPath: `\x`, want: false},
+		{name: "Windows盘符相对路径", relPath: `C:x`, want: false},
+		{name: "Windows反斜杠混合ddot", relPath: `a\..\..\b`, want: false},
+		{name: "文件名含冒号", relPath: "weird:name.txt", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := integrationRelPathSafe(tc.relPath)
+			require.Equal(t, tc.want, got, "relPath=%q", tc.relPath)
+		})
+	}
+}
+
 // TestIntegrationsFsWriteBatchRejectsDirOutsideWhitelist 覆盖 write-batch 的
 // 白名单外 403：dir 本身不在任何白名单根内。
 func TestIntegrationsFsWriteBatchRejectsDirOutsideWhitelist(t *testing.T) {
@@ -503,7 +585,14 @@ func TestIntegrationsFsWriteBatchRejectsDirOutsideWhitelist(t *testing.T) {
 // TestIntegrationsFsWriteBatchAbortsOnFirstFailureAndReportsWritten 覆盖
 // 「首个失败即中止，返回 500 与已写清单」：用一个只读父目录制造中途 I/O 失败，
 // 断言已成功写入的文件出现在响应的 written 清单里，且后续文件未写入。
+//
+// 平台限制：本用例靠 0o500 目录权限位制造真实的 I/O 失败。Windows 不认
+// Unix 权限位语义（0o500 不会真的挡住在其下创建文件），且 os.Getuid() 在
+// Windows 上恒返回 -1，不会触发下面的 root 用户跳过守卫，所以显式跳过。
 func TestIntegrationsFsWriteBatchAbortsOnFirstFailureAndReportsWritten(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 不支持 Unix 权限位语义，0o500 目录不会真的拒绝写入")
+	}
 	if os.Getuid() == 0 {
 		t.Skip("root 用户不受目录权限位限制，跳过本用例")
 	}
