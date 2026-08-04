@@ -328,16 +328,26 @@ func (a *App) integrationsFsWrite(w http.ResponseWriter, r *http.Request) {
 	// IsRegular() 恒为 false，所以「非普通文件」这一个条件同时盖住了符号链接与
 	// 目录/FIFO/套接字；换成 Stat 就会跟随链接、把指向普通文件的链接判成合法目标。
 	if req.RequireRegularFile {
-		if info, lstatErr := os.Lstat(filepath.Clean(req.Path)); lstatErr == nil {
-			if !info.Mode().IsRegular() {
-				name, _, _ := principalFromRequest(r)
-				log.Printf("[SuperDev] integrations: 写入被非普通文件守卫拒绝 path=%s mode=%s by=%s",
-					target, info.Mode(), name)
-				jsonCodeError(w, http.StatusConflict, "unsafe_write_target",
-					"target is not a regular file", nil)
-				return
-			}
+		info, lstatErr := os.Lstat(filepath.Clean(req.Path))
+		switch {
+		case lstatErr == nil && !info.Mode().IsRegular():
+			name, _, _ := principalFromRequest(r)
+			log.Printf("[SuperDev] integrations: 写入被非普通文件守卫拒绝 path=%s mode=%s by=%s",
+				target, info.Mode(), name)
+			jsonCodeError(w, http.StatusConflict, "unsafe_write_target",
+				"target is not a regular file", nil)
+			return
+		case lstatErr != nil && !os.IsNotExist(lstatErr):
+			// 「查不出来」不等于「安全」：调用方明确要求了这条守卫，而我们无法
+			// 判定目标类型，只能 fail-closed。与桌面端本机侧的
+			// LocalFs::check_write_target 对称——那边对非 NotFound 的 lstat 错误
+			// 同样是返回错误（config_stat_failed），而不是当成普通文件放行。
+			log.Printf("[SuperDev] integrations: 写入守卫无法判定目标类型 path=%s：%v", target, lstatErr)
+			jsonCodeError(w, http.StatusConflict, "unsafe_write_target",
+				"cannot determine target type", nil)
+			return
 		}
+		// 剩下的是 os.IsNotExist(lstatErr)：目标不存在，本来就该新建，放行。
 	}
 
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {

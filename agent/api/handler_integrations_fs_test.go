@@ -850,3 +850,31 @@ func TestIntegrationsFsWriteRejectsUnknownNewFileMode(t *testing.T) {
 	_, statErr := os.Stat(target)
 	require.True(t, os.IsNotExist(statErr), "参数非法时不得落盘")
 }
+
+// TestIntegrationsFsWriteGuardFailsClosedWhenTypeIsUndecidable 覆盖守卫的
+// fail-closed 分支：调用方要求了 require_regular_file，而服务端**判不出**目标
+// 类型（这里用一个不可搜索的父目录制造 EACCES）时必须拒绝，不能把「查不出来」
+// 当成「安全」而放行——这与桌面端 LocalFs::check_write_target 对非 NotFound
+// 的 lstat 错误一律上报为错误是对称的。
+func TestIntegrationsFsWriteGuardFailsClosedWhenTypeIsUndecidable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 不支持 Unix 目录权限位语义")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root 无视目录权限位，造不出 lstat 失败")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude", "opaque")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	target := filepath.Join(dir, "settings.json")
+	require.NoError(t, os.WriteFile(target, []byte(`{"v":1}`), 0o600))
+	// 去掉执行位（搜索权限）→ 对 dir 之下任何路径的 lstat 都会 EACCES。
+	require.NoError(t, os.Chmod(dir, 0o600))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	resp := doWriteRequestWithOptions(t, app, target, `{"v":2}`, false,
+		map[string]any{"require_regular_file": true})
+
+	require.Equal(t, http.StatusConflict, resp.Code, resp.Body.String())
+	require.Contains(t, resp.Body.String(), "unsafe_write_target")
+}
