@@ -11,6 +11,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
@@ -19,9 +20,21 @@ import (
 	"syscall"
 
 	"github.com/xsxdot/super-dev/agent/api"
+	"github.com/xsxdot/super-dev/agent/mcp"
 )
 
 func main() {
+	// mcp 子命令：以 stdio MCP server 运行（与独立 superdev-mcp 二进制同一实现）。
+	// 远端机器只有 agent 一个二进制，MCP 配置写 `superdev-agent mcp` 即可接入，
+	// 无需分发第二个二进制——这是远端接入设计的关键前置。
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		log.SetOutput(os.Stderr)
+		if err := mcp.RunStdioMain(context.Background(), os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	addr := flag.String("addr", ":57017", "HTTP listen address")
 	dataDir := flag.String("data", defaultDataDir(), "Data directory for logs.db and projects.json")
 	installBinariesDir := flag.String("install-binaries", "", "Directory containing remote install agent binaries")
