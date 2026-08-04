@@ -127,19 +127,20 @@ export const useAgentsStore = defineStore('agents', () => {
     return result
   }
 
-  // requestAdoption/getAdoptionStatus/exchangeAdoption 直连目标机（非本机 agent），
+  // requestAdoption/getAdoptionStatus/exchangeAdoption 经本机 agent 的代理端点
+  // 按 host_id 转发到目标机（复用已配置连接链、由 agent 处理目标 TLS 姿态），
   // 薄封装只为了让 AgentConfigPanel 用统一的 store mock 方式测试，本身不缓存
   // 任何本地状态——纳管流程的进度全部由调用方（面板组件）自己的 ref 跟踪。
-  async function requestAdoption(hostUrl: string, name: string): Promise<AdoptionCreateResponse> {
-    return apiRequestAdoption(hostUrl, name)
+  async function requestAdoption(hostId: string, name: string): Promise<AdoptionCreateResponse> {
+    return apiRequestAdoption(hostId, name)
   }
 
-  async function getAdoptionStatus(hostUrl: string, id: string): Promise<AdoptionStatusResponse> {
-    return apiGetAdoptionStatus(hostUrl, id)
+  async function getAdoptionStatus(hostId: string, id: string): Promise<AdoptionStatusResponse> {
+    return apiGetAdoptionStatus(hostId, id)
   }
 
-  async function exchangeAdoption(hostUrl: string, id: string, adoptionToken: string): Promise<AdoptionExchangeResponse> {
-    return apiExchangeAdoption(hostUrl, id, adoptionToken)
+  async function exchangeAdoption(hostId: string, id: string, adoptionToken: string): Promise<AdoptionExchangeResponse> {
+    return apiExchangeAdoption(hostId, id, adoptionToken)
   }
 
   /** adoptAgentCredential 把纳管换得的长期 token 落盘到本机 agents.json（同 provisionAgent 存储位）。 */

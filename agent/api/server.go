@@ -977,6 +977,12 @@ func (a *App) Handler() http.Handler {
 	// 换发的长期 token 写回本机 agents.json；与其余写路径同样受 withSecurity 保护，
 	// 不在任何 bypass 白名单内（见 handler_agent_adopt.go 头注释）。
 	mux.HandleFunc("POST /api/agents/{host_id}/adopt", a.adoptAgent)
+	// 纳管三请求经本机 agent 代理到目标机匿名端点（见 handler_agent_adoption_proxy.go
+	// 头注释）：桌面 webview 直连探不进自签 HTTPS 目标，且只能覆盖 direct 链。
+	// 这三条同样受 withSecurity 保护，绝不进 bypass 白名单。
+	mux.HandleFunc("POST /api/agents/{host_id}/adoption-requests", a.proxyAdoptionCreate)
+	mux.HandleFunc("GET /api/agents/{host_id}/adoption-requests/{id}", a.proxyAdoptionStatus)
+	mux.HandleFunc("POST /api/agents/{host_id}/adoption-requests/{id}/exchange", a.proxyAdoptionExchange)
 	mux.HandleFunc("GET /api/agents/{host_id}/direct-exposure", a.getAgentDirectExposure)
 	mux.HandleFunc("GET /api/hosts/{id}/managed-deployments/status", a.getHostManagedDeploymentsStatus)
 	mux.HandleFunc("DELETE /api/hosts/{id}", a.deleteHost)

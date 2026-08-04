@@ -7,16 +7,16 @@ AgentConfigPanel：统一管理单台 Host Agent 的监听、安全、安装、�
   - 通过 agents store 调用现有 Agent API 完成保存、下发、生成命令和探测
   - SSH 直推安装遇到「既有 agent 已被其他控制面管理」（409）时，引导用户在
     纳管（发起接入请求 → 等待对方审批 → 兑换凭据 → 落盘 → 连接）与强制重装
-    （显式确认后果）之间选择，纳管请求直连目标机地址，不经本机 agent 转发；
-    目标地址优先取 409 响应里安装守卫探测到的权威地址，没有时才退化为本机
-    已知的 Host IP 信息拼标准端口做尽力而为的猜测（见 adoptionTargetURL）
+    （显式确认后果）之间选择；纳管三请求按 host_id 经本机 agent 的代理端点
+    转发到目标机——由 agent 复用已配置连接链并处理目标 TLS 姿态（自签 HTTPS），
+    webview 不再猜地址、也不做任何跨机裸 fetch
   - 「等待对方批准」态展示目标机返回的配对码，供发起人念给批准人核对——
     目标机审批列表里可能同时存在多条自报同名的接入请求
 
 边界：
   - 不创建或编辑 Host 身份信息
-  - 不直接调用 fetch 或底层 HTTP API（纳管三端点的裸 fetch 封装在 agent.ts，
-    本组件只调用 agents store 暴露的方法）
+  - 不直接调用 fetch 或底层 HTTP API（纳管三端点经 agent.ts 里的本机代理
+    API 封装，本组件只调用 agents store 暴露的方法）
   - 不修改后端 DTO 结构
 -->
 <script setup lang="ts">
@@ -97,11 +97,6 @@ let panelRunID = 0
 // 「检测到既有 agent」分支（纳管/强制重装二选一），不再展示常规安装内容。
 const existingAgentDetected = ref(false)
 const existingAgentVersion = ref('')
-// existingAgentAddress 是安装守卫 409 响应带回的权威目标机地址（host:port，
-// 取自本机为该 Host 配置的 direct 连接链项）——纳管三端点必须用它，不能自己
-// 用本控制面当前监听端口配置拼地址（那是两回事，见下方 adoptionTargetURL 注释）。
-// 链上只有 tunnel（无 direct 项）时后端返回空字符串，此处同样留空。
-const existingAgentAddress = ref('')
 const forceReinstallConfirmed = ref(false)
 // adoptPhase 只覆盖「发起请求 → 等待批准 → 兑换凭据」这段纳管专属流程；
 // 兑换成功后交棒给既有的 installStartStatus/installSecurityStatus 流水线
@@ -169,27 +164,6 @@ const bindAddress = computed(() => resolveBindAddressFromChain(chain.value))
 const bindReason = computed(() => bindReasonFromChain(chain.value))
 const bindReasonKey = computed(() => bindReason.value === 'direct' ? 'settings.agents.bindReasonDirect' : 'settings.agents.bindReasonLoopback')
 const directOptions = computed(() => directAddressOptions(currentHost.value, bindPort.value))
-// STANDARD_AGENT_PORT 是 SuperDev agent 的标准默认监听端口，仅用于纳管地址的
-// 兜底猜测（守卫没能给出权威地址时）。刻意不用 bindPort/securityForm.listenPort
-// ——那是本控制面这次准备安装的新 agent 打算监听的端口，与目标机既有 agent
-// 实际监听的端口毫无关系，用它拼地址是纯粹的误导（review Important 2）。
-const STANDARD_AGENT_PORT = 57017
-
-// adoptionTargetURL 是纳管三端点直连的目标机地址。
-//
-// 优先级：
-//   1. existingAgentAddress——安装守卫 409 响应带回的权威地址，取自本机为该
-//      Host 配置的 direct 连接链项，是"目标机真实监听地址"最可信的来源
-//   2. 兜底：Host 记录里已知的 public_ip/private_ip/ssh_host 拼标准默认端口
-//      ——仅在守卫没能给出权威地址时使用（例如连接链是纯 tunnel，没有 direct
-//      项可读），是尽力而为的猜测，不保证命中，命中失败会在纳管请求失败态
-//      可视化，不会静默
-const adoptionTargetURL = computed(() => {
-  const authoritative = existingAgentAddress.value.trim()
-  if (authoritative) return `http://${authoritative}`
-  const guessed = recommendedDirectAddress(currentHost.value, STANDARD_AGENT_PORT)
-  return guessed ? `http://${guessed}` : ''
-})
 const hasPublicIP = computed(() => Boolean(currentHost.value?.public_ip?.trim()))
 const installTransportType = computed(() => chain.value[0]?.type ?? 'tunnel')
 const transportDirty = computed(() => chainSignature(chain.value) !== chainSignature(savedChain.value))
@@ -512,7 +486,6 @@ function resetInstallPhases() {
   restartRequired.value = false
   existingAgentDetected.value = false
   existingAgentVersion.value = ''
-  existingAgentAddress.value = ''
   forceReinstallConfirmed.value = false
   adoptPhase.value = 'idle'
   adoptFailureMessage.value = ''
@@ -688,7 +661,6 @@ async function pushInstall(forceReinstall = false) {
       installSecurityMessage.value = ''
       existingAgentDetected.value = true
       existingAgentVersion.value = err.version ?? ''
-      existingAgentAddress.value = err.address ?? ''
       return
     }
     if (installStartStatus.value !== 'success') {
@@ -716,16 +688,12 @@ async function pushInstall(forceReinstall = false) {
 async function startAdoption() {
   const agent = persistedAgent.value
   if (!agent) return
-  if (!adoptionTargetURL.value) {
-    adoptFailureMessage.value = t('agentInstall.adoptTargetUnknown')
-    return
-  }
   const runID = panelRunID
   adoptFailureMessage.value = ''
   adoptPairingCode.value = ''
   adoptPhase.value = 'requesting'
   try {
-    const created = await agentsStore.requestAdoption(adoptionTargetURL.value, ADOPTION_REQUESTER_NAME)
+    const created = await agentsStore.requestAdoption(agent.host_id, ADOPTION_REQUESTER_NAME)
     if (!isPanelRunActive(runID)) return
     adoptPairingCode.value = created.pairing_code ?? ''
     adoptPhase.value = 'waiting'
@@ -750,7 +718,7 @@ async function pollAdoptionStatus(hostId: string, requestId: string, expiresAt: 
     }
     let status
     try {
-      status = await agentsStore.getAdoptionStatus(adoptionTargetURL.value, requestId)
+      status = await agentsStore.getAdoptionStatus(hostId, requestId)
     } catch (err) {
       if (!isPanelRunActive(runID)) return
       adoptPhase.value = 'idle'
@@ -790,7 +758,7 @@ async function pollAdoptionStatus(hostId: string, requestId: string, expiresAt: 
 async function completeAdoption(hostId: string, requestId: string, adoptionToken: string, runID: number) {
   adoptPhase.value = 'exchanging'
   try {
-    const exchanged = await agentsStore.exchangeAdoption(adoptionTargetURL.value, requestId, adoptionToken)
+    const exchanged = await agentsStore.exchangeAdoption(hostId, requestId, adoptionToken)
     if (!isPanelRunActive(runID)) return
     await agentsStore.adoptAgentCredential(hostId, exchanged.token)
     if (!isPanelRunActive(runID)) return

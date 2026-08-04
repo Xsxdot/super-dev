@@ -1748,52 +1748,39 @@ export interface AgentAdoptResponse {
   status: string
 }
 
-// adoptionRequest 是纳管三端点专用的裸 fetch：不经 request()/BASE/本机 token，
-// 直连调用方传入的目标机地址（同 ensureCollector 的例外，理由同上文注释）。
-async function adoptionRequest<T>(hostUrl: string, path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${hostUrl}${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options?.headers as Record<string, string> | undefined) },
-  })
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`
-    try {
-      const body = (await res.json()) as { error?: string }
-      if (body.error) message = body.error
-    } catch {
-      /* 非 JSON 错误体 */
-    }
-    throw new AgentAPIError(message, res.status)
-  }
-  return res.json() as Promise<T>
-}
+// 纳管三请求经本机 agent 的代理端点（/api/agents/{host_id}/adoption-requests*）
+// 转发到目标机，不再从 webview 裸 fetch 直连目标机：目标机默认（tls_mode=auto）
+// 是自签 HTTPS 监听，webview 既不能跳过证书校验也没有对方 CA，硬编码 http://
+// 必然连不上；本机 agent 按 host_id 复用已配置的连接链（direct/tunnel 皆可）
+// 并处理目标 TLS 姿态未知的问题。走 request() 还统一了稳定错误码解析
+// （429 限流、502 adoption_target_unreachable 等经 AgentAPIError.code 可辨）。
 
 /**
- * requestAdoption 向目标机发起一次无凭据接入请求。
+ * requestAdoption 向目标机发起一次无凭据接入请求（经本机 agent 代理）。
  *
  * 参数：
- *   - hostUrl: 目标机地址（含协议，如 http://1.2.3.4:57017）
+ *   - hostId: 目标主机在本机主机簿里的 host_id（代理据此走已配置的连接链）
  *   - name: 本控制面自报的展示名，供目标机审批列表和审计展示
  *
  * 注意：
  *   - 目标机对 30s 内的 pending 请求数限流（超限 429），调用方需把该失败态
  *     可视化，不能静默重试刷屏
  */
-export function requestAdoption(hostUrl: string, name: string): Promise<AdoptionCreateResponse> {
-  return adoptionRequest<AdoptionCreateResponse>(hostUrl, '/api/security/adoption-requests', {
+export function requestAdoption(hostId: string, name: string): Promise<AdoptionCreateResponse> {
+  return request<AdoptionCreateResponse>(`/api/agents/${encodeURIComponent(hostId)}/adoption-requests`, {
     method: 'POST',
     body: JSON.stringify({ name }),
   })
 }
 
 /** getAdoptionStatus 轮询接入请求的当前状态；approved 时可能一次性附带 adoption_token。 */
-export function getAdoptionStatus(hostUrl: string, id: string): Promise<AdoptionStatusResponse> {
-  return adoptionRequest<AdoptionStatusResponse>(hostUrl, `/api/security/adoption-requests/${encodeURIComponent(id)}`)
+export function getAdoptionStatus(hostId: string, id: string): Promise<AdoptionStatusResponse> {
+  return request<AdoptionStatusResponse>(`/api/agents/${encodeURIComponent(hostId)}/adoption-requests/${encodeURIComponent(id)}`)
 }
 
 /** exchangeAdoption 用一次性 adoption_token 兑换本控制面的长期凭据；只能成功兑换一次。 */
-export function exchangeAdoption(hostUrl: string, id: string, adoptionToken: string): Promise<AdoptionExchangeResponse> {
-  return adoptionRequest<AdoptionExchangeResponse>(hostUrl, `/api/security/adoption-requests/${encodeURIComponent(id)}/exchange`, {
+export function exchangeAdoption(hostId: string, id: string, adoptionToken: string): Promise<AdoptionExchangeResponse> {
+  return request<AdoptionExchangeResponse>(`/api/agents/${encodeURIComponent(hostId)}/adoption-requests/${encodeURIComponent(id)}/exchange`, {
     method: 'POST',
     body: JSON.stringify({ adoption_token: adoptionToken }),
   })

@@ -1691,7 +1691,6 @@ export default {
     adoptRejected: 'The other control plane rejected this adoption request.',
     adoptExpired: 'The adoption request expired (over 10 minutes unresolved); you can send a new one.',
     adoptTokenLost: 'Could not claim the one-time credential (it may already have been claimed elsewhere). Please start adoption again.',
-    adoptTargetUnknown: 'No reachable target address (a public IP, private IP, or SSH address is required); cannot start adoption.',
     adoptPairingCode: 'Pairing code: {code}',
     adoptPairingCodeHint: 'Read this code to the approver and have them match it on the approval row before approving — there may be more than one adoption request with the same name.',
     forceReinstall: 'Force reinstall',

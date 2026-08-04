@@ -1691,7 +1691,6 @@ export default {
     adoptRejected: '对方已拒绝本次纳管请求。',
     adoptExpired: '纳管请求已过期（超过 10 分钟未处理），可重新发起。',
     adoptTokenLost: '未能取到一次性凭据（可能已在别处被领取），请重新发起纳管。',
-    adoptTargetUnknown: '缺少可直连的目标地址（需要公网 IP / 内网 IP / SSH 地址之一），无法发起纳管。',
     adoptPairingCode: '配对码：{code}',
     adoptPairingCodeHint: '请把这个码念给对方，让对方在审批列表里核对同一个码后再批准——同名的纳管请求可能不止一条。',
     forceReinstall: '强制重装',
