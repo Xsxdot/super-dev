@@ -22,6 +22,9 @@ use std::time::{Duration, Instant};
 
 const CONNECTOR_ID: &str = "openclaw";
 const DISPLAY_NAME: &str = "OpenClaw";
+/// CLI_COMMAND 是 resolve_cli 探测的命令名，同时也是 cli_commands() 对外汇报的
+/// 值——两处共用同一个常量，避免各写一份字符串导致命令名漂移。
+const CLI_COMMAND: &str = "openclaw";
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// OpenClawConnector 通过官方 CLI 管理 MCP，并通过文件系统管理 owned Skill。
@@ -68,7 +71,7 @@ fn data_root(ctx: &ConnectorRuntimeContext) -> PathBuf {
 /// resolve_cli 在 command_dirs 中查找 openclaw / openclaw.exe。
 fn resolve_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
     ctx.command_dirs().iter().find_map(|directory| {
-        executable_file_names("openclaw")
+        executable_file_names(CLI_COMMAND)
             .into_iter()
             .map(|name| directory.join(name))
             .find(|path| path.is_file())
@@ -193,6 +196,10 @@ fn config_hint(ctx: &ConnectorRuntimeContext) -> Option<String> {
 impl AgentConnector for OpenClawConnector {
     fn descriptor(&self) -> &AgentConnectorDescriptor {
         &self.descriptor
+    }
+
+    fn cli_commands(&self) -> Vec<String> {
+        vec![CLI_COMMAND.to_string()]
     }
 
     fn detect(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorDetection, ConnectorError> {

@@ -20,6 +20,7 @@ pub mod connectors;
 pub mod contracts;
 pub mod fs_port;
 pub mod registry;
+pub mod remote_fs;
 
 use fs_port::{BatchFile, ConnectorFs, LocalFs};
 use serde::Serialize;
@@ -307,6 +308,19 @@ impl AgentKind {
         }
     }
 
+    /// cli_command_names 返回该 Agent 检测时寻找的 CLI 命令名清单。
+    ///
+    /// detect_installation 与 connectors::BuiltInConnector::cli_commands 共用
+    /// 这同一份清单（后者经这个方法取值），避免本机 detect() 与远端安装场景
+    /// 用的命令名各写一份字符串字面量、日后各自改动却互相不知道对方存在。
+    fn cli_command_names(&self) -> &'static [&'static str] {
+        match self {
+            Self::ClaudeCode => &["claude"],
+            Self::Codex => &["codex"],
+            Self::Cursor => &["cursor"],
+        }
+    }
+
     fn detect_installation(
         &self,
         home: &Path,
@@ -314,11 +328,11 @@ impl AgentKind {
         app_dirs: &[PathBuf],
     ) -> Option<PathBuf> {
         match self {
-            Self::ClaudeCode => find_command_in_dirs(command_dirs, &["claude"]),
-            Self::Codex => find_command_in_dirs(command_dirs, &["codex"])
+            Self::ClaudeCode => find_command_in_dirs(command_dirs, self.cli_command_names()),
+            Self::Codex => find_command_in_dirs(command_dirs, self.cli_command_names())
                 .or_else(|| find_app_bundle(app_dirs, "Codex.app"))
                 .or_else(|| find_existing_config_target(&self.config_path(home))),
-            Self::Cursor => find_command_in_dirs(command_dirs, &["cursor"])
+            Self::Cursor => find_command_in_dirs(command_dirs, self.cli_command_names())
                 .or_else(|| find_app_bundle(app_dirs, "Cursor.app")),
         }
     }

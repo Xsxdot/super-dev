@@ -22,6 +22,9 @@ use yaml_edit::{Document, Mapping, MappingBuilder, SequenceBuilder, YamlNode};
 
 const CONNECTOR_ID: &str = "hermes";
 const DISPLAY_NAME: &str = "Hermes";
+/// CLI_COMMAND 是 find_cli 探测的命令名，同时也是 cli_commands() 对外汇报的值——
+/// 两处共用同一个常量，避免各写一份字符串导致命令名漂移。
+const CLI_COMMAND: &str = "hermes";
 /// HOOK_MARKER 用于在 Hermes hooks 中精确识别 SuperDev 拥有的条目。
 /// 使用稳定子串，避免依赖列表下标，并与 skill 路径结构对齐。
 const HOOK_MARKER: &str = "skills/superdev/hooks/run-hook.cmd";
@@ -72,7 +75,7 @@ fn allowlist_path(ctx: &ConnectorRuntimeContext) -> PathBuf {
 
 fn find_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
     ctx.command_dirs().iter().find_map(|directory| {
-        executable_file_names("hermes")
+        executable_file_names(CLI_COMMAND)
             .into_iter()
             .map(|name| directory.join(name))
             .find(|path| path.is_file())
@@ -828,6 +831,10 @@ fn hook_status_from_doc(
 impl AgentConnector for HermesConnector {
     fn descriptor(&self) -> &AgentConnectorDescriptor {
         &self.descriptor
+    }
+
+    fn cli_commands(&self) -> Vec<String> {
+        vec![CLI_COMMAND.to_string()]
     }
 
     fn detect(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorDetection, ConnectorError> {

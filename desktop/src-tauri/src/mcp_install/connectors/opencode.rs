@@ -23,6 +23,9 @@ use std::time::Instant;
 
 const CONNECTOR_ID: &str = "opencode";
 const DISPLAY_NAME: &str = "OpenCode";
+/// CLI_COMMAND 是 find_cli 探测的命令名，同时也是 cli_commands() 对外汇报的值——
+/// 两处共用同一个常量，避免各写一份字符串导致命令名漂移。
+const CLI_COMMAND: &str = "opencode";
 
 /// OpenCodeConnector 适配 OpenCode 的 JSONC MCP 配置与 Skill。
 pub(super) struct OpenCodeConnector {
@@ -67,7 +70,7 @@ fn data_root(ctx: &ConnectorRuntimeContext) -> PathBuf {
 
 fn find_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
     ctx.command_dirs().iter().find_map(|directory| {
-        executable_file_names("opencode")
+        executable_file_names(CLI_COMMAND)
             .into_iter()
             .map(|name| directory.join(name))
             .find(|path| path.is_file())
@@ -222,6 +225,10 @@ fn pasteable_mcp_config(ctx: &ConnectorRuntimeContext) -> String {
 impl AgentConnector for OpenCodeConnector {
     fn descriptor(&self) -> &AgentConnectorDescriptor {
         &self.descriptor
+    }
+
+    fn cli_commands(&self) -> Vec<String> {
+        vec![CLI_COMMAND.to_string()]
     }
 
     fn detect(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorDetection, ConnectorError> {

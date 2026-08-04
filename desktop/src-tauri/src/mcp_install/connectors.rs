@@ -123,6 +123,17 @@ impl AgentConnector for BuiltInConnector {
     fn descriptor(&self) -> &AgentConnectorDescriptor {
         &self.descriptor
     }
+
+    /// cli_commands 复用 AgentKind::cli_command_names——与 detect() 用的是同一份
+    /// 命令名清单，ClaudeCode/Codex/Cursor 三家各自返回单元素列表。
+    fn cli_commands(&self) -> Vec<String> {
+        self.kind
+            .cli_command_names()
+            .iter()
+            .map(|command| command.to_string())
+            .collect()
+    }
+
     fn detect(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorDetection, ConnectorError> {
         let path =
             self.kind

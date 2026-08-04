@@ -301,6 +301,21 @@ pub trait AgentConnector: Send + Sync {
         &self,
         ctx: &ConnectorRuntimeContext,
     ) -> Result<ConnectorManualInstructions, ConnectorError>;
+
+    /// cli_commands 返回该连接器在本机检测时会寻找的 CLI 命令名（不含路径/
+    /// 平台可执行文件扩展名）。
+    ///
+    /// 默认返回空列表：并非所有连接器实现都需要向外暴露这份清单（测试用的
+    /// fixture 连接器、fs_port 端口测试用的 fake 连接器都不关心它）。生产的
+    /// 八个内置连接器各自覆盖这个方法，返回值与它们 detect() 里实际探测的
+    /// 命令名同源（同一个常量/清单），不是另起一份容易漂移的字符串。
+    ///
+    /// 用途：远端安装场景下（Task 9 的 `RemoteAgentFs` 调用方）用这份清单去问
+    /// 目标机 `/api/integrations/detect`（Task 3）「这些命令里哪个在远端存在」，
+    /// 从而在目标机上复刻本机 detect() 的判断依据，不需要另外约定一套命令名。
+    fn cli_commands(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// RegistryError 描述注册、查找、支持检查或操作结果校验失败。

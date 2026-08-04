@@ -28,6 +28,9 @@ use std::time::{Duration, Instant};
 
 const CONNECTOR_ID: &str = "grok";
 const DISPLAY_NAME: &str = "Grok";
+/// CLI_COMMAND 是 resolve_cli 探测的命令名，同时也是 cli_commands() 对外汇报的
+/// 值——两处共用同一个常量，避免各写一份字符串导致命令名漂移。
+const CLI_COMMAND: &str = "grok";
 /// CLI 调用超时（add/list/remove 均受此上限约束）。
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 /// SuperDev 拥有的 SessionStart hook 命令标记子串（幂等识别与安全卸载锚点）。
@@ -99,7 +102,7 @@ fn hook_path(ctx: &ConnectorRuntimeContext) -> PathBuf {
 /// resolve_cli 在 command_dirs 中查找 grok / grok.exe。
 fn resolve_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
     ctx.command_dirs().iter().find_map(|directory| {
-        executable_file_names("grok")
+        executable_file_names(CLI_COMMAND)
             .into_iter()
             .map(|name| directory.join(name))
             .find(|path| path.is_file())
@@ -1172,6 +1175,10 @@ fn grok_uninstall_body(
 impl AgentConnector for GrokConnector {
     fn descriptor(&self) -> &AgentConnectorDescriptor {
         &self.descriptor
+    }
+
+    fn cli_commands(&self) -> Vec<String> {
+        vec![CLI_COMMAND.to_string()]
     }
 
     fn detect(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorDetection, ConnectorError> {

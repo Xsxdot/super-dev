@@ -23,6 +23,10 @@ use std::time::Instant;
 
 const CONNECTOR_ID: &str = "kimi-code";
 const DISPLAY_NAME: &str = "Kimi Code";
+/// CLI_COMMAND 是 find_cli 探测的命令名，同时也是 cli_commands() 对外汇报的值——
+/// 注意它与 CONNECTOR_ID 不同（CLI 叫 "kimi"，连接器 ID 叫 "kimi-code"），两处
+/// 共用这一个常量，避免各写一份字符串导致命令名漂移。
+const CLI_COMMAND: &str = "kimi";
 
 /// KimiCodeConnector 适配 Kimi Code 的标准 JSON MCP 与 Skill。
 pub(super) struct KimiCodeConnector {
@@ -61,7 +65,7 @@ fn skill_path(ctx: &ConnectorRuntimeContext) -> PathBuf {
 /// find_cli 在 command_dirs 中查找 kimi / kimi.exe 等可执行文件。
 fn find_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
     ctx.command_dirs().iter().find_map(|directory| {
-        executable_file_names("kimi")
+        executable_file_names(CLI_COMMAND)
             .into_iter()
             .map(|name| directory.join(name))
             .find(|path| path.is_file())
@@ -134,6 +138,10 @@ fn pasteable_mcp_config(ctx: &ConnectorRuntimeContext) -> String {
 impl AgentConnector for KimiCodeConnector {
     fn descriptor(&self) -> &AgentConnectorDescriptor {
         &self.descriptor
+    }
+
+    fn cli_commands(&self) -> Vec<String> {
+        vec![CLI_COMMAND.to_string()]
     }
 
     fn detect(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorDetection, ConnectorError> {
