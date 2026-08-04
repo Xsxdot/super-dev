@@ -18,14 +18,14 @@ use super::AgentKind;
 #[cfg(test)]
 use super::{
     executable_file_names, install_to_path, merge_json_config, remove_json_superdev_config,
-    uninstall_from_path,
+    uninstall_from_path, DEFAULT_AGENT_URL,
 };
 // 一律用带 `_with_fs` 的端口版本并显式传 LocalFs：不带后缀的同名函数只对测试可见，
 // 生产代码里「忘记传端口」会是编译错误而不是静默写到本机。
 use super::{
     install_hint_for_paths, install_json_kind_to_path_with_fs, install_mcp_for_paths_with_skill,
     install_session_hook_with_fs, install_skill_dir_from_source, install_toml_kind_to_path_with_fs,
-    uninstall_mcp_for_paths, McpEntry, DEFAULT_AGENT_URL,
+    uninstall_mcp_for_paths, McpEntry,
 };
 use std::sync::Arc;
 
@@ -335,10 +335,7 @@ impl AgentConnector for BuiltInConnector {
         .all(|cap| request.capabilities.contains(cap));
         if !all_capabilities {
             let config_path = self.kind.config_path(ctx.home_dir());
-            let entry = McpEntry {
-                command: ctx.mcp_binary().to_string_lossy().into(),
-                agent_url: DEFAULT_AGENT_URL.into(),
-            };
+            let entry = McpEntry::from_launch(ctx.mcp_launch());
             let config = match self.kind {
                 AgentKind::ClaudeCode | AgentKind::Cursor => install_json_kind_to_path_with_fs(
                     &LocalFs,
@@ -861,10 +858,7 @@ impl AgentConnector for StandardJsonConnector {
                 }
             }
         }
-        let entry = McpEntry {
-            command: ctx.mcp_binary().to_string_lossy().into(),
-            agent_url: DEFAULT_AGENT_URL.into(),
-        };
+        let entry = McpEntry::from_launch(ctx.mcp_launch());
         let r = install_to_path(
             &path,
             &entry,

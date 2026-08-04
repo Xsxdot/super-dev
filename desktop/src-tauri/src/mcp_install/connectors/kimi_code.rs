@@ -14,7 +14,8 @@ use super::common;
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{
-    executable_file_names, merge_json_config, remove_json_superdev_config, DEFAULT_AGENT_URL,
+    executable_file_names, mcp_server_json_value, merge_json_config, remove_json_superdev_config,
+    DEFAULT_AGENT_URL,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -125,14 +126,7 @@ fn remove_mcp(
 fn pasteable_mcp_config(ctx: &ConnectorRuntimeContext) -> String {
     let entry = common::entry(ctx);
     serde_json::to_string_pretty(&serde_json::json!({
-        "mcpServers": {
-            "superdev": {
-                "command": entry.command,
-                "env": {
-                    "SUPERDEV_AGENT_URL": entry.agent_url
-                }
-            }
-        }
+        "mcpServers": { "superdev": mcp_server_json_value(&entry) }
     }))
     .unwrap_or_else(|_| "{}".into())
 }

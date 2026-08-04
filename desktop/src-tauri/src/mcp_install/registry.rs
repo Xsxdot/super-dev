@@ -16,6 +16,7 @@ use crate::mcp_install::contracts::{
     ContractError, IntegrationCapability, IntegrationOperationResult, IntegrationResult,
     IntegrationState, IntegrationStateStatus, SupportMode,
 };
+use crate::mcp_install::{McpLaunchSpec, DEFAULT_AGENT_URL};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -84,7 +85,7 @@ pub struct ConnectorRuntimeContext {
     home_dir: PathBuf,
     command_dirs: Vec<PathBuf>,
     app_dirs: Vec<PathBuf>,
-    mcp_binary: PathBuf,
+    mcp_launch: McpLaunchSpec,
     skill_source: Option<PathBuf>,
     skill_source_error: Option<String>,
     environment: ConnectorEnvironment,
@@ -103,6 +104,12 @@ impl ConnectorRuntimeContext {
     ///
     /// 返回：
     ///   - 可克隆、只读访问其字段的运行上下文；环境覆盖默认为空
+    ///
+    /// 注意：
+    ///   - 签名刻意保留 `mcp_binary: PathBuf`（而非要求调用方直接构造 `McpLaunchSpec`），
+    ///     避免这个已被数十处测试按位置参数调用的构造函数产生连锁改动。内部据此拼出
+    ///     本机默认启动规格（空 args + 默认 Agent URL），与改造前行为逐字节一致；
+    ///     远端场景（Task 9）改由专门的构造路径注入携带 args 的 `McpLaunchSpec`。
     pub fn new(
         home_dir: PathBuf,
         command_dirs: Vec<PathBuf>,
@@ -115,7 +122,11 @@ impl ConnectorRuntimeContext {
             home_dir,
             command_dirs,
             app_dirs,
-            mcp_binary,
+            mcp_launch: McpLaunchSpec {
+                command: mcp_binary,
+                args: Vec::new(),
+                agent_url: DEFAULT_AGENT_URL.to_string(),
+            },
             skill_source,
             skill_source_error,
             environment: ConnectorEnvironment::default(),
@@ -149,9 +160,20 @@ impl ConnectorRuntimeContext {
         &self.app_dirs
     }
 
+    /// mcp_launch 返回 SuperDev MCP 启动规格（command/args/agent_url 三元组）。
+    ///
+    /// 本机连接器目前始终拿到「独立二进制 + 空 args + 默认 Agent URL」；远端连接器
+    /// （Task 9）会传入指向 `superdev-agent` 的 `mcp` 子命令与目标机 Agent URL。
+    pub fn mcp_launch(&self) -> &McpLaunchSpec {
+        &self.mcp_launch
+    }
+
     /// mcp_binary 返回 SuperDev MCP 可执行文件路径。
+    ///
+    /// 兼容包装：等价于 `mcp_launch().command`，供尚未迁移到 `mcp_launch()` 的调用方
+    /// 过渡使用，计划逐步下线。
     pub fn mcp_binary(&self) -> &Path {
-        &self.mcp_binary
+        &self.mcp_launch.command
     }
 
     /// skill_source 返回可用的 SuperDev skill 源目录。

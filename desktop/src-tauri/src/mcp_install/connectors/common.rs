@@ -17,7 +17,7 @@ use crate::mcp_install::registry::*;
 // 函数只对测试可见，生产代码里「忘记传端口」会是编译错误而不是静默写到本机。
 use crate::mcp_install::{
     atomic_write_file, backup_path, install_skill_dir_from_source, remove_skill_dir_with_fs,
-    skill_status_for_target, McpEntry, MergeResult, SkillInstallOutcome, DEFAULT_AGENT_URL,
+    skill_status_for_target, McpEntry, MergeResult, SkillInstallOutcome,
 };
 use std::fs;
 use std::io;
@@ -105,12 +105,10 @@ pub(super) fn descriptor(
 ///   - ctx: 已解析的连接器运行上下文
 ///
 /// 返回：
-///   - 使用 MCP 二进制路径与默认 Agent URL 的条目
+///   - 由 `ctx.mcp_launch()` 派生的条目；本机场景下是 MCP 二进制路径 + 空 args +
+///     默认 Agent URL，远端场景（Task 9）会带上 `["mcp"]` 与目标机 Agent URL
 pub(super) fn entry(ctx: &ConnectorRuntimeContext) -> McpEntry {
-    McpEntry {
-        command: ctx.mcp_binary().to_string_lossy().into_owned(),
-        agent_url: DEFAULT_AGENT_URL.into(),
-    }
+    McpEntry::from_launch(ctx.mcp_launch())
 }
 
 /// extract_json_mcp_runtime 从标准 `mcpServers.superdev` JSON 片段读取运行时命令与 Agent URL。

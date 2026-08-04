@@ -57,10 +57,70 @@ const HOOK_WRITE_LABELS: fs_port::WriteLabels<'static> = fs_port::WriteLabels {
 /// SKILL_BATCH_WRITE_LABEL 是 skill 目录批量写入失败时的对象名词。
 const SKILL_BATCH_WRITE_LABEL: &str = "skill 文件";
 
+/// McpLaunchSpec 描述如何启动 SuperDev MCP stdio 进程（command/args/agent_url 三元组）。
+///
+/// 背景：
+///   - 本机：桌面端打包了独立的 `superdev-mcp` 二进制，`command` 直接指向它，`args` 为空。
+///   - 远端：目标机器上只有 `superdev-agent` 一个二进制（Task 1 已让它支持 `mcp` 子命令），
+///     所以 `command` 指向 agent 本体，`args` 为 `["mcp"]`；`agent_url` 也要指向该机器上
+///     agent 实际监听的地址（可能不是本机默认端口）。
+///
+/// 边界：
+///   - 只是启动规格的数据载体，不解析可达性、不判断本机/远端——由调用方按场景构造
+///   - 序列化到具体配置文件方言是 `McpEntry::from_launch` 与各方言写入器的职责
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpLaunchSpec {
+    /// command 是启动 MCP stdio 进程的可执行文件路径。
+    pub command: PathBuf,
+    /// args 是传给 command 的启动参数；本机场景恒为空。
+    pub args: Vec<String>,
+    /// agent_url 是该进程应连接的 SuperDev agent HTTP 地址（写入 SUPERDEV_AGENT_URL）。
+    pub agent_url: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct McpEntry {
     pub command: String,
+    /// args 是启动 command 时附带的参数；为空时表示「独立可执行文件，无需子命令」。
+    pub args: Vec<String>,
     pub agent_url: String,
+}
+
+impl McpEntry {
+    /// from_launch 把启动规格转换成配置文件写入用的条目。
+    ///
+    /// 字节等价约束（本次重构验收硬门）：
+    ///   `spec.args` 为空时，各方言写入器必须完全不写 `args` 键/字段——不是写一个空数组。
+    ///   本地场景下 `args` 恒为空，这个约束保证桌面端升级后所有本地用户的 MCP 配置文件
+    ///   与升级前逐字节相同：不这样做的话，每个用户升级后都会看到一次无意义的配置 diff，
+    ///   且个别 Agent 对未预期字段的严格 schema 校验可能因此直接拒绝配置。
+    pub fn from_launch(spec: &McpLaunchSpec) -> Self {
+        Self {
+            command: spec.command.to_string_lossy().into_owned(),
+            args: spec.args.clone(),
+            agent_url: spec.agent_url.clone(),
+        }
+    }
+}
+
+/// mcp_server_json_value 构造标准 `mcpServers.superdev` JSON 值。
+///
+/// `entry.args` 为空时不写 `args` 键——字节等价约束见 `McpEntry::from_launch`。
+/// `merge_json_config`（自动合并写入）、`AgentKind::manual_config`（手动粘贴示例）与
+/// Kimi Code 连接器的 `pasteable_mcp_config` 都复用这一段，避免三处各写一份、行为悄悄分叉。
+pub(crate) fn mcp_server_json_value(entry: &McpEntry) -> serde_json::Value {
+    if entry.args.is_empty() {
+        json!({
+            "command": entry.command,
+            "env": { "SUPERDEV_AGENT_URL": entry.agent_url }
+        })
+    } else {
+        json!({
+            "command": entry.command,
+            "args": entry.args,
+            "env": { "SUPERDEV_AGENT_URL": entry.agent_url }
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -303,18 +363,27 @@ impl AgentKind {
     fn manual_config(&self, entry: &McpEntry) -> String {
         match self {
             Self::ClaudeCode | Self::Cursor => serde_json::to_string_pretty(&json!({
-                "mcpServers": {
-                    "superdev": {
-                        "command": entry.command,
-                        "env": { "SUPERDEV_AGENT_URL": entry.agent_url }
-                    }
-                }
+                "mcpServers": { "superdev": mcp_server_json_value(entry) }
             }))
             .expect("manual json"),
-            Self::Codex => format!(
-                "[mcp_servers.superdev]\ncommand = {:?}\n[mcp_servers.superdev.env]\nSUPERDEV_AGENT_URL = {:?}\n",
-                entry.command, entry.agent_url
-            ),
+            Self::Codex => {
+                let mut text = format!("[mcp_servers.superdev]\ncommand = {:?}\n", entry.command);
+                // args 为空时绝不写 args 行——字节等价约束见 McpEntry::from_launch 文档。
+                if !entry.args.is_empty() {
+                    let args_list = entry
+                        .args
+                        .iter()
+                        .map(|arg| format!("{arg:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    text.push_str(&format!("args = [{args_list}]\n"));
+                }
+                text.push_str(&format!(
+                    "[mcp_servers.superdev.env]\nSUPERDEV_AGENT_URL = {:?}\n",
+                    entry.agent_url
+                ));
+                text
+            }
         }
     }
 }
@@ -345,10 +414,13 @@ pub fn install_mcp_for_paths_with_skill(
     // 复用下面完全相同的编排与方言逻辑。
     let fs_port = &LocalFs;
     let kind = AgentKind::parse(agent)?;
-    let entry = McpEntry {
-        command: mcp_path.to_string_lossy().to_string(),
+    // 本机入口固定绑定 LocalFs 时的启动规格：独立 mcp 二进制、无 args、默认 Agent URL——
+    // 与改造前完全一致，保证本地配置文件逐字节不变。
+    let entry = McpEntry::from_launch(&McpLaunchSpec {
+        command: mcp_path.to_path_buf(),
+        args: Vec::new(),
         agent_url: DEFAULT_AGENT_URL.to_string(),
-    };
+    });
     let config_path = kind.config_path(home);
     let merge: fn(Option<&str>, &McpEntry) -> Result<MergeResult, String> = match kind {
         AgentKind::ClaudeCode | AgentKind::Cursor => merge_json_config,
@@ -408,10 +480,11 @@ pub fn install_hint_for_paths(
     mcp_path: &Path,
 ) -> Result<InstallHint, String> {
     let kind = AgentKind::parse(agent)?;
-    let entry = McpEntry {
-        command: mcp_path.to_string_lossy().to_string(),
+    let entry = McpEntry::from_launch(&McpLaunchSpec {
+        command: mcp_path.to_path_buf(),
+        args: Vec::new(),
         agent_url: DEFAULT_AGENT_URL.to_string(),
-    };
+    });
     Ok(InstallHint {
         agent: kind.label().to_string(),
         config_path: kind.config_path(home).to_string_lossy().to_string(),
@@ -613,10 +686,7 @@ fn merge_json_config(existing: Option<&str>, entry: &McpEntry) -> Result<MergeRe
         }
         _ => json!({}),
     };
-    let server = json!({
-        "command": entry.command,
-        "env": { "SUPERDEV_AGENT_URL": entry.agent_url }
-    });
+    let server = mcp_server_json_value(entry);
     let obj = root
         .as_object_mut()
         .ok_or_else(|| "配置文件格式异常(JSON): 根节点必须是对象".to_string())?;
@@ -657,6 +727,20 @@ fn merge_codex_config(existing: Option<&str>, entry: &McpEntry) -> Result<MergeR
         "command".to_string(),
         toml::Value::String(entry.command.clone()),
     );
+    // args 为空时绝不写 args 键——字节等价约束见 McpEntry::from_launch 文档。
+    if !entry.args.is_empty() {
+        server.insert(
+            "args".to_string(),
+            toml::Value::Array(
+                entry
+                    .args
+                    .iter()
+                    .cloned()
+                    .map(toml::Value::String)
+                    .collect(),
+            ),
+        );
+    }
     server.insert("env".to_string(), toml::Value::Table(env));
     let next = toml::Value::Table(server);
     let changed = servers.get("superdev") != Some(&next);
@@ -2677,6 +2761,7 @@ mod tests {
     fn entry() -> McpEntry {
         McpEntry {
             command: "/Applications/SuperDev/superdev-mcp".to_string(),
+            args: Vec::new(),
             agent_url: "http://127.0.0.1:57017".to_string(),
         }
     }
@@ -2764,6 +2849,78 @@ command = "gh"
         assert_eq!(
             parsed["mcp_servers"]["superdev"]["env"]["SUPERDEV_AGENT_URL"].as_str(),
             Some("http://127.0.0.1:57017")
+        );
+    }
+
+    #[test]
+    fn local_launch_spec_json_config_is_byte_identical_to_legacy() {
+        let spec = McpLaunchSpec {
+            command: PathBuf::from("/opt/superdev-mcp"),
+            args: vec![],
+            agent_url: DEFAULT_AGENT_URL.to_string(),
+        };
+        let merged = merge_json_config(None, &McpEntry::from_launch(&spec)).unwrap();
+        // args 为空时绝不写 args 键——本地配置与改造前逐字节一致。
+        assert!(!merged.content.contains("\"args\""));
+        let legacy = merge_json_config(
+            None,
+            &McpEntry {
+                command: "/opt/superdev-mcp".into(),
+                args: Vec::new(),
+                agent_url: DEFAULT_AGENT_URL.into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(merged.content, legacy.content);
+    }
+
+    #[test]
+    fn remote_launch_spec_json_config_writes_args_and_url() {
+        let spec = McpLaunchSpec {
+            command: PathBuf::from("/usr/local/bin/superdev-agent"),
+            args: vec!["mcp".into()],
+            agent_url: "http://127.0.0.1:58017".into(),
+        };
+        let merged = merge_json_config(None, &McpEntry::from_launch(&spec)).unwrap();
+        assert_eq!(
+            merged.content,
+            "{\n  \"mcpServers\": {\n    \"superdev\": {\n      \"args\": [\n        \"mcp\"\n      ],\n      \"command\": \"/usr/local/bin/superdev-agent\",\n      \"env\": {\n        \"SUPERDEV_AGENT_URL\": \"http://127.0.0.1:58017\"\n      }\n    }\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn local_launch_spec_codex_config_is_byte_identical_to_legacy() {
+        let spec = McpLaunchSpec {
+            command: PathBuf::from("/opt/superdev-mcp"),
+            args: vec![],
+            agent_url: DEFAULT_AGENT_URL.to_string(),
+        };
+        let merged = merge_codex_config(None, &McpEntry::from_launch(&spec)).unwrap();
+        // args 为空时绝不写 args 键——本地 TOML 配置与改造前逐字节一致。
+        assert!(!merged.content.contains("args"));
+        let legacy = merge_codex_config(
+            None,
+            &McpEntry {
+                command: "/opt/superdev-mcp".into(),
+                args: Vec::new(),
+                agent_url: DEFAULT_AGENT_URL.into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(merged.content, legacy.content);
+    }
+
+    #[test]
+    fn remote_launch_spec_codex_config_writes_args_and_url() {
+        let spec = McpLaunchSpec {
+            command: PathBuf::from("/usr/local/bin/superdev-agent"),
+            args: vec!["mcp".into()],
+            agent_url: "http://127.0.0.1:58017".into(),
+        };
+        let merged = merge_codex_config(None, &McpEntry::from_launch(&spec)).unwrap();
+        assert_eq!(
+            merged.content,
+            "[mcp_servers.superdev]\nargs = [\"mcp\"]\ncommand = \"/usr/local/bin/superdev-agent\"\n\n[mcp_servers.superdev.env]\nSUPERDEV_AGENT_URL = \"http://127.0.0.1:58017\"\n"
         );
     }
 
