@@ -853,6 +853,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/integrations/fs/write-batch", a.integrationsFsWriteBatch)
 	mux.HandleFunc("DELETE /api/integrations/fs", a.integrationsFsDelete)
 
+	// integrations 代理：桌面端 connector 远端安装的唯一跨机通道。
+	// 与 adoption 代理同一红线：本代理路径绝不加入 securityBypassPath。
+	mux.HandleFunc("/api/agents/{host_id}/integrations/{rest...}", a.proxyAgentIntegrations)
+
 	// Ingress 入口配置
 	mux.HandleFunc("GET /api/projects/{id}/ingress", a.listProjectIngress)
 	mux.HandleFunc("POST /api/projects/{id}/ingress", a.createProjectIngress)
