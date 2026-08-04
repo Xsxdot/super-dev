@@ -122,9 +122,23 @@ func integrationPathAllowed(home, candidate string) (string, error) {
 }
 
 // integrationDeleteAllowed 是删除操作的窄白名单：仅允许各智能体 skill 目录树
-// 下名为 superdev 或 superdev.* 前缀（临时/备份目录）的目录，且该目录必须是
-// 命中的白名单根下 skills 目录的直接子项（<root>/skills/<name>），不接受更深
-// 或更浅的嵌套。
+// 下名为 superdev 或 superdev.* 前缀（临时/备份目录）的目录，且该目录必须落在
+// 命中的白名单根下的 skills 目录之内，即 cleaned 以 <root>/skills/ 为前缀
+// （skills 必须紧跟在根之后）。注意这条前缀检查不限制 skills 之下的嵌套深度
+// ——<root>/skills/a/b/superdev 只要最终 basename 满足要求同样会放行；它真正
+// 排除的是 skills 不紧跟在根之后（如 .claude/x/skills/y/superdev）、或
+// "skills" 出现在其它子目录名之后的伪装路径（如
+// .claude/superdev/skills/superdev.bak）。
+//
+// 返回值经 integrationPathAllowed 解析符号链接：如果 candidate 末段自身是一个
+// 指向白名单根内其它目录的符号链接（例如 .claude/skills/superdev 是指向
+// .claude/important 的软链，basename 恰好满足 superdev 前缀要求），返回值会是
+// 解析后的真实目标路径，而不是这个符号链接本身。调用方对返回值做
+// os.RemoveAll 时因此会递归删除真实目标的全部内容，而不是像早期实现那样仅仅
+// 摘除符号链接本身——这是符号链接收敛修复带来的行为变化。删除范围仍被限制在
+// 白名单根内（且本通道自身不提供创建符号链接的能力，需要预先在远端机器上布好
+// 链接才能触发），但调用方需要清楚：实际删除的是解析后的目标，其 basename 未
+// 必是 superdev*。
 func integrationDeleteAllowed(home, candidate string) (string, error) {
 	resolved, err := integrationPathAllowed(home, candidate)
 	if err != nil {
@@ -144,9 +158,11 @@ func integrationDeleteAllowed(home, candidate string) (string, error) {
 		// 仅作防御性兜底。
 		return "", errIntegrationPathDenied
 	}
-	// 必须是 <matchedRoot>/skills/ 的直接前缀，而不是路径中任意位置出现
-	// "/skills/"子串——否则 .claude/x/skills/y/superdev 或
-	// .claude/superdev/skills/superdev.bak 这类嵌套/伪装路径会被误放行。
+	// 必须以 <matchedRoot>/skills/ 为前缀（skills 紧跟在命中的根之后），而不
+	// 是路径中任意位置出现 "/skills/" 子串——否则 .claude/x/skills/y/superdev
+	// （skills 未紧跟根）或 .claude/superdev/skills/superdev.bak（skills 出现
+	// 在其它子目录名之后）这类路径会被误放行。skills 之下本身允许任意深度嵌
+	// 套，最终是否放行只取决于上面的 basename 判断。
 	skillsPrefix := matchedRoot + string(filepath.Separator) + "skills" + string(filepath.Separator)
 	if !strings.HasPrefix(cleaned, skillsPrefix) {
 		return "", errIntegrationPathDenied

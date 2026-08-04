@@ -4,8 +4,9 @@
 //   - 覆盖 integrationPathAllowed 的矩阵用例：合法白名单根、根不在白名单、
 //     ".." 逃逸、前缀边界（".claudex" 不是 ".claude"）、绝对/相对路径、
 //     根自身符号链接逃逸、根内部（中间目录）符号链接逃逸
-//   - 覆盖 integrationDeleteAllowed 的窄删除白名单：仅 skills/ 下的
-//     superdev / superdev.* 直接子目录可删，skill 根、配置文件、嵌套/伪装
+//   - 覆盖 integrationDeleteAllowed 的窄删除白名单：仅命中根下 skills/ 目录
+//     之内（允许任意嵌套深度）basename 为 superdev / superdev.* 的路径可
+//     删，skill 根、配置文件、非法 basename、skills 未紧跟根的嵌套/伪装
 //     路径、经符号链接的逃逸删除均不可删
 //
 // 边界：
@@ -58,6 +59,19 @@ func TestIntegrationPathAllowedRejectsRelativeEvenWhenCwdIsHome(t *testing.T) {
 	}
 }
 
+// TestIntegrationPathAllowedRejectsFullyRelativeInputs 用相对 home 配相对
+// candidate 真正钉住 IsAbs 门禁本身（补齐上一轮遗留：上面那条 cwd==home 的
+// 测试实际钉住的是"cwd 隐式转绝对路径"这另一种变异，删掉 IsAbs 门禁本身依然
+// 让它保持绿）。当 home 与 candidate 都是相对路径（"."、".claude/..."）时，
+// matchIntegrationRoot 里 rootAbs := filepath.Join(home, root) 算出的也是相
+// 对路径，字符串前缀比较（cleaned 是否以 rootAbs+分隔符 为前缀）在两侧都相对
+// 的情况下照样成立——如果去掉 IsAbs 门禁，这条调用会被放行（err == nil）。
+func TestIntegrationPathAllowedRejectsFullyRelativeInputs(t *testing.T) {
+	if _, err := integrationPathAllowed(".", ".claude/settings.json"); !errors.Is(err, errIntegrationPathDenied) {
+		t.Fatalf("relative candidate must be denied even with relative home, got err=%v", err)
+	}
+}
+
 // TestIntegrationPathAllowedSymlinkEscape 验证白名单根自身是符号链接时的逃逸拦截。
 func TestIntegrationPathAllowedSymlinkEscape(t *testing.T) {
 	home := t.TempDir()
@@ -94,8 +108,9 @@ func TestIntegrationPathAllowedIntermediateSymlinkEscape(t *testing.T) {
 	}
 }
 
-// TestIntegrationDeleteAllowed 覆盖删除白名单：仅 <root>/skills/ 下 superdev(.*)
-// 的直接子目录可删。
+// TestIntegrationDeleteAllowed 覆盖删除白名单：仅命中根下 skills/ 目录之内
+// （skills 必须紧跟在根之后，其下允许任意嵌套深度）、basename 满足
+// superdev/superdev.* 的路径可删。
 func TestIntegrationDeleteAllowed(t *testing.T) {
 	home := t.TempDir()
 	if _, err := integrationDeleteAllowed(home, filepath.Join(home, ".claude/skills/superdev")); err != nil {
@@ -108,8 +123,9 @@ func TestIntegrationDeleteAllowed(t *testing.T) {
 		filepath.Join(home, ".claude/skills"),        // skill 根本身不可删
 		filepath.Join(home, ".claude/settings.json"), // 配置文件不可删
 		filepath.Join(home, ".claude"),
-		filepath.Join(home, ".claude/superdev"),                     // basename 合法但不在 skills/ 下——钉住 /skills/ 分支本身
-		filepath.Join(home, ".claude/x/skills/y/superdev"),          // skills 不是根的直接子目录，嵌套过深
+		filepath.Join(home, ".claude/skills/notsuperdev"),           // 落在 skills/ 下但 basename 不合法——钉住 basename 分支本身
+		filepath.Join(home, ".claude/superdev"),                     // basename 合法但不在 skills/ 下——钉住 /skills/ 前缀分支本身
+		filepath.Join(home, ".claude/x/skills/y/superdev"),          // skills 未紧跟根（中间多了 x），不是"根之后紧跟 skills"
 		filepath.Join(home, ".claude/superdev/skills/superdev.bak"), // 伪装：skills 出现在路径中但不紧跟根
 	} {
 		if _, err := integrationDeleteAllowed(home, bad); err == nil {
