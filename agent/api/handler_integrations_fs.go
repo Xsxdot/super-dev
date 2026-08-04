@@ -1,0 +1,538 @@
+// handler_integrations_fs.go 实现远端编程智能体接入的受限文件读写端点。
+//
+// 职责：
+//   - 提供 stat/read/list/write/rename/write-batch/delete 七个哑的、白名单
+//     约束的文件原语，专供桌面端 connector（Rust `RemoteAgentFs`，Task 8）
+//     远端安装 MCP 配置 / skill / session hook 时使用
+//   - 所有 I/O 一律基于 integrations_paths.go（Task 2）提供的
+//     integrationPathAllowed / integrationDeleteAllowed 的返回值执行，不接受
+//     调用方声称的原始路径直接落地
+//
+// 边界：
+//   - 白名单外一律 403，不解释语义、不做任何智能体方言的配置合并——方言知识
+//     全部在桌面端 Rust，本文件只提供哑的文件原语
+//   - 不代理到远端机器（那是 Task 5 的职责）；本文件的端点只处理「运行本端点
+//     这台机器」自己的文件
+//   - 不把文件内容写进日志；日志只记路径、字节数、Principal
+package api
+
+import (
+	"encoding/json"
+	"io"
+	"io/fs"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// integrationsFsMaxReadBytes 是 read 端点允许返回的单文件内容上限。
+const integrationsFsMaxReadBytes = 1 << 20 // 1MB
+
+// integrationsFsMaxWriteBytes 是 write 端点允许写入的单文件内容上限，与
+// integrationsFsMaxReadBytes 保持一致（配置类小文件的合理上限）。
+const integrationsFsMaxWriteBytes = 1 << 20 // 1MB
+
+// integrationsFsMaxListEntries 是 list 端点单次遍历允许返回的最大条目数，
+// 超过即视为异常大目录，413 拒绝，避免受限通道被用来枚举巨型目录耗尽资源。
+const integrationsFsMaxListEntries = 1000
+
+// integrationsFsWriteBatchMaxFiles 是 write-batch 单批次允许的最大文件数。
+const integrationsFsWriteBatchMaxFiles = 100
+
+// integrationsFsWriteBatchMaxBytes 是 write-batch 单批次全部文件内容之和的
+// 上限，对应 skill 目录整体安装场景（几十个文件、几百 KB～数 MB）。
+const integrationsFsWriteBatchMaxBytes = 4 << 20 // 4MB
+
+// integrationsHome 返回受限文件端点用于白名单校验的 home 根目录。
+//
+// 默认取 os.UserHomeDir()；测试经 App.integrationsHomeOverride 覆盖为
+// t.TempDir()，避免测试真的读写运行测试的开发机的真实 home 目录。生产环境
+// 该字段恒为空串，回退到真实 home。
+func (a *App) integrationsHome() (string, error) {
+	if a.integrationsHomeOverride != "" {
+		return a.integrationsHomeOverride, nil
+	}
+	return os.UserHomeDir()
+}
+
+// integrationsFsStat 处理 GET /api/integrations/fs/stat：返回白名单内路径的
+// 存在性/类型/大小，供桌面端判断目标文件当前状态。
+func (a *App) integrationsFsStat(w http.ResponseWriter, r *http.Request) {
+	rawPath := r.URL.Query().Get("path")
+	home, err := a.integrationsHome()
+	if err != nil {
+		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
+		jsonError(w, http.StatusInternalServerError, "resolve home failed")
+		return
+	}
+	target, err := integrationPathAllowed(home, rawPath)
+	if err != nil {
+		name, _, _ := principalFromRequest(r)
+		log.Printf("[SuperDev] integrations: stat 被白名单拒绝 path=%s by=%s", rawPath, name)
+		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+		return
+	}
+	info, statErr := os.Stat(target)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			jsonOK(w, map[string]any{"exists": false, "is_dir": false, "size": int64(0)})
+			return
+		}
+		log.Printf("[SuperDev] integrations: stat 失败 path=%s：%v", target, statErr)
+		jsonError(w, http.StatusInternalServerError, "stat failed")
+		return
+	}
+	jsonOK(w, map[string]any{"exists": true, "is_dir": info.IsDir(), "size": info.Size()})
+}
+
+// integrationsFsRead 处理 GET /api/integrations/fs/read：读取白名单内文件内容。
+//
+// 目标不存在时返回 200 + {exists:false}，而不是 404——桌面端在探测「这个配置
+// 文件是否已存在」时这是常见路径，不应该被当成错误处理。内容 >1MB 返回 413。
+func (a *App) integrationsFsRead(w http.ResponseWriter, r *http.Request) {
+	rawPath := r.URL.Query().Get("path")
+	home, err := a.integrationsHome()
+	if err != nil {
+		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
+		jsonError(w, http.StatusInternalServerError, "resolve home failed")
+		return
+	}
+	target, err := integrationPathAllowed(home, rawPath)
+	if err != nil {
+		name, _, _ := principalFromRequest(r)
+		log.Printf("[SuperDev] integrations: 读取被白名单拒绝 path=%s by=%s", rawPath, name)
+		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+		return
+	}
+	f, openErr := os.Open(target)
+	if openErr != nil {
+		if os.IsNotExist(openErr) {
+			jsonOK(w, map[string]any{"exists": false})
+			return
+		}
+		log.Printf("[SuperDev] integrations: 打开文件失败 path=%s：%v", target, openErr)
+		jsonError(w, http.StatusInternalServerError, "read failed")
+		return
+	}
+	defer f.Close()
+	info, statErr := f.Stat()
+	if statErr != nil {
+		log.Printf("[SuperDev] integrations: 读取前 stat 失败 path=%s：%v", target, statErr)
+		jsonError(w, http.StatusInternalServerError, "read failed")
+		return
+	}
+	if info.IsDir() {
+		log.Printf("[SuperDev] integrations: 读取目标是目录 path=%s", target)
+		jsonError(w, http.StatusBadRequest, "path is a directory")
+		return
+	}
+	// 读到上限+1 字节即可判断是否超限，不依赖 Stat 返回的 Size——避免和并发
+	// 写入造成的大小竞态耦合，也省一次系统调用。
+	data, readErr := io.ReadAll(io.LimitReader(f, integrationsFsMaxReadBytes+1))
+	if readErr != nil {
+		log.Printf("[SuperDev] integrations: 读取失败 path=%s：%v", target, readErr)
+		jsonError(w, http.StatusInternalServerError, "read failed")
+		return
+	}
+	if len(data) > integrationsFsMaxReadBytes {
+		log.Printf("[SuperDev] integrations: 读取内容过大 path=%s", target)
+		jsonError(w, http.StatusRequestEntityTooLarge, "content too large")
+		return
+	}
+	jsonOK(w, map[string]string{"content": string(data)})
+}
+
+// integrationsFsList 处理 GET /api/integrations/fs/list：递归列出白名单内目录
+// 下所有文件的相对路径（相对于查询目录本身，正斜杠归一 + 排序），供桌面端做
+// skill 目录内容比对（判断是否已安装/是否需要更新）。
+//
+// 目标目录不存在时视为空目录（skill 尚未安装是常见路径，不是错误）；条目数
+// 超过上限返回 413，避免受限通道被用来枚举巨型目录耗尽资源。
+func (a *App) integrationsFsList(w http.ResponseWriter, r *http.Request) {
+	rawPath := r.URL.Query().Get("path")
+	home, err := a.integrationsHome()
+	if err != nil {
+		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
+		jsonError(w, http.StatusInternalServerError, "resolve home failed")
+		return
+	}
+	target, err := integrationPathAllowed(home, rawPath)
+	if err != nil {
+		name, _, _ := principalFromRequest(r)
+		log.Printf("[SuperDev] integrations: list 被白名单拒绝 path=%s by=%s", rawPath, name)
+		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+		return
+	}
+	if _, statErr := os.Stat(target); statErr != nil {
+		if os.IsNotExist(statErr) {
+			jsonOK(w, map[string]any{"files": []string{}})
+			return
+		}
+		log.Printf("[SuperDev] integrations: list stat 失败 path=%s：%v", target, statErr)
+		jsonError(w, http.StatusInternalServerError, "stat failed")
+		return
+	}
+
+	files := make([]string, 0, 64)
+	tooMany := false
+	walkErr := filepath.WalkDir(target, func(p string, d fs.DirEntry, walkEntryErr error) error {
+		if walkEntryErr != nil {
+			return walkEntryErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(target, p)
+		if relErr != nil {
+			return relErr
+		}
+		files = append(files, filepath.ToSlash(rel))
+		if len(files) > integrationsFsMaxListEntries {
+			tooMany = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if tooMany {
+		log.Printf("[SuperDev] integrations: list 条目数超限 path=%s", target)
+		jsonError(w, http.StatusRequestEntityTooLarge, "too many entries")
+		return
+	}
+	if walkErr != nil {
+		log.Printf("[SuperDev] integrations: list 遍历失败 path=%s：%v", target, walkErr)
+		jsonError(w, http.StatusInternalServerError, "list failed")
+		return
+	}
+	sort.Strings(files)
+	jsonOK(w, map[string]any{"files": files})
+}
+
+// integrationsFsWrite 处理 PUT /api/integrations/fs/write：白名单内原子写，可选备份。
+func (a *App) integrationsFsWrite(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+		Backup  bool   `json:"backup"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Content) > integrationsFsMaxWriteBytes {
+		jsonError(w, http.StatusRequestEntityTooLarge, "content too large")
+		return
+	}
+	home, err := a.integrationsHome()
+	if err != nil {
+		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
+		jsonError(w, http.StatusInternalServerError, "resolve home failed")
+		return
+	}
+	target, err := integrationPathAllowed(home, req.Path)
+	if err != nil {
+		name, _, _ := principalFromRequest(r)
+		log.Printf("[SuperDev] integrations: 写入被白名单拒绝 path=%s by=%s", req.Path, name)
+		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		log.Printf("[SuperDev] integrations: 创建父目录失败 path=%s：%v", target, err)
+		jsonError(w, http.StatusInternalServerError, "mkdir failed")
+		return
+	}
+	backupPath := ""
+	if req.Backup {
+		if _, statErr := os.Stat(target); statErr == nil {
+			// 只在目标已存在时才有旧内容可备份；命名规则见 integrationBackupPath
+			// 头注释，必须与桌面端 Rust backup_path() 逐字节一致。
+			backupPath = integrationBackupPath(target)
+			if err := copyFile(target, backupPath); err != nil {
+				log.Printf("[SuperDev] integrations: 备份失败 path=%s：%v", target, err)
+				jsonError(w, http.StatusInternalServerError, "backup failed")
+				return
+			}
+		}
+	}
+	if err := atomicWriteFile(target, []byte(req.Content), 0o644); err != nil {
+		log.Printf("[SuperDev] integrations: 原子写失败 path=%s：%v", target, err)
+		jsonError(w, http.StatusInternalServerError, "write failed")
+		return
+	}
+	name, _, _ := principalFromRequest(r)
+	log.Printf("[SuperDev] integrations: 已写入 path=%s bytes=%d backup=%v by=%s",
+		target, len(req.Content), backupPath != "", name)
+	jsonOK(w, map[string]string{"backup_path": backupPath})
+}
+
+// integrationsFsRename 处理 POST /api/integrations/fs/rename：把 from 改名为
+// to，供 connector 安装流程做「旧 skill 目录备份/失败恢复」使用。
+//
+// from 与 to 必须分别独立通过白名单校验——只校验其中一侧会让另一侧成为越权
+// 读写的后门（例如把白名单外的任意文件 rename 进白名单根，或反过来把白名单
+// 内的文件 rename 到白名单外）。
+func (a *App) integrationsFsRename(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	home, err := a.integrationsHome()
+	if err != nil {
+		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
+		jsonError(w, http.StatusInternalServerError, "resolve home failed")
+		return
+	}
+	fromTarget, err := integrationPathAllowed(home, req.From)
+	if err != nil {
+		name, _, _ := principalFromRequest(r)
+		log.Printf("[SuperDev] integrations: rename 源路径被白名单拒绝 from=%s by=%s", req.From, name)
+		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+		return
+	}
+	toTarget, err := integrationPathAllowed(home, req.To)
+	if err != nil {
+		name, _, _ := principalFromRequest(r)
+		log.Printf("[SuperDev] integrations: rename 目标路径被白名单拒绝 to=%s by=%s", req.To, name)
+		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(toTarget), 0o755); err != nil {
+		log.Printf("[SuperDev] integrations: rename 创建目标父目录失败 to=%s：%v", toTarget, err)
+		jsonError(w, http.StatusInternalServerError, "mkdir failed")
+		return
+	}
+	if err := os.Rename(fromTarget, toTarget); err != nil {
+		log.Printf("[SuperDev] integrations: rename 失败 from=%s to=%s：%v", fromTarget, toTarget, err)
+		jsonError(w, http.StatusInternalServerError, "rename failed")
+		return
+	}
+	name, _, _ := principalFromRequest(r)
+	log.Printf("[SuperDev] integrations: 已 rename from=%s to=%s by=%s", fromTarget, toTarget, name)
+	jsonOK(w, map[string]string{})
+}
+
+// integrationsFsWriteBatchFile 是 write-batch 请求体里单个文件项。
+type integrationsFsWriteBatchFile struct {
+	RelPath    string `json:"rel_path"`
+	Content    string `json:"content"`
+	Executable bool   `json:"executable"`
+}
+
+// integrationsFsWriteBatch 处理 PUT /api/integrations/fs/write-batch：在 dir 下
+// 批量原子写入多个文件，供 skill 目录整体安装使用。
+//
+// 两阶段设计：
+//  1. 全量校验（文件数上限、总字节上限、每个 rel_path 格式 + 拼接后的白名单
+//     校验）——任一项不过，整批拒绝、不落盘任何内容，避免半成品状态。
+//  2. 依次原子写——某一项 I/O 失败时中止，返回 500 与已成功写入的 rel_path
+//     清单，供调用方知道磁盘当前的真实状态（此时必然是部分完成，本端点不做
+//     自动回滚，恢复策略是调用方职责）。
+func (a *App) integrationsFsWriteBatch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Dir   string                         `json:"dir"`
+		Files []integrationsFsWriteBatchFile `json:"files"`
+	}
+	// 6MB 请求体上限：略高于内容 4MB 硬上限，留出 JSON 结构、字段名、字符串
+	// 转义的余量；真正的内容上限由下面的 totalBytes 检查负责。
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 6<<20)).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Files) > integrationsFsWriteBatchMaxFiles {
+		log.Printf("[SuperDev] integrations: write-batch 文件数超限 dir=%s count=%d", req.Dir, len(req.Files))
+		jsonError(w, http.StatusBadRequest, "too many files")
+		return
+	}
+	totalBytes := 0
+	for _, f := range req.Files {
+		totalBytes += len(f.Content)
+	}
+	if totalBytes > integrationsFsWriteBatchMaxBytes {
+		log.Printf("[SuperDev] integrations: write-batch 总字节超限 dir=%s bytes=%d", req.Dir, totalBytes)
+		jsonError(w, http.StatusRequestEntityTooLarge, "content too large")
+		return
+	}
+	home, err := a.integrationsHome()
+	if err != nil {
+		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
+		jsonError(w, http.StatusInternalServerError, "resolve home failed")
+		return
+	}
+	name, _, _ := principalFromRequest(r)
+
+	if _, err := integrationPathAllowed(home, req.Dir); err != nil {
+		log.Printf("[SuperDev] integrations: write-batch dir 被白名单拒绝 dir=%s by=%s", req.Dir, name)
+		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+		return
+	}
+
+	// 阶段一：全量校验。targets 与 req.Files 按下标一一对应，全部通过后才
+	// 进入阶段二的实际写入。
+	targets := make([]string, len(req.Files))
+	for i, f := range req.Files {
+		if !integrationRelPathSafe(f.RelPath) {
+			log.Printf("[SuperDev] integrations: write-batch rel_path 非法 dir=%s rel_path=%s by=%s", req.Dir, f.RelPath, name)
+			jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+			return
+		}
+		// 拼接后必须再过一次白名单：dir 本身合法不代表 dir 内部某个已存在的
+		// 名字不是指向白名单外的符号链接——integrationPathAllowed 对已存在
+		// 祖先的 EvalSymlinks 收敛正是为了拦住这种情况，只做字符串层面的
+		// rel_path 检查（上面的 integrationRelPathSafe）拦不住。
+		candidate := filepath.Join(req.Dir, filepath.FromSlash(f.RelPath))
+		target, err := integrationPathAllowed(home, candidate)
+		if err != nil {
+			log.Printf("[SuperDev] integrations: write-batch 目标被白名单拒绝 dir=%s rel_path=%s by=%s", req.Dir, f.RelPath, name)
+			jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+			return
+		}
+		targets[i] = target
+	}
+
+	// 阶段二：依次原子写。written 记录已成功的 rel_path，供中途失败时回显。
+	written := make([]string, 0, len(req.Files))
+	for i, f := range req.Files {
+		mode := os.FileMode(0o644)
+		if f.Executable {
+			mode = 0o755
+		}
+		if err := os.MkdirAll(filepath.Dir(targets[i]), 0o755); err != nil {
+			log.Printf("[SuperDev] integrations: write-batch 创建父目录失败 path=%s：%v", targets[i], err)
+			jsonWrite(w, http.StatusInternalServerError, map[string]any{"error": "mkdir failed", "written": written})
+			return
+		}
+		if err := atomicWriteFile(targets[i], []byte(f.Content), mode); err != nil {
+			log.Printf("[SuperDev] integrations: write-batch 写入失败 path=%s：%v", targets[i], err)
+			jsonWrite(w, http.StatusInternalServerError, map[string]any{"error": "write failed", "written": written})
+			return
+		}
+		written = append(written, f.RelPath)
+	}
+	log.Printf("[SuperDev] integrations: write-batch 完成 dir=%s files=%d bytes=%d by=%s", req.Dir, len(req.Files), totalBytes, name)
+	jsonOK(w, map[string]any{"written": written})
+}
+
+// integrationRelPathSafe 校验 write-batch 单个 rel_path 的基本格式：非空、
+// 不以 "/" 开头（不允许伪装成绝对路径）、不含 ".." 路径段（不允许跳出 dir
+// 本身）。这只是格式层面的快速失败；真正的越权屏障仍是随后对拼接结果调用的
+// integrationPathAllowed（拦住 dir 内部符号链接逃逸这类字符串检查发现不了的
+// 情况）。
+func integrationRelPathSafe(relPath string) bool {
+	if relPath == "" || strings.HasPrefix(relPath, "/") {
+		return false
+	}
+	for _, segment := range strings.Split(relPath, "/") {
+		if segment == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// integrationsFsDelete 处理 DELETE /api/integrations/fs：递归删除窄白名单内的
+// 目录，供卸载流程清理远端 skill 安装。窄白名单语义见
+// integrations_paths.go 的 integrationDeleteAllowed 头注释——仅放行各智能体
+// skill 目录树下名为 superdev 或 superdev.* 的目录，不是 write 端点用的宽
+// 白名单。
+func (a *App) integrationsFsDelete(w http.ResponseWriter, r *http.Request) {
+	rawPath := r.URL.Query().Get("path")
+	home, err := a.integrationsHome()
+	if err != nil {
+		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
+		jsonError(w, http.StatusInternalServerError, "resolve home failed")
+		return
+	}
+	target, err := integrationDeleteAllowed(home, rawPath)
+	if err != nil {
+		name, _, _ := principalFromRequest(r)
+		log.Printf("[SuperDev] integrations: 删除被白名单拒绝 path=%s by=%s", rawPath, name)
+		jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "path not allowed", nil)
+		return
+	}
+	if err := os.RemoveAll(target); err != nil {
+		log.Printf("[SuperDev] integrations: 删除失败 path=%s：%v", target, err)
+		jsonError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
+	name, _, _ := principalFromRequest(r)
+	log.Printf("[SuperDev] integrations: 已删除 path=%s by=%s", target, name)
+	jsonOK(w, map[string]string{})
+}
+
+// integrationBackupPath 按目标路径算出备份文件路径。
+//
+// 扩展名规则与桌面端 Rust backup_path() 逐字节一致：有扩展名 →
+// "<name>.<ext>.superdev-bak"；无扩展名 → "<name>.superdev-bak"。这是
+// 一条跨语言契约，本地/远端安装产生的备份文件名必须相同。
+//
+// 扩展名判定复刻 Rust std::path::Path::extension() 的语义，而不是 Go 标准库
+// filepath.Ext：filepath.Ext(".bashrc") 会把整个 ".bashrc" 当成扩展名，但
+// Rust 对「文件名以 '.' 开头且内部没有其它 '.'」的隐藏文件视为无扩展名——
+// 两者对隐藏文件的判定不同，必须手写以保证与桌面端一致。
+func integrationBackupPath(target string) string {
+	dir := filepath.Dir(target)
+	base := filepath.Base(target)
+	ext := integrationFileExtensionRustStyle(base)
+	if ext == "" {
+		return filepath.Join(dir, base+".superdev-bak")
+	}
+	stem := base[:len(base)-len(ext)-1] // -1 去掉扩展名前的那个 '.'
+	return filepath.Join(dir, stem+"."+ext+".superdev-bak")
+}
+
+// integrationFileExtensionRustStyle 复刻 Rust Path::extension() 的语义：
+//   - 没有 '.' → 无扩展名
+//   - 以 '.' 开头且这是文件名里唯一的 '.'（如 ".bashrc"）→ 无扩展名
+//   - 否则 → 最后一个 '.' 之后的部分
+func integrationFileExtensionRustStyle(name string) string {
+	idx := strings.LastIndex(name, ".")
+	if idx <= 0 {
+		// idx == -1：没有点；idx == 0：唯一的点在开头（LastIndex 已经是
+		// "最后一个"，如果后面还有点，idx 会 > 0）——两种情况都是无扩展名。
+		return ""
+	}
+	return name[idx+1:]
+}
+
+// atomicWriteFile 把 content 写入 path：先在同目录写一个临时文件，再
+// rename 替换目标——rename 在同一文件系统内是原子操作，避免进程崩溃或并发
+// 读取看到半份内容。
+func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".integrations-fs-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	// 任何提前返回路径都要清理残留 tmp 文件；rename 成功后 tmpPath 已不存在，
+	// Remove 返回的 ENOENT 被忽略（defer 不检查返回值是有意的）。
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+// copyFile 把 src 的内容原样复制到 dst（备份用途），不保留 src 的权限位——
+// 备份文件统一按 0o600 落盘：配置文件里可能含用户为其它 MCP server 配置的
+// API key，宁紧勿松。
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o600)
+}

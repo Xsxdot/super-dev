@@ -299,6 +299,10 @@ type App struct {
 	// listenAddr 保存 Serve 实际监听的地址（ln.Addr().String()），供
 	// agentSelfLaunchSpec 解析出本机 loopback URL 的端口部分。
 	listenAddr string
+	// integrationsHomeOverride 仅供包内测试覆盖受限文件端点（Task 4）使用的
+	// home 根目录（通常赋值为 t.TempDir()），避免测试真的读写开发机的真实
+	// home 目录。生产环境恒为空串，integrationsHome 回退到 os.UserHomeDir。
+	integrationsHomeOverride string
 }
 
 // NewApp 创建并初始化 App 实例。
@@ -837,6 +841,17 @@ func (a *App) Handler() http.Handler {
 	// 远端编程智能体接入（Task 3）：detect 是接入流程第一步，只读，受
 	// withSecurity 保护——不进 securityBypassPath 白名单，匿名请求必须 401。
 	mux.HandleFunc("POST /api/integrations/detect", a.integrationsDetect)
+
+	// 远端编程智能体接入（Task 4）：受限文件读写六端点，专供桌面端 connector
+	// 远端安装场景使用。全部经 integrationPathAllowed / integrationDeleteAllowed
+	// 白名单校验；同样不进 securityBypassPath，匿名请求必须 401。
+	mux.HandleFunc("GET /api/integrations/fs/stat", a.integrationsFsStat)
+	mux.HandleFunc("GET /api/integrations/fs/read", a.integrationsFsRead)
+	mux.HandleFunc("GET /api/integrations/fs/list", a.integrationsFsList)
+	mux.HandleFunc("PUT /api/integrations/fs/write", a.integrationsFsWrite)
+	mux.HandleFunc("POST /api/integrations/fs/rename", a.integrationsFsRename)
+	mux.HandleFunc("PUT /api/integrations/fs/write-batch", a.integrationsFsWriteBatch)
+	mux.HandleFunc("DELETE /api/integrations/fs", a.integrationsFsDelete)
 
 	// Ingress 入口配置
 	mux.HandleFunc("GET /api/projects/{id}/ingress", a.listProjectIngress)

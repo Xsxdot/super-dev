@@ -1,0 +1,575 @@
+// handler_integrations_fs_test.go 覆盖受限文件六端点（Task 4）。
+//
+// 职责：
+//   - 验证 stat/read/list/write/rename/write-batch/delete 的成功路径契约字段
+//   - 验证每个端点至少一条白名单外 403 用例，覆盖 `..` 逃逸与符号链接逃逸
+//   - 验证 write-batch 的文件数/总字节上限、rel_path 格式校验
+//   - 验证 delete 窄白名单（仅 skills/superdev* 放行）
+//   - 验证匿名请求 401（鉴权红线，任选一端点覆盖即可，其余端点共用同一中间件）
+//
+// 边界：
+//   - 不覆盖 Task 5 的跨机代理，那不属于本文件范围
+//   - home 全部经 App.integrationsHomeOverride 注入 t.TempDir()，不触达开发机
+//     真实 home 目录
+package api
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// newIntegrationsFsTestApp 创建一个 home 指向 t.TempDir() 的测试 App，避免受限
+// 文件端点的测试触达运行测试的开发机真实 home 目录。
+func newIntegrationsFsTestApp(t *testing.T) (*App, string) {
+	t.Helper()
+	app := newTestAppForPackage(t)
+	home := t.TempDir()
+	app.integrationsHomeOverride = home
+	return app, home
+}
+
+// fsQuery 拼出形如 "/api/integrations/fs/stat?path=..." 的请求路径，负责
+// URL 转义，避免测试里因为手写转义漏字符导致假阳性/假阴性。
+func fsQuery(endpoint, path string) string {
+	v := url.Values{}
+	v.Set("path", path)
+	return endpoint + "?" + v.Encode()
+}
+
+func doWriteRequest(t *testing.T, app *App, path, content string, backup bool) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"path": path, "content": content, "backup": backup})
+	require.NoError(t, err)
+	return httptestDo(t, app, http.MethodPut, "/api/integrations/fs/write", bytes.NewReader(body))
+}
+
+// integrationsFsWriteBatchFileForTest 镜像请求体里单个文件项，供测试构造 body。
+type integrationsFsWriteBatchFileForTest struct {
+	RelPath    string `json:"rel_path"`
+	Content    string `json:"content"`
+	Executable bool   `json:"executable"`
+}
+
+func doWriteBatchRequest(t *testing.T, app *App, dir string, files []integrationsFsWriteBatchFileForTest) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"dir": dir, "files": files})
+	require.NoError(t, err)
+	return httptestDo(t, app, http.MethodPut, "/api/integrations/fs/write-batch", bytes.NewReader(body))
+}
+
+// TestIntegrationsFsWriteReadStatListRoundTrip 覆盖 brief Step 1 的核心往返场景：
+// write 一个文件 → read 读回内容一致 → stat 报告 exists/is_dir/size 正确 →
+// list 能在父目录下枚举到这个相对路径。
+func TestIntegrationsFsWriteReadStatListRoundTrip(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "skills", "superdev", "SKILL.md")
+
+	writeResp := doWriteRequest(t, app, target, "hello skill", false)
+	require.Equal(t, http.StatusOK, writeResp.Code, writeResp.Body.String())
+	var writeOut struct {
+		BackupPath string `json:"backup_path"`
+	}
+	require.NoError(t, json.Unmarshal(writeResp.Body.Bytes(), &writeOut))
+	require.Empty(t, writeOut.BackupPath, "未要求备份时 backup_path 必须为空")
+
+	readResp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/read", target), nil)
+	require.Equal(t, http.StatusOK, readResp.Code)
+	var readOut struct {
+		Content string `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(readResp.Body.Bytes(), &readOut))
+	require.Equal(t, "hello skill", readOut.Content)
+
+	statResp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/stat", target), nil)
+	require.Equal(t, http.StatusOK, statResp.Code)
+	var statOut struct {
+		Exists bool  `json:"exists"`
+		IsDir  bool  `json:"is_dir"`
+		Size   int64 `json:"size"`
+	}
+	require.NoError(t, json.Unmarshal(statResp.Body.Bytes(), &statOut))
+	require.True(t, statOut.Exists)
+	require.False(t, statOut.IsDir)
+	require.Equal(t, int64(len("hello skill")), statOut.Size)
+
+	listResp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/list", filepath.Join(home, ".claude", "skills", "superdev")), nil)
+	require.Equal(t, http.StatusOK, listResp.Code)
+	var listOut struct {
+		Files []string `json:"files"`
+	}
+	require.NoError(t, json.Unmarshal(listResp.Body.Bytes(), &listOut))
+	require.Equal(t, []string{"SKILL.md"}, listOut.Files)
+}
+
+// TestIntegrationsFsStatReportsNotExists 覆盖 stat 对不存在路径的响应：exists=false。
+func TestIntegrationsFsStatReportsNotExists(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "does-not-exist.json")
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/stat", target), nil)
+	require.Equal(t, http.StatusOK, resp.Code)
+	var out struct {
+		Exists bool `json:"exists"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.False(t, out.Exists)
+}
+
+// TestIntegrationsFsStatRejectsPathOutsideWhitelist 覆盖 stat 的白名单外 403。
+func TestIntegrationsFsStatRejectsPathOutsideWhitelist(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".ssh", "authorized_keys")
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/stat", target), nil)
+	require.Equal(t, http.StatusForbidden, resp.Code)
+	require.Contains(t, resp.Body.String(), "path_not_allowed")
+}
+
+// TestIntegrationsFsReadReturnsExistsFalseWhenMissing 覆盖 read 对不存在文件
+// 返回 200 + {exists:false}，而不是 404——brief 契约明确写了这一点。
+func TestIntegrationsFsReadReturnsExistsFalseWhenMissing(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "missing.json")
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/read", target), nil)
+	require.Equal(t, http.StatusOK, resp.Code)
+	var out struct {
+		Exists bool `json:"exists"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.False(t, out.Exists)
+}
+
+// TestIntegrationsFsReadRejectsOversizedContent 覆盖 read 对 >1MB 内容返回 413。
+func TestIntegrationsFsReadRejectsOversizedContent(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	target := filepath.Join(dir, "big.json")
+	big := bytes.Repeat([]byte("a"), (1<<20)+1)
+	require.NoError(t, os.WriteFile(target, big, 0o644))
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/read", target), nil)
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+}
+
+// TestIntegrationsFsReadRejectsPathOutsideWhitelist 覆盖 read 的白名单外 403。
+func TestIntegrationsFsReadRejectsPathOutsideWhitelist(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, "Documents", "secret.txt")
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/read", target), nil)
+	require.Equal(t, http.StatusForbidden, resp.Code)
+}
+
+// TestIntegrationsFsReadRejectsDotDotEscape 覆盖 `..` 逃逸：candidate 字面路径
+// 经 Clean 后跳出白名单根，必须 403，而不是巧合地仍落在根内。
+func TestIntegrationsFsReadRejectsDotDotEscape(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "..", "..", "etc-like-outside.txt")
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/read", target), nil)
+	require.Equal(t, http.StatusForbidden, resp.Code)
+}
+
+// TestIntegrationsFsListReturnsEmptyWhenDirMissing 覆盖 list 对不存在目录返回
+// {files:[]}，而不是错误——skill 尚未安装是常见路径。
+func TestIntegrationsFsListReturnsEmptyWhenDirMissing(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "skills", "not-installed-yet")
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/list", target), nil)
+	require.Equal(t, http.StatusOK, resp.Code)
+	var out struct {
+		Files []string `json:"files"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Empty(t, out.Files)
+}
+
+// TestIntegrationsFsListSortsAndUsesForwardSlashes 覆盖多层目录场景下相对路径
+// 用正斜杠归一并排序输出。
+func TestIntegrationsFsListSortsAndUsesForwardSlashes(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	root := filepath.Join(home, ".claude", "skills", "superdev")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "hooks"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "SKILL.md"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "hooks", "session-start"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("x"), 0o644))
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/list", root), nil)
+	require.Equal(t, http.StatusOK, resp.Code)
+	var out struct {
+		Files []string `json:"files"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Equal(t, []string{"AGENTS.md", "SKILL.md", "hooks/session-start"}, out.Files)
+}
+
+// TestIntegrationsFsListRejectsTooManyEntries 覆盖 list >1000 条返回 413。
+func TestIntegrationsFsListRejectsTooManyEntries(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	root := filepath.Join(home, ".claude", "skills", "huge")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	for i := 0; i < 1001; i++ {
+		require.NoError(t, os.WriteFile(filepath.Join(root, "f"+strconv.Itoa(i)+".txt"), []byte("x"), 0o644))
+	}
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/list", root), nil)
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+}
+
+// TestIntegrationsFsListRejectsPathOutsideWhitelist 覆盖 list 的白名单外 403。
+func TestIntegrationsFsListRejectsPathOutsideWhitelist(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, "Downloads")
+
+	resp := httptestDo(t, app, http.MethodGet, fsQuery("/api/integrations/fs/list", target), nil)
+	require.Equal(t, http.StatusForbidden, resp.Code)
+}
+
+// TestIntegrationsFsWriteBackupNamingMatchesDesktopConvention 覆盖备份命名与
+// 桌面端 Rust backup_path() 的跨语言契约：settings.json → settings.json.superdev-bak。
+func TestIntegrationsFsWriteBackupNamingMatchesDesktopConvention(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "settings.json")
+
+	// 先写一版初始内容，backup 才有东西可备份（brief：backup 仅在目标已存在时生效）。
+	first := doWriteRequest(t, app, target, `{"v":1}`, false)
+	require.Equal(t, http.StatusOK, first.Code)
+
+	second := doWriteRequest(t, app, target, `{"v":2}`, true)
+	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
+	var out struct {
+		BackupPath string `json:"backup_path"`
+	}
+	require.NoError(t, json.Unmarshal(second.Body.Bytes(), &out))
+	require.Equal(t, "settings.json.superdev-bak", filepath.Base(out.BackupPath))
+
+	backupContent, err := os.ReadFile(out.BackupPath)
+	require.NoError(t, err)
+	require.Equal(t, `{"v":1}`, string(backupContent), "备份文件必须是写入前的旧内容")
+
+	newContent, err := os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, `{"v":2}`, string(newContent))
+}
+
+// TestIntegrationsFsWriteBackupNoExtension 覆盖无扩展名文件的备份命名：
+// <name>.superdev-bak（不带中间的扩展名段）。
+func TestIntegrationsFsWriteBackupNoExtension(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "CLAUDE")
+
+	require.Equal(t, http.StatusOK, doWriteRequest(t, app, target, "v1", false).Code)
+	resp := doWriteRequest(t, app, target, "v2", true)
+	require.Equal(t, http.StatusOK, resp.Code)
+	var out struct {
+		BackupPath string `json:"backup_path"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Equal(t, "CLAUDE.superdev-bak", filepath.Base(out.BackupPath))
+}
+
+// TestIntegrationsFsWriteSkipsBackupWhenTargetMissing 覆盖 backup=true 但目标
+// 尚不存在时，不产生 backup_path（没有旧内容可备份）。
+func TestIntegrationsFsWriteSkipsBackupWhenTargetMissing(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "fresh.json")
+
+	resp := doWriteRequest(t, app, target, `{"a":1}`, true)
+	require.Equal(t, http.StatusOK, resp.Code)
+	var out struct {
+		BackupPath string `json:"backup_path"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Empty(t, out.BackupPath)
+}
+
+// TestIntegrationsFsWriteRejectsOversizedContent 覆盖 write 对 >1MB content 返回 413。
+func TestIntegrationsFsWriteRejectsOversizedContent(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "big.json")
+	big := strings.Repeat("a", (1<<20)+1)
+
+	resp := doWriteRequest(t, app, target, big, false)
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+}
+
+// TestIntegrationsFsWriteRejectsPathOutsideWhitelist 覆盖 write 的白名单外 403。
+func TestIntegrationsFsWriteRejectsPathOutsideWhitelist(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".ssh", "authorized_keys")
+
+	resp := doWriteRequest(t, app, target, "pwned", false)
+	require.Equal(t, http.StatusForbidden, resp.Code)
+	require.Contains(t, resp.Body.String(), "path_not_allowed")
+}
+
+// TestIntegrationsFsWriteRejectsSymlinkEscape 覆盖符号链接逃逸：白名单根内一个
+// 指向 home 之外的符号链接，写入其下的文件必须仍然 403，而不是借道成功写到
+// 白名单根之外的真实目标。
+func TestIntegrationsFsWriteRejectsSymlinkEscape(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	outside := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
+	require.NoError(t, os.Symlink(outside, filepath.Join(home, ".claude", "escape")))
+
+	target := filepath.Join(home, ".claude", "escape", "pwned.txt")
+	resp := doWriteRequest(t, app, target, "pwned", false)
+	require.Equal(t, http.StatusForbidden, resp.Code)
+
+	_, statErr := os.Stat(filepath.Join(outside, "pwned.txt"))
+	require.True(t, os.IsNotExist(statErr), "符号链接逃逸必须被拦住，真实目标不应被写入")
+}
+
+// TestIntegrationsFsWriteAtomicNoTempFileLeftBehind 覆盖原子写不会在目标目录
+// 残留临时文件。
+func TestIntegrationsFsWriteAtomicNoTempFileLeftBehind(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude")
+	target := filepath.Join(dir, "atomic.json")
+
+	resp := doWriteRequest(t, app, target, "content", false)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "目标目录只应留下最终文件，不应残留 tmp 文件")
+	require.Equal(t, "atomic.json", entries[0].Name())
+}
+
+// TestIntegrationsFsRenameMovesFile 覆盖 rename 成功路径。
+func TestIntegrationsFsRenameMovesFile(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	from := filepath.Join(home, ".claude", "skills", "superdev")
+	to := filepath.Join(home, ".claude", "skills", "superdev.superdev-bak-1")
+	require.NoError(t, os.MkdirAll(from, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(from, "SKILL.md"), []byte("x"), 0o644))
+
+	body, err := json.Marshal(map[string]string{"from": from, "to": to})
+	require.NoError(t, err)
+	resp := httptestDo(t, app, http.MethodPost, "/api/integrations/fs/rename", bytes.NewReader(body))
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	_, statErr := os.Stat(from)
+	require.True(t, os.IsNotExist(statErr))
+	_, err = os.Stat(filepath.Join(to, "SKILL.md"))
+	require.NoError(t, err)
+}
+
+// TestIntegrationsFsRenameRejectsWhenFromOutsideWhitelist 覆盖 rename 的
+// from/to 双校验：from 在白名单外必须 403，即便 to 合法。
+func TestIntegrationsFsRenameRejectsWhenFromOutsideWhitelist(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	from := filepath.Join(home, ".ssh", "id_rsa")
+	to := filepath.Join(home, ".claude", "stolen")
+
+	body, err := json.Marshal(map[string]string{"from": from, "to": to})
+	require.NoError(t, err)
+	resp := httptestDo(t, app, http.MethodPost, "/api/integrations/fs/rename", bytes.NewReader(body))
+	require.Equal(t, http.StatusForbidden, resp.Code)
+}
+
+// TestIntegrationsFsRenameRejectsWhenToOutsideWhitelist 覆盖 rename 的
+// from/to 双校验：to 在白名单外必须 403，即便 from 合法——只校验一侧会让另一侧
+// 成为越权写入的后门。
+func TestIntegrationsFsRenameRejectsWhenToOutsideWhitelist(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	from := filepath.Join(home, ".claude", "skills", "superdev")
+	require.NoError(t, os.MkdirAll(from, 0o755))
+	to := filepath.Join(home, ".ssh", "authorized_keys")
+
+	body, err := json.Marshal(map[string]string{"from": from, "to": to})
+	require.NoError(t, err)
+	resp := httptestDo(t, app, http.MethodPost, "/api/integrations/fs/rename", bytes.NewReader(body))
+	require.Equal(t, http.StatusForbidden, resp.Code)
+
+	_, statErr := os.Stat(from)
+	require.NoError(t, statErr, "校验失败时不应发生任何改名")
+}
+
+// TestIntegrationsFsWriteBatchWritesAllFilesWithModes 覆盖 write-batch 成功路径：
+// 多个文件落盘、内容正确、executable 决定权限位。
+func TestIntegrationsFsWriteBatchWritesAllFilesWithModes(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude", "skills", "superdev")
+
+	resp := doWriteBatchRequest(t, app, dir, []integrationsFsWriteBatchFileForTest{
+		{RelPath: "SKILL.md", Content: "skill body"},
+		{RelPath: "hooks/session-start", Content: "#!/bin/sh\necho hi\n", Executable: true},
+	})
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var out struct {
+		Written []string `json:"written"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.ElementsMatch(t, []string{"SKILL.md", "hooks/session-start"}, out.Written)
+
+	skillContent, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, "skill body", string(skillContent))
+
+	hookInfo, err := os.Stat(filepath.Join(dir, "hooks", "session-start"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o755), hookInfo.Mode().Perm(), "executable=true 必须落地为 0755")
+
+	skillInfo, err := os.Stat(filepath.Join(dir, "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o644), skillInfo.Mode().Perm(), "非 executable 必须落地为 0644")
+}
+
+// TestIntegrationsFsWriteBatchRejectsTooManyFiles 覆盖 batch 上限：101 个文件 → 400。
+func TestIntegrationsFsWriteBatchRejectsTooManyFiles(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude", "skills", "superdev")
+
+	files := make([]integrationsFsWriteBatchFileForTest, 101)
+	for i := range files {
+		files[i] = integrationsFsWriteBatchFileForTest{RelPath: "f" + strconv.Itoa(i) + ".txt", Content: "x"}
+	}
+	resp := doWriteBatchRequest(t, app, dir, files)
+	require.Equal(t, http.StatusBadRequest, resp.Code)
+
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		require.Empty(t, entries, "校验失败必须整批拒绝，不写任何文件")
+	}
+}
+
+// TestIntegrationsFsWriteBatchAcceptsExactlyMaxFiles 覆盖边界：恰好 100 个文件
+// 必须成功（上限是 >100 才拒绝，不是 >=100）。
+func TestIntegrationsFsWriteBatchAcceptsExactlyMaxFiles(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude", "skills", "superdev")
+
+	files := make([]integrationsFsWriteBatchFileForTest, 100)
+	for i := range files {
+		files[i] = integrationsFsWriteBatchFileForTest{RelPath: "f" + strconv.Itoa(i) + ".txt", Content: "x"}
+	}
+	resp := doWriteBatchRequest(t, app, dir, files)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+}
+
+// TestIntegrationsFsWriteBatchRejectsRelPathWithDotDot 覆盖 rel_path 带 `..` → 403。
+func TestIntegrationsFsWriteBatchRejectsRelPathWithDotDot(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude", "skills", "superdev")
+
+	resp := doWriteBatchRequest(t, app, dir, []integrationsFsWriteBatchFileForTest{
+		{RelPath: "../../etc/passwd", Content: "pwned"},
+	})
+	require.Equal(t, http.StatusForbidden, resp.Code)
+	require.Contains(t, resp.Body.String(), "path_not_allowed")
+
+	_, statErr := os.Stat(filepath.Join(home, "etc", "passwd"))
+	require.True(t, os.IsNotExist(statErr))
+}
+
+// TestIntegrationsFsWriteBatchRejectsRelPathStartingWithSlash 覆盖 rel_path
+// 以 `/` 开头（伪装成绝对路径）必须 403。
+func TestIntegrationsFsWriteBatchRejectsRelPathStartingWithSlash(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude", "skills", "superdev")
+
+	resp := doWriteBatchRequest(t, app, dir, []integrationsFsWriteBatchFileForTest{
+		{RelPath: "/etc/passwd", Content: "pwned"},
+	})
+	require.Equal(t, http.StatusForbidden, resp.Code)
+}
+
+// TestIntegrationsFsWriteBatchRejectsDirOutsideWhitelist 覆盖 write-batch 的
+// 白名单外 403：dir 本身不在任何白名单根内。
+func TestIntegrationsFsWriteBatchRejectsDirOutsideWhitelist(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, "Documents", "not-whitelisted")
+
+	resp := doWriteBatchRequest(t, app, dir, []integrationsFsWriteBatchFileForTest{
+		{RelPath: "a.txt", Content: "x"},
+	})
+	require.Equal(t, http.StatusForbidden, resp.Code)
+}
+
+// TestIntegrationsFsWriteBatchAbortsOnFirstFailureAndReportsWritten 覆盖
+// 「首个失败即中止，返回 500 与已写清单」：用一个只读父目录制造中途 I/O 失败，
+// 断言已成功写入的文件出现在响应的 written 清单里，且后续文件未写入。
+func TestIntegrationsFsWriteBatchAbortsOnFirstFailureAndReportsWritten(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root 用户不受目录权限位限制，跳过本用例")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	dir := filepath.Join(home, ".claude", "skills", "superdev")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	blockedSubdir := filepath.Join(dir, "locked")
+	require.NoError(t, os.MkdirAll(blockedSubdir, 0o500)) // 只读+可执行，禁止在其下创建新文件
+	t.Cleanup(func() { _ = os.Chmod(blockedSubdir, 0o755) })
+
+	resp := doWriteBatchRequest(t, app, dir, []integrationsFsWriteBatchFileForTest{
+		{RelPath: "ok.txt", Content: "first"},
+		{RelPath: "locked/blocked.txt", Content: "second"},
+	})
+	require.Equal(t, http.StatusInternalServerError, resp.Code)
+	var out struct {
+		Written []string `json:"written"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Equal(t, []string{"ok.txt"}, out.Written)
+
+	content, err := os.ReadFile(filepath.Join(dir, "ok.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "first", string(content))
+}
+
+// TestIntegrationsFsDeleteAllowsSuperdevSkillDir 覆盖 delete 窄白名单放行路径：
+// .claude/skills/superdev 必须成功删除。
+func TestIntegrationsFsDeleteAllowsSuperdevSkillDir(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "skills", "superdev")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("x"), 0o644))
+
+	resp := httptestDo(t, app, http.MethodDelete, fsQuery("/api/integrations/fs", target), nil)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	_, statErr := os.Stat(target)
+	require.True(t, os.IsNotExist(statErr))
+}
+
+// TestIntegrationsFsDeleteRejectsSettingsJSON 覆盖 delete 窄白名单拒绝路径：
+// .claude/settings.json 不在「skills 根下的 superdev 目录」范围内，必须 403。
+func TestIntegrationsFsDeleteRejectsSettingsJSON(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "settings.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte(`{}`), 0o644))
+
+	resp := httptestDo(t, app, http.MethodDelete, fsQuery("/api/integrations/fs", target), nil)
+	require.Equal(t, http.StatusForbidden, resp.Code)
+
+	_, statErr := os.Stat(target)
+	require.NoError(t, statErr, "白名单拒绝时文件必须原样保留")
+}
+
+// TestIntegrationsFsRejectsAnonymousRequest 覆盖鉴权红线：受限文件端点绝不进
+// securityBypassPath，匿名请求必须 401——用 stat 端点覆盖，其余端点共用同一
+// withSecurity 中间件，逻辑等价不重复覆盖。
+func TestIntegrationsFsRejectsAnonymousRequest(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "settings.json")
+
+	resp := httptestDoWithHeader(t, app, http.MethodGet, fsQuery("/api/integrations/fs/stat", target), nil,
+		map[string]string{"Authorization": ""},
+	)
+	require.Equal(t, http.StatusUnauthorized, resp.Code, "匿名请求必须 401")
+	require.Contains(t, resp.Body.String(), "agent token required")
+}
