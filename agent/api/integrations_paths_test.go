@@ -161,12 +161,15 @@ func TestIntegrationDeleteAllowedSymlinkEscape(t *testing.T) {
 	}
 }
 
-// desktopConnectorPathsFixture 是桌面端实际会在目标机上碰到的路径清单，由
-// desktop/src-tauri 那边的测试生成，见文件头注释。
+// desktopConnectorPathsFixture 是桌面端实际会在目标机上碰到的 (操作, 路径) 清单，
+// 由 desktop/src-tauri 那边的测试生成，见文件头注释。
 const desktopConnectorPathsFixture = "testdata/desktop-connector-paths.txt"
 
-// readDesktopConnectorPaths 读取跨栈路径清单（忽略空行与 # 注释行）。
-func readDesktopConnectorPaths(t *testing.T) []string {
+// readDesktopConnectorPaths 读取跨栈清单里某一类操作的 home 相对路径。
+//
+// 清单每行形如 `<操作类别> <路径>`；未知操作类别一律 Fatal，不能静默忽略——
+// 生成侧新增一类操作却没人消费，正是这条跨栈校验会悄悄失效的方式。
+func readDesktopConnectorPaths(t *testing.T, operation string) []string {
 	t.Helper()
 	file, err := os.Open(desktopConnectorPathsFixture)
 	if err != nil {
@@ -180,24 +183,33 @@ func readDesktopConnectorPaths(t *testing.T) []string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		paths = append(paths, line)
+		op, rel, ok := strings.Cut(line, " ")
+		if !ok {
+			t.Fatalf("清单行缺少操作类别前缀：%q", line)
+		}
+		if op != "path" && op != "delete" {
+			t.Fatalf("清单出现未知操作类别 %q（行：%q）——生成侧加了新类别就必须在这里消费它", op, line)
+		}
+		if op == operation {
+			paths = append(paths, rel)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatalf("扫描桌面端路径清单失败：%v", err)
 	}
 	if len(paths) == 0 {
-		t.Fatal("桌面端路径清单为空——它一旦被清空，这条跨栈校验就变成空转")
+		t.Fatalf("清单里没有任何 %q 行——它一旦被清空，这条跨栈校验就变成空转", operation)
 	}
 	return paths
 }
 
 // TestIntegrationPathAllowedCoversEveryDesktopConnectorPath 是白名单「数据同步
-// 义务」的执行机制的下半段。
+// 义务」的执行机制的下半段（读/写那一半）。
 //
 // 上半段在 desktop/src-tauri：那条测试真的跑一遍六家 remote-supported 连接器的
-// install + status + uninstall，把 ConnectorFs 端口收到的每一个路径落进
-// testdata/desktop-connector-paths.txt，并在路径变了时先红。本测试读同一份清单，
-// 断言每一条都能过 integrationPathAllowed。
+// install + status + uninstall，把 ConnectorFs 端口收到的每一次 (操作, 路径)
+// 落进 testdata/desktop-connector-paths.txt，并在路径变了时先红。本测试读同一份
+// 清单，断言每一条 path 行都能过 integrationPathAllowed。
 //
 // 判据因此是「桌面端**真实**用的路径」而不是「测试作者记得的路径」——后者正是
 // 这次漏掉 ~/.claude.json 的原因：integrationConfigRoots 的头注释写着「与桌面端
@@ -207,7 +219,7 @@ func readDesktopConnectorPaths(t *testing.T) []string {
 // 这个路径）。
 func TestIntegrationPathAllowedCoversEveryDesktopConnectorPath(t *testing.T) {
 	home := t.TempDir()
-	for _, rel := range readDesktopConnectorPaths(t) {
+	for _, rel := range readDesktopConnectorPaths(t, "path") {
 		candidate := filepath.Join(home, filepath.FromSlash(rel))
 		if _, err := integrationPathAllowed(home, candidate); err != nil {
 			t.Errorf("桌面端会在目标机上读写 %s，但白名单拒绝了它：%v\n"+
@@ -217,39 +229,34 @@ func TestIntegrationPathAllowedCoversEveryDesktopConnectorPath(t *testing.T) {
 	}
 }
 
-// TestIntegrationDeleteAllowedOnDesktopConnectorPaths 钉住窄删除白名单对上面
-// 那份清单的裁决，两个方向都钉。
+// TestIntegrationDeleteAllowedCoversEveryDesktopDeletePath 是同一机制的删除那一半。
 //
-// 卸载真正要删的是各家的 skill 目录（<root>/skills/superdev），必须放行。
+// 必须与上面那条分开：删除走的是更窄的 integrationDeleteAllowed（basename 必须是
+// superdev / superdev.*，且必须落在 <root>/skills/ 之下）。只断言
+// integrationPathAllowed 照不出删除专属的缺口——skill 安装的唯一临时目录名
+// （`.superdev.superdev-tmp-<pid>-<nanos>-<n>`，前导点是桌面端刻意加的隐藏目录）
+// 就是这么漏掉的：它过得了读写白名单、过不了删除白名单。
 //
-// 已知缺口（本轮**有意未修**，见 task-9b 报告）：skill 安装用的唯一临时目录名
-// 形如 `.superdev.superdev-tmp-<pid>-<nanos>-<n>`，以 "." 开头，不满足删除白名单
-// 的 basename 判据（superdev / superdev.*），因此远端删不掉。后果有限——成功路径
-// 上临时目录是被 rename 成目标目录的（guard 已 disarm，根本不发 delete），只有
-// **安装失败**那条路径才会尝试删它，且那次删除本身是 best-effort（失败只 warn）。
-// 代价是失败的远端安装会在目标机上留下一个隐藏临时目录。修它要放宽一条**安全**
-// 白名单，值得单独决策，不适合在修复波里顺手做。
-// **如果你修了它，请把下面这条 false 断言一起改掉。**
-func TestIntegrationDeleteAllowedOnDesktopConnectorPaths(t *testing.T) {
+// 清单里的 delete 行由生成侧用一个注入 rename 失败的端口跑出来——那是唯一会真的
+// 发出「删除临时目录」请求的路径（成功路径上临时目录被 rename 成目标目录，
+// guard 已 disarm）。
+func TestIntegrationDeleteAllowedCoversEveryDesktopDeletePath(t *testing.T) {
 	home := t.TempDir()
-	for _, rel := range readDesktopConnectorPaths(t) {
-		base := filepath.Base(rel)
-		isSkillRoot := base == "superdev" && strings.Contains(rel, "/skills/")
-		isTempSkillDir := strings.HasPrefix(base, ".superdev.superdev-tmp-")
-		if !isSkillRoot && !isTempSkillDir {
-			continue
+	sawTempDir := false
+	for _, rel := range readDesktopConnectorPaths(t, "delete") {
+		if strings.Contains(rel, ".superdev-tmp-") {
+			sawTempDir = true
 		}
 		candidate := filepath.Join(home, filepath.FromSlash(rel))
-		_, err := integrationDeleteAllowed(home, candidate)
-		if isSkillRoot {
-			if err != nil {
-				t.Errorf("卸载要删的 skill 目录 %s 被删除白名单拒绝：%v", rel, err)
-			}
-			continue
+		if _, err := integrationDeleteAllowed(home, candidate); err != nil {
+			t.Errorf("桌面端会在目标机上删除 %s，但删除白名单拒绝了它：%v\n"+
+				"→ 一次失败的远端安装会在目标机上留下用户看不见、也没有清理入口的目录",
+				rel, err)
 		}
-		if err == nil {
-			t.Errorf("临时 skill 目录 %s 现在可删了——缺口已修的话请更新本测试的注释与断言", rel)
-		}
+	}
+	if !sawTempDir {
+		t.Error("清单的 delete 行里没有 skill 临时目录——生成侧那条注入 rename 失败的用例失效了，" +
+			"这条测试会退化成只覆盖 skill 目标目录")
 	}
 }
 
@@ -303,5 +310,76 @@ func TestIntegrationConfigFileEntryRejectsSymlinkEscape(t *testing.T) {
 
 	if _, err := integrationPathAllowed(home, filepath.Join(home, ".claude.json")); err == nil {
 		t.Fatal("指向 home 之外的 ~/.claude.json 符号链接必须被拒，否则受限通道能借道读写任意文件")
+	}
+}
+
+// TestIntegrationDeleteAllowedStripsAtMostOneLeadingDot 覆盖删除白名单为隐藏
+// 临时目录放宽的那一小步：basename 判定前剥掉**至多一个**前导点。
+//
+// 每条负例都对应一条真实的收紧机制，改坏对应代码就会红：
+//   - "..superdev"：只剥一个点 → ".superdev"，两条判据都不满足（防 ".." 段）
+//   - ".superdevil" / ".notsuperdev"：剥点后不满足 superdev / superdev. 判据
+//   - 根下但不在 skills/ 之内：<root>/skills/ 前缀那道仍然生效
+//   - 白名单根自身与 <root>/skills 自身：剥点不得让它们变得可删
+func TestIntegrationDeleteAllowedStripsAtMostOneLeadingDot(t *testing.T) {
+	home := t.TempDir()
+	// 正例用跨栈清单里的**真实**临时目录形状，而不是手写一个像的。
+	var tempDirRel string
+	for _, rel := range readDesktopConnectorPaths(t, "delete") {
+		if strings.Contains(rel, ".superdev-tmp-") {
+			tempDirRel = rel
+			break
+		}
+	}
+	if tempDirRel == "" {
+		t.Fatal("跨栈清单里找不到 skill 临时目录的 delete 行")
+	}
+
+	cases := []struct {
+		rel string
+		ok  bool
+	}{
+		{tempDirRel, true},
+		{".claude/skills/.superdev", true},
+		{".claude/skills/superdev", true},
+		{".claude/skills/superdev.superdev-bak", true},
+		{".claude/skills/..superdev", false},
+		{".claude/skills/.superdevil", false},
+		{".claude/skills/.notsuperdev", false},
+		{".claude/.superdev.superdev-tmp-1", false},
+		{".claude", false},
+		{".claude/skills", false},
+	}
+	for _, c := range cases {
+		candidate := filepath.Join(home, filepath.FromSlash(c.rel))
+		_, err := integrationDeleteAllowed(home, candidate)
+		if c.ok && err != nil {
+			t.Errorf("%s 应可删，却被拒：%v", c.rel, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("%s 不该可删，却放行了", c.rel)
+		}
+	}
+}
+
+// TestIntegrationDeleteAllowedTempDirSymlinkEscape 覆盖：剥点这一步不得绕开
+// 三重防逃逸——隐藏临时目录名自己是指向白名单外的符号链接时仍须被拒。
+func TestIntegrationDeleteAllowedTempDirSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 建符号链接需要额外权限")
+	}
+	home := t.TempDir()
+	outside := t.TempDir()
+	skills := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(skills, 0o755); err != nil {
+		t.Fatalf("seed skills: %v", err)
+	}
+	link := filepath.Join(skills, ".superdev.superdev-tmp-1")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatalf("seed symlink: %v", err)
+	}
+
+	if _, err := integrationDeleteAllowed(home, link); err == nil {
+		t.Fatal("指向 home 之外的隐藏临时目录符号链接必须被拒，否则一次删除会递归清掉白名单外的真实目录")
 	}
 }

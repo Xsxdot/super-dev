@@ -811,12 +811,16 @@ mod tests {
         files: RefCell<BTreeMap<PathBuf, String>>,
         dirs: RefCell<Vec<PathBuf>>,
         calls: RefCell<usize>,
-        /// touched 记录每一次端口调用碰到的【目标机】路径。
+        /// touched 记录每一次端口调用碰到的 (操作类别, 【目标机】路径)。
         ///
         /// 用途只有一个：给跨栈一致性测试提供「桌面端**实际**会在目标机上读写
-        /// 哪些路径」这份清单，而不是靠测试作者记得哪些路径。见
+        /// 哪些路径、以哪种操作」这份清单，而不是靠测试作者记得。见
         /// `desktop_connector_paths_fixture_matches_what_the_connectors_actually_touch`。
-        touched: RefCell<Vec<PathBuf>>,
+        ///
+        /// 操作类别必须区分出 `delete`：Go 侧对删除走的是**另一条**更窄的白名单
+        /// （`integrationDeleteAllowed`），只断言 `integrationPathAllowed` 会漏掉
+        /// 删除专属的缺口——本任务就漏过一次（临时目录的前导点）。
+        touched: RefCell<Vec<(&'static str, PathBuf)>>,
         /// policies 记录每次原子写收到的 (路径, 策略)。
         ///
         /// **必须记，且 RecordingFs 必须覆写 `write_atomic_with_policy`**：策略
@@ -874,11 +878,16 @@ mod tests {
         }
 
         /// touch 记录一次端口调用碰到的路径（hit 之外单独一份，因为 hit 只计数）。
-        fn touch(&self, path: &Path) {
-            self.touched.borrow_mut().push(path.to_path_buf());
+        ///
+        /// operation 取 `PATH_OP`（走写/读白名单的一切操作）或 `DELETE_OP`
+        /// （`remove_dir_all`，走窄删除白名单）。
+        fn touch(&self, operation: &'static str, path: &Path) {
+            self.touched
+                .borrow_mut()
+                .push((operation, path.to_path_buf()));
         }
 
-        fn touched_paths(&self) -> Vec<PathBuf> {
+        fn touched_paths(&self) -> Vec<(&'static str, PathBuf)> {
             self.touched.borrow().clone()
         }
     }
@@ -886,7 +895,7 @@ mod tests {
     impl ConnectorFs for RecordingFs {
         fn stat(&self, path: &Path) -> Result<FsStat, String> {
             self.hit();
-            self.touch(path);
+            self.touch(PATH_OP, path);
             let is_dir = self.dirs.borrow().iter().any(|dir| dir == path);
             let exists = is_dir || self.files.borrow().contains_key(path);
             // 内存 fake 里不存在符号链接这种东西，恒为 false。
@@ -899,7 +908,7 @@ mod tests {
 
         fn read_optional(&self, path: &Path) -> Result<Option<String>, String> {
             self.hit();
-            self.touch(path);
+            self.touch(PATH_OP, path);
             Ok(self.files.borrow().get(path).cloned())
         }
 
@@ -924,7 +933,7 @@ mod tests {
             policy: WritePolicy,
         ) -> Result<Option<String>, String> {
             self.hit();
-            self.touch(path);
+            self.touch(PATH_OP, path);
             self.policies
                 .borrow_mut()
                 .push((path.to_path_buf(), policy));
@@ -936,16 +945,16 @@ mod tests {
 
         fn mkdir_all(&self, path: &Path) -> Result<(), String> {
             self.hit();
-            self.touch(path);
+            self.touch(PATH_OP, path);
             self.dirs.borrow_mut().push(path.to_path_buf());
             Ok(())
         }
 
         fn write_batch(&self, dir: &Path, files: &[BatchFile], _label: &str) -> Result<(), String> {
             self.hit();
-            self.touch(dir);
+            self.touch(PATH_OP, dir);
             for file in files {
-                self.touch(&dir.join(&file.rel_path));
+                self.touch(PATH_OP, &dir.join(&file.rel_path));
             }
             self.dirs.borrow_mut().push(dir.to_path_buf());
             for file in files {
@@ -959,8 +968,8 @@ mod tests {
 
         fn rename(&self, from: &Path, to: &Path) -> Result<(), String> {
             self.hit();
-            self.touch(from);
-            self.touch(to);
+            self.touch(PATH_OP, from);
+            self.touch(PATH_OP, to);
             let moved: Vec<(PathBuf, String)> = self
                 .files
                 .borrow()
@@ -984,7 +993,7 @@ mod tests {
 
         fn list_relative_files(&self, dir: &Path) -> Result<Vec<PathBuf>, String> {
             self.hit();
-            self.touch(dir);
+            self.touch(PATH_OP, dir);
             Ok(self
                 .files
                 .borrow()
@@ -995,7 +1004,7 @@ mod tests {
 
         fn remove_dir_all(&self, path: &Path) -> Result<(), String> {
             self.hit();
-            self.touch(path);
+            self.touch(DELETE_OP, path);
             self.files
                 .borrow_mut()
                 .retain(|file, _| !file.starts_with(path));
@@ -1534,6 +1543,16 @@ mod tests {
     /// FIXTURE_HOME 是跨栈路径清单里冒充「目标机 HOME」的固定前缀。
     const FIXTURE_HOME: &str = "/superdev-fixture-home";
 
+    /// PATH_OP 标注「走 Go 侧 integrationPathAllowed 那条白名单」的操作。
+    const PATH_OP: &str = "path";
+
+    /// DELETE_OP 标注「走 Go 侧 integrationDeleteAllowed 那条**更窄**白名单」的操作。
+    ///
+    /// 必须与 PATH_OP 分开：删除白名单额外要求 basename 是 superdev / superdev.*
+    /// 且落在 `<root>/skills/` 之下，只断言 integrationPathAllowed 照不出删除
+    /// 专属的缺口——skill 临时目录的前导点就是这么漏掉的。
+    const DELETE_OP: &str = "delete";
+
     /// DESKTOP_PATHS_FIXTURE 是跨栈路径清单的落盘位置。
     ///
     /// 放在 agent 的 testdata 下，是因为消费方是 Go 测试；Rust 这边只负责生成
@@ -1551,6 +1570,68 @@ mod tests {
                 commands: commands.iter().map(|name| (name.clone(), true)).collect(),
                 agent: detect_fixture().agent,
             })
+        }
+    }
+
+    /// FailingRenameFs 把 rename 变成必然失败，其余方法原样委托给内层 RecordingFs。
+    ///
+    /// 用来驱动 skill 安装的**失败**路径——那是唯一会真的对目标机发「删除临时
+    /// 目录」请求的路径：成功路径上临时目录是被 rename 成目标目录的
+    /// （`PortTempDirGuard::disarm`，根本不发 delete）。跨栈清单必须覆盖它，
+    /// 否则删除白名单对临时目录名的缺口照不出来——本任务就漏过一次。
+    struct FailingRenameFs<'a> {
+        inner: &'a RecordingFs,
+    }
+
+    impl ConnectorFs for FailingRenameFs<'_> {
+        fn stat(&self, path: &Path) -> Result<FsStat, String> {
+            self.inner.stat(path)
+        }
+
+        fn read_optional(&self, path: &Path) -> Result<Option<String>, String> {
+            self.inner.read_optional(path)
+        }
+
+        fn write_atomic(
+            &self,
+            path: &Path,
+            content: &str,
+            backup: bool,
+            labels: WriteLabels<'_>,
+        ) -> Result<Option<String>, String> {
+            self.inner.write_atomic(path, content, backup, labels)
+        }
+
+        fn write_atomic_with_policy(
+            &self,
+            path: &Path,
+            content: &str,
+            backup: bool,
+            labels: WriteLabels<'_>,
+            policy: WritePolicy,
+        ) -> Result<Option<String>, String> {
+            self.inner
+                .write_atomic_with_policy(path, content, backup, labels, policy)
+        }
+
+        fn mkdir_all(&self, path: &Path) -> Result<(), String> {
+            self.inner.mkdir_all(path)
+        }
+
+        fn write_batch(&self, dir: &Path, files: &[BatchFile], label: &str) -> Result<(), String> {
+            self.inner.write_batch(dir, files, label)
+        }
+
+        fn rename(&self, _from: &Path, _to: &Path) -> Result<(), String> {
+            Err("注入的 rename 失败（用于驱动临时目录清理路径）".to_string())
+        }
+
+        fn list_relative_files(&self, dir: &Path) -> Result<Vec<PathBuf>, String> {
+            self.inner.list_relative_files(dir)
+        }
+
+        fn remove_dir_all(&self, path: &Path) -> Result<(), String> {
+            self.inner.remove_dir_all(path)
         }
     }
 
@@ -1577,7 +1658,8 @@ mod tests {
         Some(normalized)
     }
 
-    /// collect_target_machine_paths 收集「桌面端会在目标机上碰到的全部路径」。
+    /// collect_target_machine_paths 收集「桌面端会在目标机上碰到的全部路径」，
+    /// 每条形如 `<操作类别> <home 相对路径>`。
     ///
     /// 两个来源，都不是手写清单：
     ///   1. 真的跑一遍六家 remote-supported 连接器的 **install + status + uninstall**，
@@ -1628,10 +1710,35 @@ mod tests {
         )
         .expect("fixture detect");
 
+        // 再跑一遍安装，但把 rename 注入成必然失败：走 skill 安装的失败路径，
+        // 逼出「删除唯一临时目录」这次调用（成功路径上不会有它）。
+        let failing_records = RecordingFs::new();
+        let failing = FailingRenameFs {
+            inner: &failing_records,
+        };
+        for connector in &connectors {
+            let id = connector.descriptor().id();
+            if remote_plan(connector.as_ref()).is_none() {
+                continue;
+            }
+            let _ = install_remote_connector(
+                &detector,
+                &failing,
+                &connectors,
+                "fixture-host",
+                id,
+                Some(skill_source.clone()),
+                None,
+            );
+        }
+
         let mut paths: Vec<String> = fs_port
             .touched_paths()
             .iter()
-            .filter_map(|path| normalize_fixture_path(path))
+            .chain(failing_records.touched_paths().iter())
+            .filter_map(|(operation, path)| {
+                normalize_fixture_path(path).map(|rel| format!("{operation} {rel}"))
+            })
             .collect();
 
         // 第二个来源：连接器自报的路径，覆盖 openclaw / grok 这两家不走远端的。
@@ -1648,7 +1755,7 @@ mod tests {
                 for item in &status.integrations {
                     if let Some(target) = item.target_path.as_ref() {
                         if let Some(rel) = normalize_fixture_path(Path::new(target)) {
-                            paths.push(rel);
+                            paths.push(format!("{PATH_OP} {rel}"));
                         }
                     }
                 }
@@ -1656,7 +1763,7 @@ mod tests {
             if let Ok(manual) = connector.manual_instructions(&ctx) {
                 if let Some(config) = manual.config_path.as_ref() {
                     if let Some(rel) = normalize_fixture_path(Path::new(config)) {
-                        paths.push(rel);
+                        paths.push(format!("{PATH_OP} {rel}"));
                     }
                 }
             }

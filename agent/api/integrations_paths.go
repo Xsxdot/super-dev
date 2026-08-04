@@ -155,7 +155,8 @@ func integrationPathAllowed(home, candidate string) (string, error) {
 }
 
 // integrationDeleteAllowed 是删除操作的窄白名单：仅允许各智能体 skill 目录树
-// 下名为 superdev 或 superdev.* 前缀（临时/备份目录）的目录，且该目录必须落在
+// 下名为 superdev 或 superdev.* 前缀（临时/备份目录）的目录——basename 允许带
+// 一个前导点（桌面端的唯一临时目录是隐藏目录，见函数体内注释），且该目录必须落在
 // 命中的白名单根下的 skills 目录之内，即 cleaned 以 <root>/skills/ 为前缀
 // （skills 必须紧跟在根之后）。注意这条前缀检查不限制 skills 之下的嵌套深度
 // ——<root>/skills/a/b/superdev 只要最终 basename 满足要求同样会放行；它真正
@@ -182,6 +183,17 @@ func integrationDeleteAllowed(home, candidate string) (string, error) {
 	// 中途经过一个（已通过白名单校验的）符号链接而改变判断依据。
 	cleaned := filepath.Clean(candidate)
 	base := filepath.Base(cleaned)
+	// 判 basename 之前剥掉**至多一个**前导 "."：skill 安装用的唯一临时目录名
+	// 形如 ".superdev.superdev-tmp-<pid>-<nanos>-<n>"，那个前导点是桌面端
+	// unique_temp_candidate 刻意加的（隐藏临时目录），而临时目录**必须可删**
+	// ——不然一次失败的远端安装就会在目标机上留下一个用户看不见、也没有任何
+	// 清理入口的隐藏目录，反复失败还会静默堆积。
+	//
+	// 只剥一个，不是 TrimLeft：".." 开头的路径段必须继续被拒（"..superdev"
+	// 剥完是 ".superdev"，两条判据都不满足）。剥点只放宽 basename 这一道；
+	// 落在白名单根内、必须在 <root>/skills/ 之下、三重防逃逸——其余三道
+	// 一道没松。
+	base = strings.TrimPrefix(base, ".")
 	if base != "superdev" && !strings.HasPrefix(base, "superdev.") {
 		return "", errIntegrationPathDenied
 	}
