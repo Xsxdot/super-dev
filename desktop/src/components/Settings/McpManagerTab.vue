@@ -106,8 +106,15 @@ const visibleRows = computed(() => [
 const isRemoteMode = computed(() => selectedHostId.value !== '')
 // remoteHostOptions 复用 agentsStore 已接入节点列表和其现有的 runtime.reachable
 // 在线状态字段；本组件不打开 NodeRegistry 订阅，也不引入新的在线态来源。
+//
+// 注意：
+//   - 过滤掉 host_id === '' 的条目——空串是本组件用来表示「本机」的哨兵值
+//     （见 selectedHostId 的注释）。真实数据不应出现空 host_id，但一旦出现，
+//     不过滤就会静默别名成本机选项，产生第二个「本机」入口
 const remoteHostOptions = computed(() =>
-  [...agentsStore.agents].sort((a, b) => a.host_name.localeCompare(b.host_name) || a.host_id.localeCompare(b.host_id)),
+  [...agentsStore.agents]
+    .filter(agent => agent.host_id !== '')
+    .sort((a, b) => a.host_name.localeCompare(b.host_name) || a.host_id.localeCompare(b.host_id)),
 )
 
 onMounted(() => {
@@ -115,9 +122,19 @@ onMounted(() => {
   void agentsStore.loadAgents()
 })
 
-// 切换机器选择器时重新拉取该机器维度的状态；本机（null）与远端共用同一入口，
+// 切换机器选择器时重新拉取该机器维度的状态；本机（''）与远端共用同一入口，
 // 保证「首项本机走现有本地路径」在切换回来时也成立。
+//
+// 注意：
+//   - 切换前必须先清空 remoteStatuses/remoteOperationMessage/remoteOperationTone。
+//     它们都以 connector_id 为键，不含 host_id；不同机器上完全可能有同名
+//     connector（codex、cursor 都是全局词表）。不清空的话，在新 detect 请求
+//     经隧道往返完成前的那段时间——以及旧 outcome 文案本身——都会被误渲染成
+//     「新机器」的状态，这正是本任务要杜绝的「把 A 机的事实说成 B 机」
 watch(selectedHostId, () => {
+  remoteStatuses.value = []
+  remoteOperationMessage.value = {}
+  remoteOperationTone.value = {}
   void refreshCurrentStatuses()
 })
 
@@ -508,7 +525,10 @@ async function showManualConfig(agent: ConnectorId, label: string) {
           {{ agent.host_name }} · {{ agent.runtime.reachable ? t('settings.mcpRemote.online') : t('settings.mcpRemote.offline') }}
         </option>
       </select>
-      <p v-if="remoteHostOptions.length === 0" class="mcp-agent-path">{{ t('settings.mcpRemote.noRemoteHosts') }}</p>
+      <p v-if="agentsStore.error" class="settings-alert settings-alert-warning mcp-inline-alert" data-test="mcp-machine-load-error">
+        {{ t('settings.mcpRemote.hostsLoadFailed', { message: agentsStore.error }) }}
+      </p>
+      <p v-else-if="remoteHostOptions.length === 0" class="mcp-agent-path">{{ t('settings.mcpRemote.noRemoteHosts') }}</p>
     </div>
 
     <template v-if="!isRemoteMode">
@@ -694,12 +714,30 @@ async function showManualConfig(agent: ConnectorId, label: string) {
             </div>
           </header>
 
+          <!--
+            三态互斥，且刻意不共用同一个 v-else 分支：
+              1. !remote_supported → 三个状态位整体「查不到」，见 unsupportedNotice
+              2. remote_supported 但 !cli_present → detect_remote_agents 对这类行
+                 直接返回全 false 占位值、不发一次文件操作（remote_install.rs 的
+                 remote_status_for：`if !cli_present { return base }`）。这三个
+                 布尔量和 mcp_command/agent_url 在这里和「查不到」是同一件事，
+                 必须同样不渲染状态胶囊/详情格，只给出 cliMissing 说明——渲染成
+                 「未配置命令」会把「没查」说成「查过、真没有」，是一句假话
+              3. remote_supported && cli_present → 三项状态才是读回来的真实值
+          -->
           <div
             v-if="!status.remote_supported"
             class="settings-alert settings-alert-warning mcp-inline-alert"
             :data-test="`mcp-remote-unsupported-${status.connector_id}`"
           >
             {{ t('settings.mcpRemote.unsupportedNotice', { agent: status.display_name }) }}
+          </div>
+          <div
+            v-else-if="!status.cli_present"
+            class="settings-alert settings-alert-warning mcp-inline-alert"
+            :data-test="`mcp-remote-cli-missing-${status.connector_id}`"
+          >
+            {{ t('settings.mcpRemote.cliMissing', { agent: status.display_name }) }}
           </div>
           <template v-else>
             <div class="agent-capabilities">
@@ -730,13 +768,6 @@ async function showManualConfig(agent: ConnectorId, label: string) {
               :data-test="`mcp-remote-misdirected-${status.connector_id}`"
             >
               {{ t('settings.mcpRemote.mcpMisdirectedHint', { command: status.mcp_command, url: status.agent_url || t('settings.mcp.noAgentUrl') }) }}
-            </div>
-            <div
-              v-if="!status.cli_present"
-              class="settings-alert settings-alert-warning mcp-inline-alert"
-              :data-test="`mcp-remote-cli-missing-${status.connector_id}`"
-            >
-              {{ t('settings.mcpRemote.cliMissing', { agent: status.display_name }) }}
             </div>
           </template>
 

@@ -403,6 +403,13 @@ describe('McpManagerTab', () => {
       expect(row.classes()).toContain('mcp-remote-row-disabled')
       expect(wrapper.find('[data-test="mcp-remote-install-cursor"]').attributes('disabled')).toBeDefined()
       expect(wrapper.find('[data-test="mcp-remote-uninstall-cursor"]').attributes('disabled')).toBeDefined()
+      // cli_present=false means detect_remote_agents never made a file request for this
+      // connector (remote_install.rs short-circuits before reading config) — the three
+      // status booleans are exactly as much a placeholder here as remote_supported=false.
+      // Rendering "not configured"/command text would claim a real read that never happened.
+      expect(wrapper.find('[data-test="mcp-remote-cli-missing-cursor"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="mcp-remote-command-cursor"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="mcp-remote-mcp-status-cursor"]').exists()).toBe(false)
     })
 
     it('disables install/uninstall and explains local-only setup when remote_supported is false', async () => {
@@ -444,23 +451,68 @@ describe('McpManagerTab', () => {
       expect(misdirected.text()).toContain('/old/superdev-mcp')
       expect(misdirected.text()).toContain('http://127.0.0.1:57017')
       expect(wrapper.find('[data-test="mcp-remote-install-codex"]').text()).toBe('修正指向')
+      // The status pill itself must say "installed elsewhere", not just the alert/button —
+      // a user scanning only the pill row should not read this as a plain red "not configured".
+      expect(wrapper.find('[data-test="mcp-remote-mcp-status-codex"]').text()).toContain('已装 · 指向别处')
 
       // Plain missing (no prior entry at all) must stay visually/textually distinct.
       expect(wrapper.find('[data-test="mcp-remote-misdirected-cursor"]').exists()).toBe(false)
       expect(wrapper.find('[data-test="mcp-remote-install-cursor"]').text()).not.toBe('修正指向')
+      expect(wrapper.find('[data-test="mcp-remote-mcp-status-cursor"]').text()).not.toContain('已装 · 指向别处')
     })
 
-    it('shows an error message instead of a blank list when detect_remote_coding_agents rejects', async () => {
-      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
-      vi.mocked(api.detectRemoteCodingAgents).mockRejectedValue(new Error('agent unreachable'))
+    it('shows an error message instead of a blank list when detect_remote_coding_agents rejects, and clears rows left over from a previous host', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One'), remoteHost('host-2', 'Box Two')]
+      // host-1 succeeds first (so remoteStatuses is non-empty going in) — that way the
+      // "no codex row after the error" assertion below actually exercises the catch
+      // branch's cleanup instead of trivially holding because nothing was ever fetched.
+      vi.mocked(api.detectRemoteCodingAgents)
+        .mockResolvedValueOnce([remoteStatus({ connector_id: 'codex', display_name: 'Codex' })])
+        .mockRejectedValueOnce(new Error('agent unreachable'))
       const wrapper = await mountTab()
       await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(true)
+
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-2')
       await flushPromises()
 
       const error = wrapper.find('[data-test="mcp-remote-error"]')
       expect(error.exists()).toBe(true)
       expect(error.text()).toContain('agent unreachable')
       expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(false)
+    })
+
+    it('clears the previous host\'s rows and operation messages the instant the picker changes, before the new detect resolves', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One'), remoteHost('host-2', 'Box Two')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValueOnce([remoteStatus({ connector_id: 'codex', display_name: 'Codex' })])
+      vi.mocked(api.installRemoteAgentConnector).mockResolvedValue({ ...operationOutcome, connector_id: 'codex', operation: 'install', result: 'success' })
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      // Produce a real operation-result message on host-1 (keyed only by connector_id).
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([remoteStatus({ connector_id: 'codex', display_name: 'Codex', mcp_installed: true })])
+      await wrapper.find('[data-test="mcp-remote-install-codex"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-test="mcp-remote-operation-message-codex"]').exists()).toBe(true)
+
+      // Switch to host-2 with its detect deliberately left pending, to prove host-1's
+      // codex row/message don't linger under the host-2 label during the tunnel round trip.
+      let resolveHostTwoDetect: (value: RemoteAgentStatus[]) => void = () => {}
+      vi.mocked(api.detectRemoteCodingAgents).mockReturnValueOnce(new Promise((resolve) => { resolveHostTwoDetect = resolve }))
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-2')
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="mcp-remote-operation-message-codex"]').exists()).toBe(false)
+
+      resolveHostTwoDetect([remoteStatus({ connector_id: 'codex', display_name: 'Codex' })])
+      await flushPromises()
+      expect(api.detectRemoteCodingAgents).toHaveBeenLastCalledWith('host-2')
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(true)
+      // The row is host-2's fresh (unconfigured) codex, not a resurrection of host-1's message.
+      expect(wrapper.find('[data-test="mcp-remote-operation-message-codex"]').exists()).toBe(false)
     })
 
     it('installs a remote connector with the correct host and connector id and refreshes remote status', async () => {
@@ -515,6 +567,34 @@ describe('McpManagerTab', () => {
       expect(wrapper.find('[data-test="mcp-install-codex"]').exists()).toBe(true)
       expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(false)
       expect(api.listAgentConnectors).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not let an empty host_id in the agents store alias the local machine option', async () => {
+      // '' is this component's own sentinel for "local machine" (see selectedHostId's
+      // comment); a real AgentDTO should never carry an empty host_id, but if one ever
+      // does, it must not silently become a second, indistinguishable "本机" entry.
+      useAgentsStore().agents = [remoteHost('', 'Ghost'), remoteHost('host-1', 'Box One')]
+      const wrapper = await mountTab()
+
+      const options = wrapper.findAll('[data-test="mcp-machine-picker"] option')
+      expect(options).toHaveLength(2)
+      expect(options.filter(o => o.text().includes('本机'))).toHaveLength(1)
+      expect(wrapper.text()).not.toContain('Ghost')
+    })
+
+    it('tells the user machine loading failed instead of implying there are no remote hosts', async () => {
+      const agents = useAgentsStore()
+      vi.mocked(agents.loadAgents).mockImplementation(async () => {
+        agents.error = 'network down'
+      })
+      const wrapper = await mountTab()
+
+      const loadError = wrapper.find('[data-test="mcp-machine-load-error"]')
+      expect(loadError.exists()).toBe(true)
+      expect(loadError.text()).toContain('network down')
+      // The "no remote hosts" hint is a different claim (successfully loaded, list is
+      // empty) and must not be shown at the same time as a load failure.
+      expect(wrapper.text()).not.toContain('还没有接入的远端机器')
     })
   })
 })
