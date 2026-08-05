@@ -13,6 +13,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -135,10 +137,80 @@ func TestAgentSelfLaunchSpecUsesActualListenPort(t *testing.T) {
 }
 
 // TestListenPortFallsBackToDefaultWhenUnset 验证 Serve 尚未写入 listenAddr
-// （或写入了无法解析出端口的地址）时，listenPort 回退到 agent 默认端口
+// （或写入了无法解析出该端口的地址）时，listenPort 回退到 agent 默认端口
 // 57017，与 agent/mcp.ResolveStdioAgentURL 的默认值保持一致。
 func TestListenPortFallsBackToDefaultWhenUnset(t *testing.T) {
 	app := newTestAppForPackage(t)
 
 	require.Equal(t, "57017", app.listenPort(), "未调用 Serve 时应回退默认端口")
+}
+
+// writeFakeCLI 在 dir 下造一个可执行文件，返回它的绝对路径。
+func writeFakeCLI(t *testing.T, dir, name string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	return path
+}
+
+// TestIntegrationsDetectFindsCommandsOutsidePath 是本轮真机验证照出来的缺陷的
+// 回归测试。
+//
+// 现象：目标机上确实装了 claude / codex，接入面板却一律报「未检测到 CLI」。
+// 根因：agent 在目标机上由 launchd/systemd 拉起，拿到的是最小 PATH（那台 mac
+// 上实测 `/usr/bin:/bin:/usr/sbin:/sbin`），而 CLI 装在 `~/.local/bin`；detect
+// 当时只有 `exec.LookPath` 一条路，于是「装了」被一律报成「没装」。
+//
+// 桌面端本机侧从来没这个问题，因为它的 command_search_dirs 在 PATH 之外还扫一份
+// 兜底目录清单——GUI 应用拿到的同样是最小 PATH，本机侧当初正是为此才加的。远端
+// 侧必须扫同一份清单，否则「同一台机器、本机装得出、远端装不出」。
+//
+// 本测试把 PATH 收缩成 launchd 那种最小集，逐个目录验证兜底扫描真的生效。
+func TestIntegrationsDetectFindsCommandsOutsidePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// 复刻目标机上 launchd 给 agent 的真实 PATH：不含任何用户级目录。
+	t.Setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+
+	writeFakeCLI(t, filepath.Join(home, ".local", "bin"), "claude")
+	writeFakeCLI(t, filepath.Join(home, ".npm-global", "bin"), "codex")
+	writeFakeCLI(t, filepath.Join(home, ".bun", "bin"), "kimi")
+	writeFakeCLI(t, filepath.Join(home, ".cargo", "bin"), "hermes")
+	writeFakeCLI(t, filepath.Join(home, ".opencode", "bin"), "opencode")
+
+	app := newTestAppForPackage(t)
+	body := bytes.NewBufferString(`{"commands":["claude","codex","kimi","hermes","opencode","definitely-not-a-cli-xyz"]}`)
+	resp := httptestDo(t, app, http.MethodPost, "/api/integrations/detect", body)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var got integrationsDetectResponseForTest
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &got))
+
+	for _, name := range []string{"claude", "codex", "kimi", "hermes", "opencode"} {
+		require.True(t, got.Commands[name],
+			"%s 装在 PATH 之外的用户级目录里，detect 必须扫到它——只查 PATH 会把「装了」报成「没装」", name)
+	}
+	require.False(t, got.Commands["definitely-not-a-cli-xyz"],
+		"兜底扫描不能把不存在的命令也报成存在")
+}
+
+// TestIntegrationsDetectIgnoresDirectoriesNamedLikeCommands 钉住兜底扫描只认
+// 普通文件：`~/.local/bin/claude` 若是个目录，它不是一个可执行的 CLI，报成
+// 存在会让后续安装写出一份指向不存在命令的配置。
+func TestIntegrationsDetectIgnoresDirectoriesNamedLikeCommands(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".local", "bin", "claude"), 0o755))
+
+	app := newTestAppForPackage(t)
+	resp := httptestDo(t, app, http.MethodPost, "/api/integrations/detect",
+		bytes.NewBufferString(`{"commands":["claude"]}`))
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var got integrationsDetectResponseForTest
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &got))
+	require.False(t, got.Commands["claude"], "同名目录不是 CLI，不能报成已安装")
 }

@@ -653,6 +653,26 @@ fn find_command_in_dirs(command_dirs: &[PathBuf], commands: &[&str]) -> Option<P
     None
 }
 
+/// COMMAND_FALLBACK_DIRS 是 PATH 之外必扫的命令目录（home 相对部分）。
+///
+/// 单独提出来是因为**目标机侧的 Go detect 端点必须扫同一份清单**：agent 由
+/// launchd/systemd 拉起时 PATH 是最小集，两侧判据一旦不同，就会出现「同一台机器
+/// 本机装得出、远端装不出」。一致性由跨栈清单
+/// `agent/api/testdata/desktop-command-search-dirs.txt` 两侧的测试钉住。
+const COMMAND_FALLBACK_DIRS_IN_HOME: [&[&str]; 5] = [
+    &[".local", "bin"],
+    &[".npm-global", "bin"],
+    &[".bun", "bin"],
+    &[".cargo", "bin"],
+    // opencode 装到自己的 `~/.opencode/bin` 且不往 PATH 里加，只按 PATH 找它必然
+    // 落空——某台目标机上 opencode 确实装着，本机与远端却都报「未检测到」。
+    &[".opencode", "bin"],
+];
+
+/// COMMAND_FALLBACK_DIRS_ABSOLUTE 是 PATH 之外必扫的系统级命令目录。
+const COMMAND_FALLBACK_DIRS_ABSOLUTE: [&str; 3] =
+    ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
+
 fn command_search_dirs(home: &Path, path_value: Option<&OsStr>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(value) = path_value {
@@ -660,18 +680,25 @@ fn command_search_dirs(home: &Path, path_value: Option<&OsStr>) -> Vec<PathBuf> 
             push_unique_path(&mut dirs, dir);
         }
     }
-    for dir in [
-        home.join(".local").join("bin"),
-        home.join(".npm-global").join("bin"),
-        home.join(".bun").join("bin"),
-        home.join(".cargo").join("bin"),
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-        PathBuf::from("/usr/bin"),
-    ] {
+    for dir in command_fallback_dirs(home) {
         push_unique_path(&mut dirs, dir);
     }
     dirs
+}
+
+/// command_fallback_dirs 返回 PATH 之外的兜底目录，顺序即扫描优先级。
+///
+/// 参数：
+///   - home: 用户 home 绝对路径
+///
+/// 返回：
+///   - 先 home 相对的 5 个，再 3 个系统级绝对路径；不保证存在，调用方跳过即可
+pub(crate) fn command_fallback_dirs(home: &Path) -> Vec<PathBuf> {
+    COMMAND_FALLBACK_DIRS_IN_HOME
+        .iter()
+        .map(|segments| segments.iter().fold(home.to_path_buf(), |acc, s| acc.join(s)))
+        .chain(COMMAND_FALLBACK_DIRS_ABSOLUTE.iter().map(PathBuf::from))
+        .collect()
 }
 
 pub(crate) fn executable_file_names(command: &str) -> Vec<String> {
@@ -4089,5 +4116,78 @@ mod path_tests {
 
     fn tempfile_dir() -> std::path::PathBuf {
         create_unique_test_dir("superdev-sidecar-path-test")
+    }
+}
+
+/// command_search_dirs_fixture_tests 是「PATH 之外扫哪些目录」这条跨栈契约的
+/// 生成侧。
+///
+/// 为什么需要跨栈机制而不是注释约定：目标机侧的 Go detect 端点必须扫同一份
+/// 目录清单，两侧一旦漂移就会出现「同一台机器本机装得出、远端装不出」，而两栈
+/// 各自的测试都照不出来——本分支已经在白名单上栽过一次同型的跟头（注释写着
+/// 「与桌面端一一对应」，实际漏掉 ~/.claude.json，远端安装必然 403）。
+#[cfg(test)]
+mod command_search_dirs_fixture_tests {
+    use super::*;
+    use std::path::Path;
+
+    /// FIXTURE_HOME 是渲染清单时用的固定 home，只用于把 home 相对部分剥出来。
+    const FIXTURE_HOME: &str = "/superdev-fixture-home";
+
+    /// COMMAND_DIRS_FIXTURE 是跨栈清单的落盘位置。
+    ///
+    /// 放在 agent 的 testdata 下，是因为消费方是 Go 测试；Rust 这边负责生成
+    /// 与校验它是否还与代码事实一致。
+    const COMMAND_DIRS_FIXTURE: &str = "../../agent/api/testdata/desktop-command-search-dirs.txt";
+
+    /// render_fallback_dirs 把生产函数的输出渲染成清单行。
+    fn render_fallback_dirs() -> Vec<String> {
+        let home = Path::new(FIXTURE_HOME);
+        command_fallback_dirs(home)
+            .into_iter()
+            .map(|dir| match dir.strip_prefix(home) {
+                Ok(rel) => format!("home {}", rel.to_string_lossy().replace('\\', "/")),
+                Err(_) => format!("abs {}", dir.to_string_lossy().replace('\\', "/")),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn desktop_command_search_dirs_fixture_matches_the_code() {
+        let actual = render_fallback_dirs();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(COMMAND_DIRS_FIXTURE);
+        let recorded = std::fs::read_to_string(&fixture).unwrap_or_default();
+        let expected: Vec<String> = recorded
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_string)
+            .collect();
+
+        assert!(
+            !expected.is_empty(),
+            "跨栈清单 {} 没有任何数据行——它一旦被清空，两侧校验都会静默变成空转",
+            COMMAND_DIRS_FIXTURE
+        );
+        assert_eq!(
+            actual,
+            expected,
+            "PATH 兜底目录清单变了，但跨栈清单 {} 没跟着改。\n\
+             目标机侧的 Go detect 端点读同一份清单判定 CLI 是否存在——不同步会造成\n\
+             「同一台机器本机装得出、远端装不出」。请把下面这份写回清单：\n{}",
+            COMMAND_DIRS_FIXTURE,
+            actual.join("\n")
+        );
+    }
+
+    /// 钉住 opencode 那条：它装在自己的 `~/.opencode/bin` 且不往 PATH 里加，
+    /// 清单里少了这条就会在本机与远端同时报「未检测到」。
+    #[test]
+    fn fallback_dirs_include_the_opencode_private_bin() {
+        let dirs = command_fallback_dirs(Path::new(FIXTURE_HOME));
+        assert!(
+            dirs.contains(&PathBuf::from(FIXTURE_HOME).join(".opencode").join("bin")),
+            "兜底目录必须含 ~/.opencode/bin，实际为 {dirs:?}"
+        );
     }
 }

@@ -2,9 +2,13 @@
 //
 // 职责：
 //   - 处理 POST /api/integrations/detect，返回桌面端做接入决策所需的三样事实：
-//     请求命令列表在本机 PATH 中的存在性、home 目录绝对路径、agent 自身的
+//     请求命令列表在本机的存在性、home 目录绝对路径、agent 自身的
 //     stdio MCP launch spec（供桌面端写入 claude/codex/... 的 MCP 配置）
 //   - agentSelfLaunchSpec 提炼为独立方法，供本文件与测试复用
+//
+// 存在性判定不在本文件：见 integrations_command_dirs.go。它不只查 PATH——
+// agent 由 launchd/systemd 拉起时 PATH 是最小集，只查 PATH 会把用户级目录里
+// 装好的 CLI 一律报成没装。
 //
 // 边界：
 //   - 只读端点，不写任何文件、不做路径白名单校验（那是 Task 4 受限文件端点的
@@ -21,7 +25,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 )
@@ -61,20 +64,21 @@ func (a *App) integrationsDetect(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "too many commands")
 		return
 	}
+	// home 必须先于命令探测解析：兜底目录清单里有 5 个是 home 相对的，
+	// 拿不到 home 就只剩 PATH 一条路——那正是本端点最初的缺陷形态。
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
+		jsonError(w, http.StatusInternalServerError, "resolve home failed")
+		return
+	}
 	presence := make(map[string]bool, len(req.Commands))
 	for _, name := range req.Commands {
 		if !integrationCommandPattern.MatchString(name) {
 			jsonError(w, http.StatusBadRequest, "invalid command name")
 			return
 		}
-		_, err := exec.LookPath(name)
-		presence[name] = err == nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
-		jsonError(w, http.StatusInternalServerError, "resolve home failed")
-		return
+		presence[name] = integrationCommandPresent(home, name)
 	}
 	spec, err := a.agentSelfLaunchSpec()
 	if err != nil {

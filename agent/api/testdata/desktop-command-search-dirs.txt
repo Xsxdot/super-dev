@@ -1,0 +1,33 @@
+# desktop-command-search-dirs.txt 是【PATH 之外必须扫描的命令目录】的跨栈清单。
+#
+# 每行形如 `<类别> <路径>`：
+#   home —— home 相对路径（斜杠分隔），扫描时拼在目标机 home 之下
+#   abs  —— 绝对路径，原样扫描
+# 顺序即扫描优先级，两栈必须逐行相同。
+#
+# 为什么要有这份清单：agent 在目标机上由 launchd / systemd 拉起，拿到的是最小
+# PATH——某台 macOS 目标机上实测就是 `/usr/bin:/bin:/usr/sbin:/sbin`，其 launchd
+# plist 根本没设 EnvironmentVariables。而编程智能体 CLI 几乎都装在用户级目录里
+# （该机上 claude 与 codex 都在 ~/.local/bin，opencode 在 ~/.opencode/bin）。
+# 桌面端本机侧一直有这份兜底清单（GUI 应用拿到的同样是最小 PATH），远端侧最初
+# 只有 exec.LookPath 一条路，于是「装了」被一律报成「没装」，接入面板显示
+# 「未检测到 CLI，无法远程接入」——本清单就是那次真机验证的产物。
+#
+# 生成方：desktop/src-tauri 的
+#   mcp_install::command_search_dirs_fixture_tests::desktop_command_search_dirs_fixture_matches_the_code
+# 它对一个固定 home 调用生产函数 command_fallback_dirs，把结果渲染成本文件的格式
+# 逐行比对；桌面端改了清单而没改这里，Rust 侧先红。
+#
+# 消费方：agent/api 的
+#   TestIntegrationCommandSearchDirsMatchesDesktop
+# 它读同一份清单，断言 integrationCommandSearchDirs 逐个相同；Go 侧漏跟进则 Go 先红。
+#
+# 两侧都断言「清单非空」，避免有人清空文件让这条跨栈校验静默变成空转。
+home .local/bin
+home .npm-global/bin
+home .bun/bin
+home .cargo/bin
+home .opencode/bin
+abs /opt/homebrew/bin
+abs /usr/local/bin
+abs /usr/bin
