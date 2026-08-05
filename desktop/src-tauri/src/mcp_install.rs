@@ -3069,6 +3069,10 @@ mod mkdir_all_invariant_tests {
         fn remove_dir_all(&self, path: &Path) -> Result<(), String> {
             LocalFs.remove_dir_all(path)
         }
+
+        fn remove_file(&self, path: &Path) -> Result<(), String> {
+            LocalFs.remove_file(path)
+        }
     }
 
     #[test]

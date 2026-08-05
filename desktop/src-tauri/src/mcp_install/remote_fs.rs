@@ -527,6 +527,27 @@ impl ConnectorFs for RemoteAgentFs {
         )
         .map(|_| ())
     }
+
+    fn remove_file(&self, path: &Path) -> Result<(), String> {
+        // 与 remove_dir_all 打同一 DELETE 端点；服务端按白名单分支区分文件/目录语义。
+        // 404 → Ok：卸载幂等，与 LocalFs::remove_file 的 NotFound 语义对齐。
+        // execute 把非 2xx 收成通用错误串，这里按 HTTP 404 文案分支识别（见 execute 的
+        // Status 分支模板「HTTP {status}」）。
+        tracing::info!(host_id = %self.host_id, path = %path.display(), "remote fs remove_file");
+        let path_str = path.to_string_lossy().into_owned();
+        match self.execute(
+            "DELETE",
+            "fs",
+            Some(("path", &path_str)),
+            None,
+            "delete",
+            &path_str,
+        ) {
+            Ok(_) => Ok(()),
+            Err(error) if error.contains("HTTP 404") => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1113,6 +1134,27 @@ mod tests {
         assert!(request
             .request_target
             .starts_with("/api/agents/h1/integrations/fs?path="));
+    }
+
+    /// remove_file 与 remove_dir_all 走同一 DELETE 端点；404 映射为成功（幂等卸载）。
+    #[test]
+    fn remove_file_sends_delete_and_treats_404_as_success() {
+        let (base, rx) = spawn_fake_agent(|_req| ok("{}"));
+        fs(base)
+            .remove_file(Path::new("/home/x/.grok/hooks/superdev-session-start.json"))
+            .expect("delete succeeds");
+        let request = rx.recv().expect("request recorded");
+        assert_eq!(request.method, "DELETE");
+        assert!(request
+            .request_target
+            .starts_with("/api/agents/h1/integrations/fs?path="));
+
+        let (base, _rx) = spawn_fake_agent(|_req| {
+            status(404, "Not Found", r#"{"error":"not found"}"#)
+        });
+        fs(base)
+            .remove_file(Path::new("/home/x/.grok/hooks/missing.json"))
+            .expect("404 must be Ok for idempotent uninstall");
     }
 
     // ---- write_batch ----

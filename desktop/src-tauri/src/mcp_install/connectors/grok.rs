@@ -19,9 +19,9 @@
 use super::common;
 use crate::mcp_install::command_port::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
 use crate::mcp_install::contracts::*;
-// openclaw / grok 的读写没有全程经端口（它们靠目标机上运行自身 CLI 写配置），
-// 因此恒绑定本机实现：显式写出 LocalFs 而不是让 common 里藏一个默认值，
-// 「这家连接器只能装在本机」这件事就留在调用点上看得见。
+// Grok 的 MCP 段由官方 CLI 写配置；Skill/Hook 文件经 ConnectorFs 端口。
+// AgentConnector 的 status/install/uninstall 恒绑定本机 LocalFs + 结构体 runner；
+// 远端场景走 PortedConnectorOps 并显式传入 ConnectorPorts。
 use crate::mcp_install::fs_port::LocalFs;
 use crate::mcp_install::registry::*;
 use crate::mcp_install::{executable_file_names, MergeResult};
@@ -215,6 +215,7 @@ fn aggregate_map_err(error: impl std::fmt::Display) -> ConnectorError {
 
 /// install_skill_mapped 在 common::install_skill 之上补稳定错误码日志。
 fn install_skill_mapped(
+    fs: &dyn crate::mcp_install::fs_port::ConnectorFs,
     ctx: &ConnectorRuntimeContext,
     skill: &Path,
 ) -> IntegrationOperationResult {
@@ -237,7 +238,7 @@ fn install_skill_mapped(
             ),
         );
     }
-    let result = common::install_skill(&LocalFs, ctx, skill);
+    let result = common::install_skill(fs, ctx, skill);
     if matches!(result.result, IntegrationResult::Failed) {
         tracing::error!(
             connector_id = CONNECTOR_ID,
@@ -526,14 +527,43 @@ fn hook_has_marker(content: &str) -> bool {
     content.contains(HOOK_MARKER) && content.contains("session-start")
 }
 
+/// path_is_regular_file 用端口 stat 判断路径是否存在且不是目录。
+///
+/// 等价于本机 `path.is_file()`：不存在或是目录都返回 false；stat 本身失败才上报错误。
+fn path_is_regular_file(
+    fs: &dyn crate::mcp_install::fs_port::ConnectorFs,
+    path: &Path,
+) -> Result<bool, String> {
+    let stat = fs.stat(path)?;
+    Ok(stat.exists && !stat.is_dir)
+}
+
 /// hook_status 只读检查 owned SessionStart hook 文件状态。
 ///
 /// 消息刻意写明「引导以 Skill 为主」：Grok 的 SessionStart 是 passive hook，
 /// stdout 不会注入 additionalContext，与 Claude/Codex/Cursor 行为不同。
-fn hook_status(ctx: &ConnectorRuntimeContext) -> IntegrationState {
+fn hook_status(ctx: &ConnectorRuntimeContext, ports: &ConnectorPorts<'_>) -> IntegrationState {
     let path = hook_path(ctx);
     let target = common::path_string(&path);
-    if !path.is_file() {
+    let is_file = match path_is_regular_file(ports.fs, &path) {
+        Ok(is_file) => is_file,
+        Err(error) => {
+            tracing::error!(
+                connector_id = CONNECTOR_ID,
+                operation = "hook_status",
+                error_code = "hook_read_failed",
+                error = %error,
+                "grok session hook stat failed"
+            );
+            return IntegrationState {
+                capability: IntegrationCapability::SessionHook,
+                status: IntegrationStateStatus::Error,
+                target_path: Some(target),
+                message: Some("无法读取 hook 文件".into()),
+            };
+        }
+    };
+    if !is_file {
         return IntegrationState {
             capability: IntegrationCapability::SessionHook,
             status: IntegrationStateStatus::Missing,
@@ -541,8 +571,8 @@ fn hook_status(ctx: &ConnectorRuntimeContext) -> IntegrationState {
             message: Some("未安装 SuperDev SessionStart hook".into()),
         };
     }
-    match std::fs::read_to_string(&path) {
-        Ok(content) if hook_has_marker(&content) => IntegrationState {
+    match ports.fs.read_optional(&path) {
+        Ok(Some(content)) if hook_has_marker(&content) => IntegrationState {
             capability: IntegrationCapability::SessionHook,
             status: IntegrationStateStatus::Configured,
             target_path: Some(target),
@@ -551,7 +581,7 @@ fn hook_status(ctx: &ConnectorRuntimeContext) -> IntegrationState {
                     .into(),
             ),
         },
-        Ok(_) => {
+        Ok(Some(_)) => {
             tracing::error!(
                 connector_id = CONNECTOR_ID,
                 operation = "hook_status",
@@ -565,12 +595,19 @@ fn hook_status(ctx: &ConnectorRuntimeContext) -> IntegrationState {
                 message: Some("hook 文件存在但不是 SuperDev 拥有格式".into()),
             }
         }
+        // 竞态：stat 见过文件，read 时已消失——按 Missing 处理比 Error 更贴近「未安装」。
+        Ok(None) => IntegrationState {
+            capability: IntegrationCapability::SessionHook,
+            status: IntegrationStateStatus::Missing,
+            target_path: Some(target),
+            message: Some("未安装 SuperDev SessionStart hook".into()),
+        },
         Err(error) => {
             tracing::error!(
                 connector_id = CONNECTOR_ID,
                 operation = "hook_status",
                 error_code = "hook_read_failed",
-                error_kind = ?error.kind(),
+                error = %error,
                 "grok session hook read failed"
             );
             IntegrationState {
@@ -586,13 +623,35 @@ fn hook_status(ctx: &ConnectorRuntimeContext) -> IntegrationState {
 /// install_hook 写入或更新 SuperDev 拥有的 SessionStart hook 文件。
 ///
 /// 同名文件若无标记则拒绝覆盖：用户可能手动放了同名配置，误删会造成数据丢失。
-fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
+fn install_hook(
+    ctx: &ConnectorRuntimeContext,
+    ports: &ConnectorPorts<'_>,
+) -> IntegrationOperationResult {
     let path = hook_path(ctx);
     let skill = skill_path(ctx);
     let target = common::path_string(&path);
-    if path.is_file() {
-        match std::fs::read_to_string(&path) {
-            Ok(existing) if !hook_has_marker(&existing) => {
+    let is_file = match path_is_regular_file(ports.fs, &path) {
+        Ok(is_file) => is_file,
+        Err(error) => {
+            tracing::error!(
+                connector_id = CONNECTOR_ID,
+                operation = "hook_install",
+                error_code = "hook_read_failed",
+                error = %error,
+                "grok session hook stat failed before write"
+            );
+            return common::integration_result(
+                IntegrationCapability::SessionHook,
+                IntegrationResult::Failed,
+                Some(target),
+                None,
+                Some("无法读取已有 hook 文件".into()),
+            );
+        }
+    };
+    if is_file {
+        match ports.fs.read_optional(&path) {
+            Ok(Some(existing)) if !hook_has_marker(&existing) => {
                 tracing::info!(
                     connector_id = CONNECTOR_ID,
                     operation = "hook_install",
@@ -607,7 +666,7 @@ fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
                     Some("同名 hook 文件存在且非 SuperDev 所有，拒绝覆盖".into()),
                 );
             }
-            Ok(existing) => {
+            Ok(Some(existing)) => {
                 let desired = hook_file_body(&skill);
                 if existing.trim() == desired.trim() {
                     return common::integration_result(
@@ -619,12 +678,15 @@ fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
                     );
                 }
             }
+            Ok(None) => {
+                // 竞态消失：按「不存在」继续写入。
+            }
             Err(error) => {
                 tracing::error!(
                     connector_id = CONNECTOR_ID,
                     operation = "hook_install",
                     error_code = "hook_read_failed",
-                    error_kind = ?error.kind(),
+                    error = %error,
                     "grok session hook read failed before write"
                 );
                 return common::integration_result(
@@ -637,7 +699,7 @@ fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
             }
         }
     }
-    match common::mutate_config_with_fs(&LocalFs, CONNECTOR_ID, &path, |_old| {
+    match common::mutate_config_with_fs(ports.fs, CONNECTOR_ID, &path, |_old| {
         Ok(MergeResult {
             content: hook_file_body(&skill),
             changed: true,
@@ -683,10 +745,32 @@ fn install_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
 }
 
 /// uninstall_hook 仅在标记匹配时删除 owned hook 文件；外源文件不删除。
-fn uninstall_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
+fn uninstall_hook(
+    ctx: &ConnectorRuntimeContext,
+    ports: &ConnectorPorts<'_>,
+) -> IntegrationOperationResult {
     let path = hook_path(ctx);
     let target = common::path_string(&path);
-    if !path.is_file() {
+    let is_file = match path_is_regular_file(ports.fs, &path) {
+        Ok(is_file) => is_file,
+        Err(error) => {
+            tracing::error!(
+                connector_id = CONNECTOR_ID,
+                operation = "hook_uninstall",
+                error_code = "hook_read_failed",
+                error = %error,
+                "grok session hook stat failed during uninstall"
+            );
+            return common::integration_result(
+                IntegrationCapability::SessionHook,
+                IntegrationResult::Failed,
+                Some(target),
+                None,
+                Some("无法读取 hook 文件".into()),
+            );
+        }
+    };
+    if !is_file {
         return common::integration_result(
             IntegrationCapability::SessionHook,
             IntegrationResult::AlreadyPresent,
@@ -695,8 +779,8 @@ fn uninstall_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
             None,
         );
     }
-    match std::fs::read_to_string(&path) {
-        Ok(content) if hook_has_marker(&content) => match std::fs::remove_file(&path) {
+    match ports.fs.read_optional(&path) {
+        Ok(Some(content)) if hook_has_marker(&content) => match ports.fs.remove_file(&path) {
             Ok(()) => {
                 tracing::info!(
                     connector_id = CONNECTOR_ID,
@@ -717,7 +801,7 @@ fn uninstall_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
                     connector_id = CONNECTOR_ID,
                     operation = "hook_uninstall",
                     error_code = "hook_write_failed",
-                    error_kind = ?error.kind(),
+                    error = %error,
                     "grok session hook remove failed"
                 );
                 common::integration_result(
@@ -729,7 +813,7 @@ fn uninstall_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
                 )
             }
         },
-        Ok(_) => {
+        Ok(Some(_)) => {
             // 外源同名文件：不删除，避免破坏用户配置。
             tracing::info!(
                 connector_id = CONNECTOR_ID,
@@ -745,12 +829,19 @@ fn uninstall_hook(ctx: &ConnectorRuntimeContext) -> IntegrationOperationResult {
                 Some("hook 文件非 SuperDev 所有，未删除".into()),
             )
         }
+        Ok(None) => common::integration_result(
+            IntegrationCapability::SessionHook,
+            IntegrationResult::AlreadyPresent,
+            Some(target),
+            None,
+            None,
+        ),
         Err(error) => {
             tracing::error!(
                 connector_id = CONNECTOR_ID,
                 operation = "hook_uninstall",
                 error_code = "hook_read_failed",
-                error_kind = ?error.kind(),
+                error = %error,
                 "grok session hook read failed during uninstall"
             );
             common::integration_result(
@@ -780,6 +871,7 @@ fn grok_install_body(
     connector: &GrokConnector,
     ctx: &ConnectorRuntimeContext,
     request: ConnectorInstallRequest,
+    ports: &ConnectorPorts<'_>,
 ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let skill = skill_path(ctx);
         let program = match require_cli(ctx) {
@@ -804,7 +896,7 @@ fn grok_install_body(
         let (mcp_result, mcp_message) =
             if request.capabilities.contains(&IntegrationCapability::Mcp) {
                 // list → 按需 add（始终 --scope user）→ list 复核。从不直接写 config.toml。
-                let already = match list_servers(connector.runner.as_ref(), &program) {
+                let already = match list_servers(ports.runner, &program) {
                     Ok(items) => match find_superdev_user_entry(&items) {
                         Some(value) if entry_matches(ctx, value) => true,
                         _ => false,
@@ -846,7 +938,7 @@ fn grok_install_body(
                 if !already {
                     let add_args = mcp_add_args(ctx);
                     let add_args: Vec<&str> = add_args.iter().map(String::as_str).collect();
-                    let add_output = match run_cli(connector.runner.as_ref(), &program, &add_args) {
+                    let add_output = match run_cli(ports.runner, &program, &add_args) {
                         Ok(output) => output,
                         Err(error) => {
                             let mapped = map_process_error(error, "cli_add_failed");
@@ -885,7 +977,7 @@ fn grok_install_body(
                     }
                 }
 
-                match list_servers(connector.runner.as_ref(), &program) {
+                match list_servers(ports.runner, &program) {
                     Ok(items) => match find_superdev_user_entry(&items) {
                         Some(value) if entry_matches(ctx, value) => (
                             if already {
@@ -930,7 +1022,7 @@ fn grok_install_body(
                     }
                 }
             } else {
-                let status = connector.status(ctx)?;
+                let status = connector.status_with_ports(ctx, ports)?;
                 let mcp = status
                     .integrations
                     .iter()
@@ -959,9 +1051,9 @@ fn grok_install_body(
                 Some("MCP 未就绪，已跳过 Skill".into()),
             )
         } else if request.capabilities.contains(&IntegrationCapability::Skill) {
-            install_skill_mapped(ctx, &skill)
+            install_skill_mapped(ports.fs, ctx, &skill)
         } else {
-            let skill_state = common::skill_status(&LocalFs, ctx, &skill);
+            let skill_state = common::skill_status(ports.fs, ctx, &skill);
             common::integration_result(
                 IntegrationCapability::Skill,
                 match skill_state.status {
@@ -992,9 +1084,9 @@ fn grok_install_body(
                 Some("Skill 未就绪，已跳过 Hook".into()),
             )
         } else if request.capabilities.contains(&IntegrationCapability::SessionHook) {
-            install_hook(ctx)
+            install_hook(ctx, ports)
         } else {
-            let hook_state = hook_status(ctx);
+            let hook_state = hook_status(ctx, ports);
             common::integration_result(
                 IntegrationCapability::SessionHook,
                 match hook_state.status {
@@ -1034,14 +1126,15 @@ fn grok_install_body(
 fn grok_uninstall_body(
     connector: &GrokConnector,
     ctx: &ConnectorRuntimeContext,
+    ports: &ConnectorPorts<'_>,
 ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let skill = skill_path(ctx);
         // 卸载顺序固定为 Hook → Skill → MCP，与安装顺序相反。
-        let hook_result = uninstall_hook(ctx);
+        let hook_result = uninstall_hook(ctx, ports);
         let hook_changed = matches!(hook_result.result, IntegrationResult::Installed);
         let hook_needs_action = matches!(hook_result.result, IntegrationResult::NeedsAction);
         let hook_failed = matches!(hook_result.result, IntegrationResult::Failed);
-        let skill_result = common::uninstall_skill(&LocalFs, &skill);
+        let skill_result = common::uninstall_skill(ports.fs, &skill);
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
         let skill_failed = matches!(skill_result.result, IntegrationResult::Failed);
         if skill_failed {
@@ -1060,7 +1153,7 @@ fn grok_uninstall_body(
         let mut mcp_result = IntegrationResult::AlreadyPresent;
 
         if let Ok(program) = require_cli(ctx) {
-            let present = match list_servers(connector.runner.as_ref(), &program) {
+            let present = match list_servers(ports.runner, &program) {
                 Ok(items) => find_superdev_user_entry(&items).is_some(),
                 Err(error) => {
                     let mapped = map_process_error(error, "cli_list_failed");
@@ -1079,7 +1172,7 @@ fn grok_uninstall_body(
             };
             if present && !mcp_failed {
                 let remove_output = match run_cli(
-                    connector.runner.as_ref(),
+                    ports.runner,
                     &program,
                     &["mcp", "remove", "superdev", "--scope", "user"],
                 ) {
@@ -1119,7 +1212,7 @@ fn grok_uninstall_body(
                         mcp_message = Some("grok mcp remove 返回非零退出码".into());
                     } else {
                         // 计划要求 remove 后再次 list 验证，避免空成功。
-                        match list_servers(connector.runner.as_ref(), &program) {
+                        match list_servers(ports.runner, &program) {
                             Ok(items) if find_superdev_user_entry(&items).is_none() => {
                                 mcp_changed = true;
                                 // Installed 在卸载语义中表示「发生了变更」。
@@ -1251,7 +1344,114 @@ impl AgentConnector for GrokConnector {
         Ok(result)
     }
 
+    /// status 是 `status_with_ports(ctx, &ConnectorPorts::new(&LocalFs, self.runner))` —— **恒绑定本机**。
+    ///
+    /// 拿一个远端 ctx（home 指向目标机）调它，会去读**桌面机自己**磁盘上那些
+    /// 路径，把读到的内容当成目标机状态返回，且不会有任何报错。远端场景一律走
+    /// `PortedConnectorOps::status_with_ports` 并显式传远端 [`ConnectorPorts`]
+    /// （`remote_install::ported_remote_status` 是唯一入口）。
     fn status(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorStatus, ConnectorError> {
+        self.status_with_ports(ctx, &ConnectorPorts::new(&LocalFs, self.runner.as_ref()))
+    }
+
+    fn install(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        request: ConnectorInstallRequest,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.install_with_ports(
+            ctx,
+            request,
+            &ConnectorPorts::new(&LocalFs, self.runner.as_ref()),
+        )
+    }
+
+    fn uninstall(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.uninstall_with_ports(ctx, &ConnectorPorts::new(&LocalFs, self.runner.as_ref()))
+    }
+
+    /// port_ops 返回本连接器的端口化实现。
+    ///
+    /// Grok 的 MCP 段只能由 `grok mcp add/list/remove` 写（不直接改 config.toml），
+    /// Skill 与 owned SessionStart hook 经 `ConnectorFs` 读写。`ConnectorPorts`
+    /// 把进程调用与文件原语一并收口后，status/install/uninstall 的副作用都落在
+    /// 端口上，可以安全地跑到远端。
+    fn port_ops(&self) -> Option<&dyn PortedConnectorOps> {
+        Some(self)
+    }
+
+    fn manual_instructions(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorManualInstructions, ConnectorError> {
+        // 手动指引必须可粘贴：add 命令与 verification 均以 --scope user 为准。
+        // SessionStart 在 Grok 上不注入 additionalContext，步骤文案明确 Skill-first。
+        // 路径 quoting 分 shell 方言：POSIX / PowerShell / cmd.exe 各一版（真实 install 走 argv）。
+        let launch = ctx.mcp_launch();
+        let raw_mcp = launch.command.display().to_string();
+        // 手动指引必须与 mcp_add_args 生成的 argv 同源：命令之后逐个附加启动规格
+        // 的 args（本机恒为空 → 与改造前逐字节相同；远端会多出 `mcp`）。
+        let render = |quote: fn(&str) -> String| {
+            let mut command = format!(
+                "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={} -- {}",
+                launch.agent_url,
+                quote(&raw_mcp)
+            );
+            for arg in &launch.args {
+                command.push(' ');
+                command.push_str(&quote(arg));
+            }
+            command
+        };
+        let add_posix = render(shell_quote_posix);
+        let add_powershell = render(shell_quote_powershell);
+        let add_cmd = render(shell_quote_cmd);
+        let add_default = if cfg!(windows) {
+            add_powershell.clone()
+        } else {
+            add_posix.clone()
+        };
+        let hook = hook_path(ctx);
+        let skill = skill_path(ctx);
+        let hook_example = {
+            let body = hook_file_body(&skill);
+            format!("在 {} 写入类似内容（owned 文件，勿与用户其它 hook 合并）: {body}", hook.display())
+        };
+        Ok(ConnectorManualInstructions {
+            summary: "通过 Grok CLI 接入 SuperDev（MCP + Skill + Session Hook）".into(),
+            steps: vec![
+                "安装 Grok CLI，并确保 grok 在 PATH 中".into(),
+                format!("POSIX shell: {add_posix}"),
+                format!("PowerShell: {add_powershell}"),
+                format!("cmd.exe: {add_cmd}"),
+                format!("Skill 目标目录: {}", skill.display()),
+                format!(
+                    "Hook 文件: {} （SessionStart；Grok 不注入 additionalContext，引导以 Skill 为主）",
+                    hook.display()
+                ),
+                hook_example,
+                "重启 Grok 会话，或在 /mcps 中刷新".into(),
+                "验证: grok mcp list --json".into(),
+            ],
+            config_path: Some(common::path_string(&config_path(ctx))),
+            manual_config: Some(add_default),
+            verification_prompt: Some(
+                "运行 grok mcp list --json，确认 name=superdev、scope=user、command 与 SUPERDEV_AGENT_URL 正确"
+                    .into(),
+            ),
+        })
+    }
+}
+
+impl PortedConnectorOps for GrokConnector {
+    fn status_with_ports(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        ports: &ConnectorPorts<'_>,
+    ) -> Result<ConnectorStatus, ConnectorError> {
         let started = Instant::now();
         tracing::debug!(
             connector_id = CONNECTOR_ID,
@@ -1261,7 +1461,7 @@ impl AgentConnector for GrokConnector {
 
         // 仅用 list --json 证明 MCP 配置；不跑 doctor（避免把连通性当接入状态）。
         let (mcp_status, mcp_message) = match require_cli(ctx) {
-            Ok(program) => match list_servers(self.runner.as_ref(), &program) {
+            Ok(program) => match list_servers(ports.runner, &program) {
                 Ok(items) => {
                     let user = find_superdev_user_entry(&items);
                     let any_superdev = items.iter().any(|item| item.is_named_superdev());
@@ -1338,8 +1538,8 @@ impl AgentConnector for GrokConnector {
             (None, None)
         };
 
-        let skill_state = common::skill_status(&LocalFs, ctx, &skill_path(ctx));
-        let hook_state = hook_status(ctx);
+        let skill_state = common::skill_status(ports.fs, ctx, &skill_path(ctx));
+        let hook_state = hook_status(ctx, ports);
         let result = ConnectorStatus {
             integrations: vec![
                 IntegrationState {
@@ -1366,10 +1566,11 @@ impl AgentConnector for GrokConnector {
         Ok(result)
     }
 
-    fn install(
+    fn install_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         let capability_count = request.capabilities.len();
@@ -1380,14 +1581,15 @@ impl AgentConnector for GrokConnector {
             "grok install started"
         );
         // 内层可用 `?`；外层保证任意返回都有 finished/failed + duration。
-        let outcome = grok_install_body(self, ctx, request);
+        let outcome = grok_install_body(self, ctx, request, ports);
         log_op_finish("install", started, &outcome);
         outcome
     }
 
-    fn uninstall(
+    fn uninstall_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         tracing::info!(
@@ -1395,82 +1597,151 @@ impl AgentConnector for GrokConnector {
             operation = "uninstall",
             "grok uninstall started"
         );
-        let outcome = grok_uninstall_body(self, ctx);
+        let outcome = grok_uninstall_body(self, ctx, ports);
         log_op_finish("uninstall", started, &outcome);
         outcome
-    }
-
-    fn manual_instructions(
-        &self,
-        ctx: &ConnectorRuntimeContext,
-    ) -> Result<ConnectorManualInstructions, ConnectorError> {
-        // 手动指引必须可粘贴：add 命令与 verification 均以 --scope user 为准。
-        // SessionStart 在 Grok 上不注入 additionalContext，步骤文案明确 Skill-first。
-        // 路径 quoting 分 shell 方言：POSIX / PowerShell / cmd.exe 各一版（真实 install 走 argv）。
-        let launch = ctx.mcp_launch();
-        let raw_mcp = launch.command.display().to_string();
-        // 手动指引必须与 mcp_add_args 生成的 argv 同源：命令之后逐个附加启动规格
-        // 的 args（本机恒为空 → 与改造前逐字节相同；远端会多出 `mcp`）。
-        let render = |quote: fn(&str) -> String| {
-            let mut command = format!(
-                "grok mcp add superdev --scope user -e SUPERDEV_AGENT_URL={} -- {}",
-                launch.agent_url,
-                quote(&raw_mcp)
-            );
-            for arg in &launch.args {
-                command.push(' ');
-                command.push_str(&quote(arg));
-            }
-            command
-        };
-        let add_posix = render(shell_quote_posix);
-        let add_powershell = render(shell_quote_powershell);
-        let add_cmd = render(shell_quote_cmd);
-        let add_default = if cfg!(windows) {
-            add_powershell.clone()
-        } else {
-            add_posix.clone()
-        };
-        let hook = hook_path(ctx);
-        let skill = skill_path(ctx);
-        let hook_example = {
-            let body = hook_file_body(&skill);
-            format!("在 {} 写入类似内容（owned 文件，勿与用户其它 hook 合并）: {body}", hook.display())
-        };
-        Ok(ConnectorManualInstructions {
-            summary: "通过 Grok CLI 接入 SuperDev（MCP + Skill + Session Hook）".into(),
-            steps: vec![
-                "安装 Grok CLI，并确保 grok 在 PATH 中".into(),
-                format!("POSIX shell: {add_posix}"),
-                format!("PowerShell: {add_powershell}"),
-                format!("cmd.exe: {add_cmd}"),
-                format!("Skill 目标目录: {}", skill.display()),
-                format!(
-                    "Hook 文件: {} （SessionStart；Grok 不注入 additionalContext，引导以 Skill 为主）",
-                    hook.display()
-                ),
-                hook_example,
-                "重启 Grok 会话，或在 /mcps 中刷新".into(),
-                "验证: grok mcp list --json".into(),
-            ],
-            config_path: Some(common::path_string(&config_path(ctx))),
-            manual_config: Some(add_default),
-            verification_prompt: Some(
-                "运行 grok mcp list --json，确认 name=superdev、scope=user、command 与 SUPERDEV_AGENT_URL 正确"
-                    .into(),
-            ),
-        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
+    use crate::mcp_install::fs_port::{BatchFile, ConnectorFs, FsStat, WriteLabels};
+    use std::cell::RefCell;
+    use std::collections::{BTreeMap, VecDeque};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// MemoryFs 是测试用的极简内存 ConnectorFs：只保存文件内容，用于证明 hook
+    /// 写入/删除走的是端口而不是真实磁盘上的 home。
+    struct MemoryFs {
+        files: RefCell<BTreeMap<PathBuf, String>>,
+        dirs: RefCell<Vec<PathBuf>>,
+    }
+
+    impl MemoryFs {
+        fn new() -> Self {
+            Self {
+                files: RefCell::new(BTreeMap::new()),
+                dirs: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn get(&self, path: &Path) -> Option<String> {
+            self.files.borrow().get(path).cloned()
+        }
+
+        fn has_file_named(&self, name: &str) -> bool {
+            self.files
+                .borrow()
+                .keys()
+                .any(|path| path.file_name().and_then(|n| n.to_str()) == Some(name))
+        }
+    }
+
+    impl ConnectorFs for MemoryFs {
+        fn stat(&self, path: &Path) -> Result<FsStat, String> {
+            let is_dir = self.dirs.borrow().iter().any(|dir| dir == path)
+                || self
+                    .files
+                    .borrow()
+                    .keys()
+                    .any(|file| file.starts_with(path) && file != path);
+            let exists = is_dir || self.files.borrow().contains_key(path);
+            Ok(FsStat {
+                exists,
+                is_dir,
+                is_symlink: false,
+            })
+        }
+
+        fn read_optional(&self, path: &Path) -> Result<Option<String>, String> {
+            Ok(self.files.borrow().get(path).cloned())
+        }
+
+        fn write_atomic(
+            &self,
+            path: &Path,
+            content: &str,
+            _backup: bool,
+            _labels: WriteLabels<'_>,
+        ) -> Result<Option<String>, String> {
+            if let Some(parent) = path.parent() {
+                self.dirs.borrow_mut().push(parent.to_path_buf());
+            }
+            self.files
+                .borrow_mut()
+                .insert(path.to_path_buf(), content.to_string());
+            Ok(None)
+        }
+
+        fn mkdir_all(&self, path: &Path) -> Result<(), String> {
+            self.dirs.borrow_mut().push(path.to_path_buf());
+            Ok(())
+        }
+
+        fn write_batch(
+            &self,
+            dir: &Path,
+            files: &[BatchFile],
+            _label: &str,
+        ) -> Result<(), String> {
+            self.dirs.borrow_mut().push(dir.to_path_buf());
+            for file in files {
+                self.files.borrow_mut().insert(
+                    dir.join(&file.rel_path),
+                    String::from_utf8_lossy(&file.content).into_owned(),
+                );
+            }
+            Ok(())
+        }
+
+        fn rename(&self, from: &Path, to: &Path) -> Result<(), String> {
+            let moved: Vec<(PathBuf, String)> = self
+                .files
+                .borrow()
+                .iter()
+                .filter(|(path, _)| path.starts_with(from))
+                .map(|(path, content)| {
+                    let rel = path.strip_prefix(from).expect("prefix").to_path_buf();
+                    (to.join(rel), content.clone())
+                })
+                .collect();
+            self.files
+                .borrow_mut()
+                .retain(|path, _| !path.starts_with(from));
+            self.dirs.borrow_mut().retain(|dir| !dir.starts_with(from));
+            self.dirs.borrow_mut().push(to.to_path_buf());
+            for (path, content) in moved {
+                self.files.borrow_mut().insert(path, content);
+            }
+            Ok(())
+        }
+
+        fn list_relative_files(&self, dir: &Path) -> Result<Vec<PathBuf>, String> {
+            Ok(self
+                .files
+                .borrow()
+                .keys()
+                .filter_map(|path| path.strip_prefix(dir).ok().map(Path::to_path_buf))
+                .collect())
+        }
+
+        fn remove_dir_all(&self, path: &Path) -> Result<(), String> {
+            self.files
+                .borrow_mut()
+                .retain(|file, _| !file.starts_with(path));
+            self.dirs.borrow_mut().retain(|dir| !dir.starts_with(path));
+            Ok(())
+        }
+
+        fn remove_file(&self, path: &Path) -> Result<(), String> {
+            self.files.borrow_mut().remove(path);
+            Ok(())
+        }
+    }
 
     /// FakeCommandRunner 按队列返回预设输出，并记录 argv 供断言（不经真实进程）。
     #[derive(Clone, Default)]
@@ -2346,6 +2617,126 @@ mod tests {
         assert!(
             args.contains(&format!("SUPERDEV_AGENT_URL={DEFAULT_AGENT_URL}")),
             "{args:?}"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn grok_port_ops_is_available() {
+        assert!(AgentConnector::port_ops(&GrokConnector::new()).is_some());
+    }
+
+    /// 端口化 install 必须把 owned hook 写进注入的 fs，而不是桌面机真实 home。
+    #[test]
+    fn ported_install_writes_hook_through_the_fs_port() {
+        let home = test_dir("ported-install-hook");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let skill_src = write_skill_source(&home);
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![bin],
+            vec![],
+            home.join("superdev-mcp"),
+            Some(skill_src),
+            None,
+        );
+        let struct_runner = FakeCommandRunner::default();
+        let injected = FakeCommandRunner::default();
+        // list empty → add ok → list configured
+        injected.push_ok(0, "[]");
+        injected.push_ok(0, "");
+        injected.push_ok(0, &configured_list_json(&ctx));
+
+        let memory = MemoryFs::new();
+        let connector = GrokConnector::with_runner(Arc::new(struct_runner.clone()));
+        let ports = ConnectorPorts::new(&memory, &injected);
+        let outcome = connector
+            .install_with_ports(&ctx, install_all_request(), &ports)
+            .expect("ported install");
+        assert!(matches!(
+            outcome.result,
+            ConnectorResult::Success | ConnectorResult::Partial
+        ));
+        assert_eq!(struct_runner.argv().len(), 0, "结构体 runner 不得被触碰");
+        assert!(
+            memory.has_file_named(HOOK_FILE_NAME),
+            "hook 必须经端口写入 MemoryFs"
+        );
+        let hook_on_disk = home.join(".grok").join("hooks").join(HOOK_FILE_NAME);
+        assert!(
+            !hook_on_disk.exists(),
+            "真实 home 下不得出现 hook（否则绕过了端口）: {}",
+            hook_on_disk.display()
+        );
+        let hook_body = memory
+            .get(&hook_path(&ctx))
+            .expect("MemoryFs 应持有 hook 正文");
+        assert!(
+            hook_has_marker(&hook_body),
+            "hook 内容必须带 SuperDev 标记: {hook_body}"
+        );
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// 端口化 uninstall 必须经 fs 端口删除 owned hook，而不是 std::fs。
+    #[test]
+    fn ported_uninstall_removes_hook_through_the_fs_port() {
+        let home = test_dir("ported-uninstall-hook");
+        let bin = home.join("bin");
+        write_fake_cli(&bin);
+        let skill_src = write_skill_source(&home);
+        let ctx = ConnectorRuntimeContext::new(
+            home.clone(),
+            vec![bin],
+            vec![],
+            home.join("superdev-mcp"),
+            Some(skill_src),
+            None,
+        );
+        let skill = skill_path(&ctx);
+        let hook = hook_path(&ctx);
+        let memory = MemoryFs::new();
+        // 预置 skill 目录与 owned hook，模拟「已安装」状态。
+        memory
+            .write_batch(
+                &skill,
+                &[BatchFile {
+                    rel_path: PathBuf::from("SKILL.md"),
+                    content: b"# superdev\n".to_vec(),
+                    executable: false,
+                }],
+                "skill 文件",
+            )
+            .unwrap();
+        memory
+            .write_atomic(
+                &hook,
+                &hook_file_body(&skill),
+                false,
+                WriteLabels {
+                    write_object: "hook 配置文件",
+                    backup_failure: "备份 hook 配置失败",
+                },
+            )
+            .unwrap();
+        assert!(memory.get(&hook).is_some());
+
+        let injected = FakeCommandRunner::default();
+        // list present → remove ok → list empty
+        injected.push_ok(0, &configured_list_json(&ctx));
+        injected.push_ok(0, "");
+        injected.push_ok(0, "[]");
+
+        let connector = GrokConnector::with_runner(Arc::new(FakeCommandRunner::default()));
+        let ports = ConnectorPorts::new(&memory, &injected);
+        let outcome = connector
+            .uninstall_with_ports(&ctx, &ports)
+            .expect("ported uninstall");
+        assert_eq!(outcome.result, ConnectorResult::Success);
+        assert!(
+            memory.get(&hook).is_none(),
+            "owned hook 必须经端口从 MemoryFs 删除"
         );
         let _ = std::fs::remove_dir_all(home);
     }

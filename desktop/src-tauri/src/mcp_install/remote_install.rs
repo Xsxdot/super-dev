@@ -99,13 +99,12 @@ pub struct RemoteAgentStatus {
     pub skill_installed: bool,
     /// hook_installed 表示目标机配置里是否已有 SuperDev 的 SessionStart hook。
     pub hook_installed: bool,
-    /// remote_supported 表示该连接器能否在**只有 agent 文件端点**的远端机器上完成接入。
+    /// remote_supported 表示该连接器能否在远端机器上完成接入。
     ///
-    /// 为 false 的连接器（当前是 openclaw / grok）有一类结构性阻碍，不是本模块
-    /// 能绕开的：它们通过目标机上的**自身 CLI 进程**（`openclaw mcp set`、
-    /// `grok mcp add`）写配置，而远端只提供受限文件端点、没有远程执行原语。
-    /// 在远端机器上执行任意命令是一个独立的安全面（需要单独的威胁建模与审批
-    /// 门设计），已明确排除在本计划之外。
+    /// 判据是 `remote_plan`：内置方言三家（claude-code / codex / cursor）走
+    /// `built_in_remote_kind`；其余凡实现了 `PortedConnectorOps`（`port_ops()` 为
+    /// Some）的也算支持——含 openclaw / grok（命令经 `ConnectorPorts::runner`，
+    /// 文件经 `ConnectorPorts::fs`）。返回 None 的连接器才为 false。
     ///
     /// 之所以显式暴露这个布尔量而不是让三个状态位默默为 false：后者会让前端把
     /// 「查不到」渲染成「没装」，正是本任务要消灭的那类静默错误。
@@ -1054,6 +1053,14 @@ mod tests {
             self.dirs.borrow_mut().retain(|dir| !dir.starts_with(path));
             Ok(())
         }
+
+        fn remove_file(&self, path: &Path) -> Result<(), String> {
+            // 单文件删除走 DELETE 白名单；缺失视为成功（与 LocalFs/RemoteAgentFs 幂等语义一致）。
+            self.hit();
+            self.touch(DELETE_OP, path);
+            self.files.borrow_mut().remove(path);
+            Ok(())
+        }
     }
 
     /// FakeDetector 记录收到的命令名清单，并回一份固定的 detect 响应。
@@ -1184,25 +1191,115 @@ mod tests {
         assert!(status.remote_supported);
     }
 
+    /// 未实现 PortedConnectorOps 的连接器必须 remote_supported=false，且不触碰目标机文件。
+    ///
+    /// 内置八家已全部端口化；这里用测试夹具连接器钉住「负例仍成立」。
     #[test]
     fn unsupported_connector_reports_no_remote_support_without_touching_the_filesystem() {
+        use crate::mcp_install::contracts::{
+            AgentConnectorDescriptor, AgentConnectorDescriptorInput, ConnectorManualInstructions,
+            ConnectorOperation, ConnectorPlatform, IntegrationCapability, IntegrationSupport,
+            OperationSupport, SupportMode,
+        };
+        use crate::mcp_install::registry::{ConnectorDetection, ConnectorError};
+
+        struct UnportedFixture {
+            descriptor: AgentConnectorDescriptor,
+        }
+
+        impl AgentConnector for UnportedFixture {
+            fn descriptor(&self) -> &AgentConnectorDescriptor {
+                &self.descriptor
+            }
+            fn detect(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+            ) -> Result<ConnectorDetection, ConnectorError> {
+                Ok(ConnectorDetection {
+                    detected: false,
+                    detection_path: None,
+                    message: None,
+                })
+            }
+            fn status(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+            ) -> Result<ConnectorStatus, ConnectorError> {
+                Err(ConnectorError::new("not_implemented", "fixture"))
+            }
+            fn install(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+                _request: ConnectorInstallRequest,
+            ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+                Err(ConnectorError::new("not_implemented", "fixture"))
+            }
+            fn uninstall(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+            ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+                Err(ConnectorError::new("not_implemented", "fixture"))
+            }
+            fn manual_instructions(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+            ) -> Result<ConnectorManualInstructions, ConnectorError> {
+                Ok(ConnectorManualInstructions {
+                    summary: "fixture".into(),
+                    steps: vec![],
+                    config_path: None,
+                    manual_config: None,
+                    verification_prompt: None,
+                })
+            }
+        }
+
+        let fixture = UnportedFixture {
+            descriptor: AgentConnectorDescriptor::new(AgentConnectorDescriptorInput {
+                id: "unported-fixture".into(),
+                display_name: "Unported Fixture".into(),
+                built_in: false,
+                platforms: vec![ConnectorPlatform::Macos],
+                integrations: vec![
+                    IntegrationSupport {
+                        capability: IntegrationCapability::Mcp,
+                        support: SupportMode::Automatic,
+                    },
+                    IntegrationSupport {
+                        capability: IntegrationCapability::Skill,
+                        support: SupportMode::Automatic,
+                    },
+                    IntegrationSupport {
+                        capability: IntegrationCapability::SessionHook,
+                        support: SupportMode::Manual,
+                    },
+                ],
+                operations: [
+                    ConnectorOperation::Detect,
+                    ConnectorOperation::Install,
+                    ConnectorOperation::Update,
+                    ConnectorOperation::Status,
+                    ConnectorOperation::Uninstall,
+                    ConnectorOperation::Verify,
+                ]
+                .into_iter()
+                .map(|operation| OperationSupport {
+                    operation,
+                    support: SupportMode::Automatic,
+                })
+                .collect(),
+                docs_url: None,
+                verified_versions: None,
+            })
+            .expect("fixture descriptor"),
+        };
         let fs_port = RecordingFs::new();
         let ctx = build_remote_context(&detect_fixture(), None, None);
-        for id in ["openclaw", "grok"] {
-            let connector = connectors::builtin()
-                .into_iter()
-                .find(|connector| connector.descriptor().id() == id)
-                .unwrap_or_else(|| panic!("{id} connector"));
-
-            let status = remote_status_for(connector.as_ref(), &ctx, &fs_port, true);
-
-            assert!(
-                !status.remote_supported,
-                "{id} 的读写没有全程经 ConnectorFs 端口，不能声称支持远端接入"
-            );
-            assert!(status.cli_present, "{id} 的 CLI 存在性仍应如实上报");
-            assert!(!status.mcp_installed && !status.skill_installed && !status.hook_installed);
-        }
+        let status = remote_status_for(&fixture, &ctx, &fs_port, true);
+        assert!(
+            !status.remote_supported,
+            "未端口化的连接器不得声称支持远端接入"
+        );
         assert_eq!(
             fs_port.calls(),
             0,
@@ -1364,12 +1461,13 @@ mod tests {
     }
 
     #[test]
-    fn remote_support_is_pinned_to_the_six_fully_ported_connectors() {
+    fn remote_support_is_pinned_to_the_eight_fully_ported_connectors() {
         // 正面钉死支持集合。两条判据各管一半，都不是可以"顺手"扩大的：
         //   - 内置方言三家走 `built_in_remote_kind` 的列举式 match
-        //   - 第二波三家走 `AgentConnector::port_ops()`——返回 Some 的前提是这家
+        //   - 其余走 `AgentConnector::port_ops()`——返回 Some 的前提是这家
         //     连接器真的实现了 PortedConnectorOps（即它的 status/install/uninstall
         //     全部接受端口），没端口化就根本写不出那个 Some
+        // Task 7/8 把 openclaw / grok 也端口化后，内置八家全部进入远端支持集合。
         let supported: Vec<String> = connectors::builtin()
             .iter()
             .filter(|connector| remote_plan(connector.as_ref()).is_some())
@@ -1383,54 +1481,35 @@ mod tests {
                 "codex".to_string(),
                 "cursor".to_string(),
                 "opencode".to_string(),
+                "openclaw".to_string(),
                 "hermes".to_string(),
                 "kimi-code".to_string(),
+                "grok".to_string(),
             ],
-            "远端支持集合只能是「安装/卸载/状态读取全程经 ConnectorFs 端口」的那几家"
+            "远端支持集合只能是「安装/卸载/状态读取全程经端口」的那几家"
         );
         assert!(built_in_remote_kind("not-a-connector").is_none());
     }
 
-    /// openclaw / grok 的负例必须被单独钉住：它们靠在目标机上运行**自身 CLI**
-    /// 写配置，而远端只有受限文件端点、没有远程执行原语。把它们顺手加进支持集合
-    /// 的后果不是"报个错"，而是在桌面机自己的磁盘上按目标机路径写文件然后报成功。
+    /// Task 7/8：openclaw / grok 已实现 PortedConnectorOps（命令经 runner 端口、
+    /// 文件经 fs 端口）。Task 9 会完整替换远端支持集合的集成断言；这里只钉住
+    /// 「端口化标志位已亮」这一前置条件，避免旧负例把真支持挡在门外。
     #[test]
-    fn openclaw_and_grok_stay_out_of_the_remote_support_set() {
+    fn openclaw_and_grok_expose_port_ops_for_remote_support() {
         for id in ["openclaw", "grok"] {
             let connector = connectors::builtin()
                 .into_iter()
                 .find(|connector| connector.descriptor().id() == id)
                 .unwrap_or_else(|| panic!("{id} connector"));
             assert!(
-                connector.port_ops().is_none(),
-                "{id} 不能实现 PortedConnectorOps：它需要在目标机上执行任意命令"
+                connector.port_ops().is_some(),
+                "{id} 必须实现 PortedConnectorOps（命令 + 文件全程经端口）"
             );
             assert!(
-                remote_plan(connector.as_ref()).is_none(),
-                "{id} 不能进入远端支持集合"
+                remote_plan(connector.as_ref()).is_some(),
+                "{id} 应进入远端支持集合（Ported 路径）"
             );
         }
-
-        // 并且 install 入口必须显式失败、不产生任何副作用（不只是"状态位为 false"）。
-        let fs_port = RecordingFs::new();
-        let detector = FakeDetector::new(&["openclaw", "grok"]);
-        let connectors = connectors::builtin();
-        for id in ["openclaw", "grok"] {
-            let error = install_remote_connector(
-                &detector,
-                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
-                &connectors,
-                "host-42",
-                id,
-                None,
-                None,
-            )
-            .expect_err("不支持的连接器必须显式失败，而不是静默写出半套配置");
-            assert!(error.contains("host-42") && error.contains(id), "{error}");
-        }
-        assert_eq!(fs_port.calls(), 0, "拒绝时不得对目标机产生任何副作用");
-        assert_eq!(detector.call_count(), 0, "拒绝应先于任何远端调用");
     }
 
     #[test]
@@ -1745,6 +1824,10 @@ mod tests {
 
         fn remove_dir_all(&self, path: &Path) -> Result<(), String> {
             self.inner.remove_dir_all(path)
+        }
+
+        fn remove_file(&self, path: &Path) -> Result<(), String> {
+            self.inner.remove_file(path)
         }
     }
 
@@ -2277,11 +2360,111 @@ mod tests {
         let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());
     }
 
+    /// 注册表里存在但未进入 remote_plan 的连接器必须在入口处显式失败。
+    ///
+    /// 内置八家已全部端口化，这里注入一个不实现 port_ops 的夹具连接器钉住负例。
     #[test]
     fn remote_install_of_an_unsupported_connector_fails_loudly_with_host_and_connector() {
+        use crate::mcp_install::contracts::{
+            AgentConnectorDescriptor, AgentConnectorDescriptorInput, ConnectorManualInstructions,
+            ConnectorOperation, ConnectorPlatform, IntegrationCapability, IntegrationSupport,
+            OperationSupport, SupportMode,
+        };
+        use crate::mcp_install::registry::{ConnectorDetection, ConnectorError};
+
+        struct UnportedFixture {
+            descriptor: AgentConnectorDescriptor,
+        }
+
+        impl AgentConnector for UnportedFixture {
+            fn descriptor(&self) -> &AgentConnectorDescriptor {
+                &self.descriptor
+            }
+            fn detect(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+            ) -> Result<ConnectorDetection, ConnectorError> {
+                Ok(ConnectorDetection {
+                    detected: false,
+                    detection_path: None,
+                    message: None,
+                })
+            }
+            fn status(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+            ) -> Result<ConnectorStatus, ConnectorError> {
+                Err(ConnectorError::new("not_implemented", "fixture"))
+            }
+            fn install(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+                _request: ConnectorInstallRequest,
+            ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+                Err(ConnectorError::new("not_implemented", "fixture"))
+            }
+            fn uninstall(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+            ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+                Err(ConnectorError::new("not_implemented", "fixture"))
+            }
+            fn manual_instructions(
+                &self,
+                _ctx: &ConnectorRuntimeContext,
+            ) -> Result<ConnectorManualInstructions, ConnectorError> {
+                Ok(ConnectorManualInstructions {
+                    summary: "fixture".into(),
+                    steps: vec![],
+                    config_path: None,
+                    manual_config: None,
+                    verification_prompt: None,
+                })
+            }
+        }
+
+        let fixture: Arc<dyn AgentConnector> = Arc::new(UnportedFixture {
+            descriptor: AgentConnectorDescriptor::new(AgentConnectorDescriptorInput {
+                id: "unported-fixture".into(),
+                display_name: "Unported Fixture".into(),
+                built_in: false,
+                platforms: vec![ConnectorPlatform::Macos],
+                integrations: vec![
+                    IntegrationSupport {
+                        capability: IntegrationCapability::Mcp,
+                        support: SupportMode::Automatic,
+                    },
+                    IntegrationSupport {
+                        capability: IntegrationCapability::Skill,
+                        support: SupportMode::Automatic,
+                    },
+                    IntegrationSupport {
+                        capability: IntegrationCapability::SessionHook,
+                        support: SupportMode::Manual,
+                    },
+                ],
+                operations: [
+                    ConnectorOperation::Detect,
+                    ConnectorOperation::Install,
+                    ConnectorOperation::Update,
+                    ConnectorOperation::Status,
+                    ConnectorOperation::Uninstall,
+                    ConnectorOperation::Verify,
+                ]
+                .into_iter()
+                .map(|operation| OperationSupport {
+                    operation,
+                    support: SupportMode::Automatic,
+                })
+                .collect(),
+                docs_url: None,
+                verified_versions: None,
+            })
+            .expect("fixture descriptor"),
+        });
         let fs_port = RecordingFs::new();
-        let detector = FakeDetector::new(&["grok"]);
-        let connectors = connectors::builtin();
+        let detector = FakeDetector::new(&[]);
+        let connectors = vec![fixture];
 
         let error = install_remote_connector(
             &detector,
@@ -2289,14 +2472,14 @@ mod tests {
             &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
             &connectors,
             "host-42",
-            "grok",
+            "unported-fixture",
             None,
             None,
         )
         .expect_err("不支持的连接器必须显式失败，而不是静默写出半套配置");
 
         assert!(error.contains("host-42"), "{error}");
-        assert!(error.contains("grok"), "{error}");
+        assert!(error.contains("unported-fixture"), "{error}");
         assert_eq!(fs_port.calls(), 0, "拒绝时不得对目标机产生任何副作用");
         assert_eq!(detector.call_count(), 0, "拒绝应先于任何远端调用");
     }

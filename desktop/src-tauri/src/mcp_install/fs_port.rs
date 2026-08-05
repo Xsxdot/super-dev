@@ -235,6 +235,13 @@ pub trait ConnectorFs {
 
     /// remove_dir_all 递归删除目录。
     fn remove_dir_all(&self, path: &Path) -> Result<(), String>;
+
+    /// remove_file 删除单个文件；路径不存在时返回 Ok(())。
+    ///
+    /// 为什么不复用 remove_dir_all：远端实现要打的是 DELETE 端点的**文件**语义，
+    /// 而目录删除在服务端走的是另一条白名单判据（skills 分支 vs hooks 分支）。
+    /// 「不存在即成功」与 remove_dir_all 一致：卸载幂等。
+    fn remove_file(&self, path: &Path) -> Result<(), String>;
 }
 
 /// LocalFs 是 ConnectorFs 在桌面端本机文件系统上的实现。
@@ -353,6 +360,15 @@ impl ConnectorFs for LocalFs {
 
     fn remove_dir_all(&self, path: &Path) -> Result<(), String> {
         fs::remove_dir_all(path).map_err(|error| error.to_string())
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<(), String> {
+        // 不存在即成功：卸载 hook 等路径必须幂等，重复卸载不能报错。
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
     }
 }
 
@@ -844,5 +860,20 @@ mod tests {
 
         LocalFs.remove_dir_all(&moved).expect("remove dir");
         assert!(!moved.exists());
+    }
+
+    /// remove_file 必须幂等：已存在则删除，NotFound 仍 Ok——owned hook 卸载依赖此语义。
+    #[test]
+    fn remove_file_deletes_present_file_and_treats_missing_as_success() {
+        let dir = temp_dir();
+        let present = dir.join("hook.json");
+        fs::write(&present, "{}").expect("seed file");
+
+        LocalFs.remove_file(&present).expect("remove present");
+        assert!(!present.exists());
+
+        LocalFs
+            .remove_file(&dir.join("never-existed.json"))
+            .expect("missing path must be Ok");
     }
 }
