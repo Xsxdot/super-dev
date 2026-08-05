@@ -775,7 +775,7 @@ async function showManualConfig(agent: ConnectorId, label: string) {
           </header>
 
           <!--
-            三态互斥，且刻意不共用同一个 v-else 分支：
+            四态互斥，且刻意不共用同一个 v-else 分支：
               1. !remote_supported → 三个状态位整体「查不到」，见 unsupportedNotice
               2. remote_supported 但 !cli_present → detect_remote_agents 对这类行
                  直接返回全 false 占位值、不发一次文件操作（remote_install.rs 的
@@ -783,7 +783,11 @@ async function showManualConfig(agent: ConnectorId, label: string) {
                  布尔量和 mcp_command/agent_url 在这里和「查不到」是同一件事，
                  必须同样不渲染状态胶囊/详情格，只给出 cliMissing 说明——渲染成
                  「未配置命令」会把「没查」说成「查过、真没有」，是一句假话
-              3. remote_supported && cli_present → 三项状态才是读回来的真实值
+              3. status_error 非空 → 目标机问到了，但配置读回来是坏的（解析失败 /
+                 目标机 403 / 传输中断）。与前两条同一纪律：状态位仍是占位值，
+                 同样不渲染状态胶囊/详情格。之前后端只 warn 一行就把错误吞了，
+                 面板上「读失败」和「真的没装」长得一模一样
+              4. 以上都不成立 → 三项状态才是读回来的真实值
           -->
           <div
             v-if="!status.remote_supported"
@@ -798,6 +802,13 @@ async function showManualConfig(agent: ConnectorId, label: string) {
             :data-test="`mcp-remote-cli-missing-${status.connector_id}`"
           >
             {{ t('settings.mcpRemote.cliMissing', { agent: status.display_name }) }}
+          </div>
+          <div
+            v-else-if="status.status_error"
+            class="settings-alert settings-alert-danger mcp-inline-alert"
+            :data-test="`mcp-remote-status-error-${status.connector_id}`"
+          >
+            {{ t('settings.mcpRemote.statusUnavailable', { agent: status.display_name, message: status.status_error }) }}
           </div>
           <template v-else>
             <div class="agent-capabilities">

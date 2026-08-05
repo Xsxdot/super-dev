@@ -157,6 +157,8 @@ export async function getMcpDocs(): Promise<McpDocs> {
  *     `hook_installed` 都只是占位 false——真实语义是「查不到」，不是「没装」。
  *     该字段为 false 的连接器（openclaw / grok）依赖目标机本地 CLI 进程写配置，
  *     远端只提供受限文件端点，不提供远程执行原语
+ *   - `status_error` 非空时同样是「查不到」：目标机问到了，但配置读回来是坏的
+ *     （解析失败 / 403 / 传输中断），三个状态位仍只是占位 false
  */
 export interface RemoteAgentStatus {
   connector_id: ConnectorId
@@ -168,6 +170,14 @@ export interface RemoteAgentStatus {
   skill_installed: boolean
   hook_installed: boolean
   remote_supported: boolean
+  /**
+   * status_error 是「状态没读出来」的原因，读成功时为 null。
+   *
+   * 必须与 `remote_supported=false` / `cli_present=false` 同等对待——三者都表示
+   * 三个布尔状态位是占位值而非事实，渲染成「未配置」就是把「没查到」说成
+   * 「查过、真没有」。
+   */
+  status_error?: string | null
 }
 
 /**

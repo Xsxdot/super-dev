@@ -412,6 +412,46 @@ describe('McpManagerTab', () => {
       expect(wrapper.find('[data-test="mcp-remote-mcp-status-cursor"]').exists()).toBe(false)
     })
 
+    it('renders a status-unavailable notice instead of "not configured" when the status read failed', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([
+        remoteStatus({
+          connector_id: 'claude-code',
+          display_name: 'Claude Code',
+          status_error: 'config parse failed: expected value at line 1 column 3',
+        }),
+      ])
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      // Same discipline as the cli_present=false and remote_supported=false branches:
+      // the three status booleans are placeholders, so the status pills and detail grid
+      // must not render — showing "not configured" would claim a read that came back broken.
+      const notice = wrapper.find('[data-test="mcp-remote-status-error-claude-code"]')
+      expect(notice.exists()).toBe(true)
+      expect(notice.text()).toContain('config parse failed')
+      expect(wrapper.find('[data-test="mcp-remote-mcp-status-claude-code"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="mcp-remote-command-claude-code"]').exists()).toBe(false)
+      // Install stays enabled: retrying is exactly what the user should be able to do,
+      // and install re-reports the same error if it persists.
+      expect(wrapper.find('[data-test="mcp-remote-install-claude-code"]').attributes('disabled')).toBeUndefined()
+    })
+
+    it('keeps rendering the real status grid when status_error is absent', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([
+        remoteStatus({ connector_id: 'claude-code', display_name: 'Claude Code', mcp_installed: true }),
+      ])
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      // Guards the other direction: the new branch must not swallow healthy rows.
+      expect(wrapper.find('[data-test="mcp-remote-status-error-claude-code"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="mcp-remote-mcp-status-claude-code"]').exists()).toBe(true)
+    })
+
     it('disables install/uninstall and explains local-only setup when remote_supported is false', async () => {
       useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
       vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([

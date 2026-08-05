@@ -342,6 +342,7 @@ export default {
       noRemoteHosts: 'No remote machines are connected yet. Add an Agent under Hosts first.',
       hostsLoadFailed: 'Failed to load the connected machine list: {message}',
       cliMissing: '{agent} CLI was not detected on the target machine; remote setup is unavailable.',
+      statusUnavailable: 'Could not read the {agent} setup status on the target machine, so no status is shown here — this does not mean it is not installed: {message}',
       targetUnreachable: 'Could not reach the target machine: {message}',
       unsupportedNotice: '{agent} requires running its own CLI on the target machine to write configuration, and the remote endpoint only exposes restricted file operations, so remote setup is not supported. Please complete the setup locally on that machine.',
       mcpMisdirected: 'Installed · pointing elsewhere',

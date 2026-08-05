@@ -342,6 +342,7 @@ export default {
       noRemoteHosts: '还没有接入的远端机器，请先在「主机管理」添加 Agent。',
       hostsLoadFailed: '读取已接入机器列表失败：{message}',
       cliMissing: '{agent} 在目标机上未检测到 CLI，无法远程接入。',
+      statusUnavailable: '{agent} 在目标机上的接入状态读取失败，因此这里不显示状态——这不等于「未安装」：{message}',
       targetUnreachable: '无法连接目标机：{message}',
       unsupportedNotice: '{agent} 依赖在目标机上运行自身 CLI 才能写配置，远端仅提供受限文件端点，暂不支持远程接入。请在目标机本地完成该智能体的接入。',
       mcpMisdirected: '已装 · 指向别处',
