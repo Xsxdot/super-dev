@@ -185,6 +185,9 @@ export interface RemoteAgentStatus {
  *
  * 参数：
  *   - hostId: 目标机器在本机 agent 里的注册 ID
+ *   - options.configPathOverride: 可选；目标机 OpenClaw 配置路径覆盖
+ *     （对应 OPENCLAW_CONFIG_PATH）。与 install 同源——装到自定义路径后刷新状态
+ *     必须同一覆盖，否则面板会假阴性显示「未安装」。空串/缺省视为未覆盖。
  *
  * 返回：
  *   - 每个内置连接器在目标机上的 CLI 存在性与三项接入状态
@@ -192,9 +195,16 @@ export interface RemoteAgentStatus {
  * 注意：
  *   - 只读操作；失败时（目标机不可达 / detect 响应无法解析等）会 reject，
  *     调用方需要向用户解释「查不到」而非把异常吞掉渲染成空列表
+ *   - 目前仅 OpenClaw status CLI 消费该字段；其它连接器忽略
  */
-export async function detectRemoteCodingAgents(hostId: string): Promise<RemoteAgentStatus[]> {
-  return invoke<RemoteAgentStatus[]>('detect_remote_coding_agents', { hostId })
+export async function detectRemoteCodingAgents(
+  hostId: string,
+  options?: { configPathOverride?: string },
+): Promise<RemoteAgentStatus[]> {
+  return invoke<RemoteAgentStatus[]>('detect_remote_coding_agents', {
+    hostId,
+    configPathOverride: options?.configPathOverride,
+  })
 }
 
 /**
@@ -229,8 +239,17 @@ export async function installRemoteAgentConnector(
 /**
  * uninstallRemoteAgentConnector 从目标机移除单个连接器的 SuperDev 接入。
  *
- * 参数与返回语义同 `installRemoteAgentConnector`；只删除 SuperDev 自己写入的部分。
+ * 参数与返回语义同 `installRemoteAgentConnector`（含 configPathOverride）；
+ * 只删除 SuperDev 自己写入的部分。OpenClaw 卸载需同一 OPENCLAW_CONFIG_PATH。
  */
-export async function uninstallRemoteAgentConnector(hostId: string, connectorId: ConnectorId): Promise<ConnectorOperationOutcome> {
-  return invoke<ConnectorOperationOutcome>('uninstall_remote_agent_connector', { hostId, connectorId })
+export async function uninstallRemoteAgentConnector(
+  hostId: string,
+  connectorId: ConnectorId,
+  options?: { configPathOverride?: string },
+): Promise<ConnectorOperationOutcome> {
+  return invoke<ConnectorOperationOutcome>('uninstall_remote_agent_connector', {
+    hostId,
+    connectorId,
+    configPathOverride: options?.configPathOverride,
+  })
 }

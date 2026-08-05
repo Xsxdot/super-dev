@@ -238,17 +238,21 @@ fn remote_install_inputs(
 ///
 /// 参数：
 ///   - host_id: 目标机器在本机 agent 里的注册 ID
+///   - config_path_override: 可选；目标机 OpenClaw 配置路径覆盖（OPENCLAW_CONFIG_PATH）。
+///     与 install 同源；空串视为未覆盖。仅 openclaw 的 status CLI 消费该字段。
 ///
 /// 返回：
 ///   - 每个内置连接器在目标机上的 CLI 存在性与三项接入状态
 ///
 /// 注意：
 ///   - 只读操作；CLI 不在目标机上时不会对该智能体发任何文件/命令请求
+///   - 装时带了覆盖则刷新状态必须同一覆盖，否则 openclaw 会在默认路径上假阴性
 #[tauri::command]
 fn detect_remote_coding_agents(
     app: tauri::AppHandle,
     agent_state: State<'_, AgentProcess>,
     host_id: String,
+    config_path_override: Option<String>,
 ) -> Result<Vec<mcp_install::remote_install::RemoteAgentStatus>, String> {
     run_remote_connector_command("all", "remote_detect", &host_id, || {
         let (detector, fs_port, runner, (skill_source, skill_source_error)) =
@@ -261,6 +265,7 @@ fn detect_remote_coding_agents(
             &host_id,
             skill_source,
             skill_source_error,
+            config_path_override,
         )
     })
 }
@@ -307,13 +312,15 @@ fn install_remote_agent_connector(
 
 /// uninstall_remote_agent_connector 从目标机移除单个智能体的 SuperDev 接入。
 ///
-/// 参数与返回语义同 `install_remote_agent_connector`；只删除 SuperDev 自己写入的部分。
+/// 参数与返回语义同 `install_remote_agent_connector`（含 config_path_override）；
+/// 只删除 SuperDev 自己写入的部分。OpenClaw 卸载 CLI 需同一 OPENCLAW_CONFIG_PATH。
 #[tauri::command]
 fn uninstall_remote_agent_connector(
     app: tauri::AppHandle,
     agent_state: State<'_, AgentProcess>,
     host_id: String,
     connector_id: String,
+    config_path_override: Option<String>,
 ) -> Result<ConnectorOperationOutcome, String> {
     run_remote_connector_command(&connector_id, "remote_uninstall", &host_id, || {
         let (detector, fs_port, runner, (skill_source, skill_source_error)) =
@@ -327,6 +334,7 @@ fn uninstall_remote_agent_connector(
             &connector_id,
             skill_source,
             skill_source_error,
+            config_path_override,
         )
     })
 }

@@ -445,6 +445,35 @@ pub fn build_remote_context(
     .with_mcp_launch(launch)
 }
 
+/// apply_openclaw_config_path_override 把目标机 OPENCLAW_CONFIG_PATH 覆盖注入运行上下文。
+///
+/// 参数：
+///   - ctx: 已构造的远端运行上下文
+///   - config_path_override: 可选覆盖路径；空串 / 仅空白视为未覆盖
+///
+/// 返回：
+///   - 若有有效覆盖，environment.openclaw_config_path 已设置的新上下文；否则原样返回
+///
+/// 注意：
+///   - detect / install / uninstall 共用此路径：装到自定义路径后，status 的 `mcp show`
+///     与卸载的 `mcp unset` 若不带同一 env，会在默认路径上假阴性「未安装」
+///   - 只注入 openclaw 字段；远端 v1 没有其它配置覆盖入口
+fn apply_openclaw_config_path_override(
+    ctx: ConnectorRuntimeContext,
+    config_path_override: Option<String>,
+) -> ConnectorRuntimeContext {
+    let openclaw_path = config_path_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    if openclaw_path.is_some() {
+        ctx.with_environment(ConnectorEnvironment::new(None, openclaw_path, None))
+    } else {
+        ctx
+    }
+}
+
 /// remote_status_for 读取单个连接器在目标机上的接入状态。
 ///
 /// 参数：
@@ -617,6 +646,8 @@ fn ported_remote_status(
 ///   - ports: 目标机副作用端口集合（文件 + 进程）；必须与 detector 指向同一台机器
 ///   - connectors: 按注册顺序排列的连接器列表
 ///   - skill_source / skill_source_error: 桌面端 bundled skill 源
+///   - config_path_override: 可选目标机 OpenClaw 配置路径覆盖（OPENCLAW_CONFIG_PATH）。
+///     与 install 同源；空串 / 仅空白视为未覆盖。其它连接器忽略该字段。
 ///
 /// 返回：
 ///   - 与 `connectors` 同序的远端状态列表
@@ -625,6 +656,8 @@ fn ported_remote_status(
 ///   - detect 只调用**一次**，带全部连接器命令名的去重合集；不是每家各问一次
 ///   - openclaw / grok 的 status 会经 `ports.runner` 调目标机 CLI；传本机 runner
 ///     会在桌面机上跑 show/list，把读到的内容当成远端状态——静默错误
+///   - 若装时带了 OPENCLAW_CONFIG_PATH，status 的 `mcp show` 必须带同一覆盖，
+///     否则会在默认路径上读到空，面板假阴性显示「未安装」
 pub fn detect_remote_agents(
     detector: &dyn RemoteIntegrationDetector,
     ports: &ConnectorPorts<'_>,
@@ -632,9 +665,13 @@ pub fn detect_remote_agents(
     host_id: &str,
     skill_source: Option<PathBuf>,
     skill_source_error: Option<String>,
+    config_path_override: Option<String>,
 ) -> Result<Vec<RemoteAgentStatus>, String> {
     let detected = detect_once(detector, connectors, host_id)?;
-    let ctx = build_remote_context(&detected, skill_source, skill_source_error);
+    let ctx = apply_openclaw_config_path_override(
+        build_remote_context(&detected, skill_source, skill_source_error),
+        config_path_override,
+    );
     Ok(connectors
         .iter()
         .map(|connector| {
@@ -690,17 +727,12 @@ pub fn install_remote_connector(
 ) -> Result<ConnectorOperationOutcome, String> {
     let (connector, plan) = resolve_remote_plan(connectors, host_id, connector_id)?;
     let detected = detect_once(detector, connectors, host_id)?;
-    let mut ctx = build_remote_context(&detected, skill_source, skill_source_error);
     // OpenClaw 靠 OPENCLAW_CONFIG_PATH 决定配置写到哪；空串视为未覆盖。
-    // 只注入 openclaw_config_path 字段——其它环境覆盖在远端安装里没有入口。
-    let openclaw_path = config_path_override
-        .as_deref()
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from);
-    if openclaw_path.is_some() {
-        ctx = ctx.with_environment(ConnectorEnvironment::new(None, openclaw_path, None));
-    }
+    // 与 detect/uninstall 共用 apply_openclaw_config_path_override。
+    let ctx = apply_openclaw_config_path_override(
+        build_remote_context(&detected, skill_source, skill_source_error),
+        config_path_override,
+    );
     let kind = match plan {
         RemoteInstallPlan::BuiltInKind(kind) => kind,
         RemoteInstallPlan::Ported => {
@@ -739,7 +771,9 @@ pub fn install_remote_connector(
 
 /// uninstall_remote_connector 在目标机上移除单个连接器的 SuperDev 接入。
 ///
-/// 参数与返回语义同 [`install_remote_connector`]；只删除 SuperDev 自己写入的那部分。
+/// 参数与返回语义同 [`install_remote_connector`]（含 `config_path_override`）；
+/// 只删除 SuperDev 自己写入的那部分。OpenClaw 的 `mcp unset` 必须与安装时同一
+/// OPENCLAW_CONFIG_PATH，否则会在默认路径上找不到条目。
 pub fn uninstall_remote_connector(
     detector: &dyn RemoteIntegrationDetector,
     ports: &ConnectorPorts<'_>,
@@ -748,10 +782,14 @@ pub fn uninstall_remote_connector(
     connector_id: &str,
     skill_source: Option<PathBuf>,
     skill_source_error: Option<String>,
+    config_path_override: Option<String>,
 ) -> Result<ConnectorOperationOutcome, String> {
     let (connector, plan) = resolve_remote_plan(connectors, host_id, connector_id)?;
     let detected = detect_once(detector, connectors, host_id)?;
-    let ctx = build_remote_context(&detected, skill_source, skill_source_error);
+    let ctx = apply_openclaw_config_path_override(
+        build_remote_context(&detected, skill_source, skill_source_error),
+        config_path_override,
+    );
     let kind = match plan {
         RemoteInstallPlan::BuiltInKind(kind) => kind,
         RemoteInstallPlan::Ported => {
@@ -1766,6 +1804,117 @@ mod tests {
         }
     }
 
+    /// detect/status 路径也必须把 config_path_override 注入 OPENCLAW_CONFIG_PATH。
+    ///
+    /// 装时写到自定义路径，刷新状态却用默认路径 show → 面板假阴性「未安装」。
+    #[test]
+    fn remote_detect_applies_openclaw_config_path_override_to_cli_env() {
+        let fs_port = RecordingFs::new();
+        let runner = FakeCommandRunner::new();
+        // openclaw status 走一次 mcp show --json；返回 null 表示未装（本测只关心 env）。
+        runner.push_ok(0, "null");
+        let detector = FakeDetector::new(&["openclaw"]);
+        let connectors = connectors::builtin();
+        let ports = ConnectorPorts::new(&fs_port, &runner);
+
+        detect_remote_agents(
+            &detector,
+            &ports,
+            &connectors,
+            "host-42",
+            None,
+            None,
+            Some("/home/u/.openclaw/custom.json".into()),
+        )
+        .expect("detect");
+
+        let calls = runner.calls();
+        assert!(
+            !calls.is_empty(),
+            "openclaw status 至少应有一次远端 CLI 调用"
+        );
+        for call in &calls {
+            let path = call
+                .env
+                .iter()
+                .find(|(k, _)| k == "OPENCLAW_CONFIG_PATH")
+                .map(|(_, v)| v.to_string_lossy().into_owned());
+            assert_eq!(
+                path.as_deref(),
+                Some("/home/u/.openclaw/custom.json"),
+                "status 的 openclaw CLI 调用必须带上配置路径覆盖"
+            );
+        }
+
+        // 未传覆盖时不得注入空 OPENCLAW_CONFIG_PATH。
+        let runner2 = FakeCommandRunner::new();
+        runner2.push_ok(0, "null");
+        let ports2 = ConnectorPorts::new(&fs_port, &runner2);
+        detect_remote_agents(
+            &detector,
+            &ports2,
+            &connectors,
+            "host-42",
+            None,
+            None,
+            None,
+        )
+        .expect("detect without override");
+        for call in runner2.calls() {
+            let has_override = call
+                .env
+                .iter()
+                .any(|(k, _)| k == "OPENCLAW_CONFIG_PATH");
+            assert!(
+                !has_override,
+                "未覆盖时不得注入 OPENCLAW_CONFIG_PATH"
+            );
+        }
+    }
+
+    /// uninstall 同样要把覆盖注入 CLI env，否则 mcp unset 打到默认路径。
+    #[test]
+    fn remote_uninstall_applies_openclaw_config_path_override_to_cli_env() {
+        let fs_port = RecordingFs::new();
+        let runner = FakeCommandRunner::new();
+        // show（已装）→ unset
+        runner.push_ok(
+            0,
+            r#"{"command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}"#,
+        );
+        runner.push_ok(0, "");
+        let detector = FakeDetector::new(&["openclaw"]);
+        let connectors = connectors::builtin();
+        let ports = ConnectorPorts::new(&fs_port, &runner);
+
+        uninstall_remote_connector(
+            &detector,
+            &ports,
+            &connectors,
+            "host-42",
+            "openclaw",
+            None,
+            None,
+            Some("/home/u/.openclaw/custom.json".into()),
+        )
+        .expect("uninstall");
+
+        let calls = runner.calls();
+        assert!(!calls.is_empty(), "至少应有一次远端 CLI 调用");
+        for call in &calls {
+            let path = call
+                .env
+                .iter()
+                .find(|(k, _)| k == "OPENCLAW_CONFIG_PATH")
+                .map(|(_, v)| v.to_string_lossy().into_owned());
+            assert_eq!(
+                path.as_deref(),
+                Some("/home/u/.openclaw/custom.json"),
+                "uninstall 的 openclaw CLI 调用必须带上配置路径覆盖"
+            );
+        }
+    }
+
     #[test]
     fn detect_response_with_blank_required_fields_is_rejected_before_anything_is_written() {
         let blank_home = RemoteDetectResponse {
@@ -1833,6 +1982,7 @@ mod tests {
             "host-42",
             None,
             None,
+            None,
         )
         .expect_err("detect 入口必须挡住空字段");
         let install_error = install_remote_connector(
@@ -1852,6 +2002,7 @@ mod tests {
             &connectors,
             "host-42",
             "claude-code",
+            None,
             None,
             None,
         )
@@ -1878,6 +2029,7 @@ mod tests {
                 &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
                 &connectors,
                 "host-42",
+                None,
                 None,
                 None,
             )
@@ -2160,6 +2312,7 @@ mod tests {
                 id,
                 Some(skill_source.clone()),
                 None,
+                None,
             )
             .unwrap_or_else(|error| panic!("{id} fixture uninstall: {error}"));
         }
@@ -2169,6 +2322,7 @@ mod tests {
             &connectors,
             "fixture-host",
             Some(skill_source.clone()),
+            None,
             None,
         )
         .expect("fixture detect");
@@ -2490,6 +2644,7 @@ mod tests {
                 connector_id,
                 Some(skill_source.clone()),
                 None,
+                None,
             )
             .unwrap_or_else(|error| panic!("{connector_id} 远端卸载失败: {error}"));
             assert_eq!(removed.operation, ConnectorOperation::Uninstall);
@@ -2611,6 +2766,7 @@ mod tests {
             "host-42",
             "claude-code",
             Some(skill_source.clone()),
+            None,
             None,
         )
         .expect("remote uninstall");

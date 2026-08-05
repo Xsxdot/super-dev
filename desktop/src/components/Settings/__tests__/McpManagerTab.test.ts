@@ -386,7 +386,9 @@ describe('McpManagerTab', () => {
       await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
       await flushPromises()
 
-      expect(api.detectRemoteCodingAgents).toHaveBeenCalledWith('host-1')
+      expect(api.detectRemoteCodingAgents).toHaveBeenCalledWith('host-1', {
+        configPathOverride: undefined,
+      })
       expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(true)
     })
 
@@ -549,7 +551,9 @@ describe('McpManagerTab', () => {
 
       resolveHostTwoDetect([remoteStatus({ connector_id: 'codex', display_name: 'Codex' })])
       await flushPromises()
-      expect(api.detectRemoteCodingAgents).toHaveBeenLastCalledWith('host-2')
+      expect(api.detectRemoteCodingAgents).toHaveBeenLastCalledWith('host-2', {
+        configPathOverride: undefined,
+      })
       expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(true)
       // The row is host-2's fresh (unconfigured) codex, not a resurrection of host-1's message.
       expect(wrapper.find('[data-test="mcp-remote-operation-message-codex"]').exists()).toBe(false)
@@ -619,8 +623,12 @@ describe('McpManagerTab', () => {
 
       expect(wrapper.find('[data-test="mcp-remote-row-cursor"]').exists()).toBe(true)
       expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(false)
-      expect(api.detectRemoteCodingAgents).toHaveBeenNthCalledWith(1, 'host-1')
-      expect(api.detectRemoteCodingAgents).toHaveBeenNthCalledWith(2, 'host-2')
+      expect(api.detectRemoteCodingAgents).toHaveBeenNthCalledWith(1, 'host-1', {
+        configPathOverride: undefined,
+      })
+      expect(api.detectRemoteCodingAgents).toHaveBeenNthCalledWith(2, 'host-2', {
+        configPathOverride: undefined,
+      })
     })
 
     it('installs a remote connector with the correct host and connector id and refreshes remote status', async () => {
@@ -645,7 +653,7 @@ describe('McpManagerTab', () => {
       expect(api.detectRemoteCodingAgents).toHaveBeenCalledTimes(2)
     })
 
-    it('OpenClaw 远端行提供配置路径覆盖输入框，且值随安装请求下发', async () => {
+    it('OpenClaw 远端行提供配置路径覆盖输入框，且值随安装请求与装后状态刷新下发', async () => {
       useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
       vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([
         remoteStatus({ connector_id: 'openclaw', display_name: 'OpenClaw', remote_supported: true, cli_present: true }),
@@ -669,6 +677,10 @@ describe('McpManagerTab', () => {
         'openclaw',
         { configPathOverride: '/home/u/.openclaw/openclaw.json' },
       )
+      // 装后 refreshRemoteStatus 必须沿用同一覆盖，否则 status 在默认路径假阴性。
+      expect(api.detectRemoteCodingAgents).toHaveBeenLastCalledWith('host-1', {
+        configPathOverride: '/home/u/.openclaw/openclaw.json',
+      })
     })
 
     it('其他连接器不显示配置路径覆盖输入框', async () => {
@@ -699,7 +711,9 @@ describe('McpManagerTab', () => {
       await flushPromises()
 
       expect(ask).toHaveBeenCalled()
-      expect(api.uninstallRemoteAgentConnector).toHaveBeenCalledWith('host-1', 'codex')
+      expect(api.uninstallRemoteAgentConnector).toHaveBeenCalledWith('host-1', 'codex', {
+        configPathOverride: undefined,
+      })
     })
 
     it('returns to the local path when the machine picker is reset to the local machine', async () => {

@@ -282,7 +282,11 @@ async function refreshRemoteStatus() {
   remoteError.value = ''
   emitConnectorDiagnostic('remote_detect.started', 'info', { surface: 'settings', hostId })
   try {
-    const result = await detectRemoteCodingAgents(hostId)
+    // 与 install 同源：装时带了 OPENCLAW_CONFIG_PATH，status 的 mcp show 必须同一覆盖，
+    // 否则自定义路径上的安装会被读成「未安装」。
+    const result = await detectRemoteCodingAgents(hostId, {
+      configPathOverride: configPathOverrides['openclaw'] || undefined,
+    })
     if (selectedHostId.value !== hostId) {
       emitConnectorDiagnostic('remote_detect.discarded_stale_host', 'info', { surface: 'settings', hostId })
       return
@@ -403,7 +407,9 @@ async function confirmUninstallRemote(status: RemoteAgentStatus) {
   remoteOperationTone.value[agent] = 'info'
   try {
     emitConnectorDiagnostic('remote_uninstall.started', 'info', { surface: 'settings', connectorId: agent, hostId })
-    const outcome = await uninstallRemoteAgentConnector(hostId, agent)
+    const outcome = await uninstallRemoteAgentConnector(hostId, agent, {
+      configPathOverride: configPathOverrides[agent] || undefined,
+    })
     if (selectedHostId.value !== hostId) {
       emitConnectorDiagnostic('remote_uninstall.discarded_stale_host', 'info', { surface: 'settings', connectorId: agent, hostId })
       return
