@@ -9,6 +9,7 @@
 //   - 不解析/写入 ~/.openclaw/openclaw.json（OpenClaw 拥有 JSON5/includes/Nix）
 //   - 不在日志中记录 argv、canonical JSON、stdout/stderr 或路径
 //   - Registry verify 仅委托 status（只读 show），不跑 doctor --probe
+//   - 进程调用经 ConnectorPorts::runner，本机与远端同一实现
 
 use super::common;
 use crate::mcp_install::command_port::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
@@ -237,7 +238,71 @@ impl AgentConnector for OpenClawConnector {
         Ok(result)
     }
 
+    /// status 是 `status_with_ports(ctx, &ConnectorPorts::new(&LocalFs, self.runner))` —— **恒绑定本机**。
+    ///
+    /// 拿一个远端 ctx（home 指向目标机）调它，会去读**桌面机自己**磁盘上那些
+    /// 路径，把读到的内容当成目标机状态返回，且不会有任何报错。远端场景一律走
+    /// `PortedConnectorOps::status_with_ports` 并显式传远端 [`ConnectorPorts`]
+    /// （`remote_install::ported_remote_status` 是唯一入口）。
     fn status(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorStatus, ConnectorError> {
+        self.status_with_ports(ctx, &ConnectorPorts::new(&LocalFs, self.runner.as_ref()))
+    }
+
+    fn install(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        request: ConnectorInstallRequest,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.install_with_ports(ctx, request, &ConnectorPorts::new(&LocalFs, self.runner.as_ref()))
+    }
+
+    fn uninstall(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorOperationOutcome, ConnectorError> {
+        self.uninstall_with_ports(ctx, &ConnectorPorts::new(&LocalFs, self.runner.as_ref()))
+    }
+
+    /// port_ops 返回本连接器的端口化实现。
+    ///
+    /// OpenClaw 的 MCP 段只能由 `openclaw mcp set` 写（配置文件是 JSON5 + includes
+    /// + Nix，SuperDev 解析回写会毁掉用户的文件），因此它的远端可行性取决于
+    /// **进程调用**能不能经端口——`ConnectorPorts::runner` 补上这一格之后，
+    /// status/install/uninstall 的全部副作用都落在端口上，可以安全地跑到远端。
+    fn port_ops(&self) -> Option<&dyn PortedConnectorOps> {
+        Some(self)
+    }
+
+    fn manual_instructions(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+    ) -> Result<ConnectorManualInstructions, ConnectorError> {
+        let canonical = canonical_mcp_json(ctx);
+        Ok(ConnectorManualInstructions {
+            summary: "通过 openclaw 官方 CLI 接入 SuperDev MCP".into(),
+            steps: vec![
+                format!("运行: openclaw mcp set superdev '{}'", canonical),
+                format!("Skill 目标目录: {}", skill_path(ctx).display()),
+                "重启或重新加载 OpenClaw".into(),
+                "可选验证: openclaw doctor --probe".into(),
+                "Session Hook 需按 OpenClaw 文档手动配置".into(),
+            ],
+            config_path: config_hint(ctx),
+            manual_config: Some(format!("openclaw mcp set superdev '{canonical}'")),
+            verification_prompt: Some(
+                "运行 openclaw mcp show superdev --json 确认条目；可选 openclaw doctor --probe"
+                    .into(),
+            ),
+        })
+    }
+}
+
+impl PortedConnectorOps for OpenClawConnector {
+    fn status_with_ports(
+        &self,
+        ctx: &ConnectorRuntimeContext,
+        ports: &ConnectorPorts<'_>,
+    ) -> Result<ConnectorStatus, ConnectorError> {
         let started = Instant::now();
         tracing::debug!(
             connector_id = CONNECTOR_ID,
@@ -246,7 +311,7 @@ impl AgentConnector for OpenClawConnector {
         );
         let skill = skill_path(ctx);
         let (mcp_status, mcp_message) = match require_cli(ctx) {
-            Ok(program) => match show_superdev(self.runner.as_ref(), ctx, &program) {
+            Ok(program) => match show_superdev(ports.runner, ctx, &program) {
                 Ok(Some(value)) if entry_matches(ctx, &value) => (
                     IntegrationStateStatus::Configured,
                     Some("SuperDev MCP 已由 openclaw CLI 配置".into()),
@@ -279,7 +344,7 @@ impl AgentConnector for OpenClawConnector {
                 Some("未找到 openclaw CLI，无法读取 MCP 状态".into()),
             ),
         };
-        let skill_state = common::skill_status(&LocalFs, ctx, &skill);
+        let skill_state = common::skill_status(ports.fs, ctx, &skill);
         // OpenClaw 通过 CLI 读取状态；已配置时回填期望的 SuperDev 运行时字段供设置页展示。
         let (mcp_command, agent_url) = if mcp_status == IntegrationStateStatus::Configured
             || mcp_status == IntegrationStateStatus::NeedsAction
@@ -320,10 +385,11 @@ impl AgentConnector for OpenClawConnector {
         Ok(result)
     }
 
-    fn install(
+    fn install_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         let capability_count = request.capabilities.len();
@@ -374,7 +440,7 @@ impl AgentConnector for OpenClawConnector {
         let (mcp_result, mcp_message) =
             if request.capabilities.contains(&IntegrationCapability::Mcp) {
                 // show → 按需 set → show 复核。从不直接写配置文件。
-                let already = match show_superdev(self.runner.as_ref(), ctx, &program) {
+                let already = match show_superdev(ports.runner, ctx, &program) {
                     Ok(Some(value)) if entry_matches(ctx, &value) => true,
                     Ok(_) => false,
                     Err(error) if error.code() == "invalid_cli_output" => {
@@ -410,7 +476,7 @@ impl AgentConnector for OpenClawConnector {
                 if !already {
                     let canonical = canonical_mcp_json(ctx);
                     let set_output = run_cli(
-                        self.runner.as_ref(),
+                        ports.runner,
                         ctx,
                         &program,
                         &["mcp", "set", "superdev", &canonical],
@@ -451,7 +517,7 @@ impl AgentConnector for OpenClawConnector {
                     }
                 }
 
-                match show_superdev(self.runner.as_ref(), ctx, &program) {
+                match show_superdev(ports.runner, ctx, &program) {
                     Ok(Some(value)) if entry_matches(ctx, &value) => (
                         if already {
                             IntegrationResult::AlreadyPresent
@@ -490,7 +556,7 @@ impl AgentConnector for OpenClawConnector {
                     Err(error) => return Err(error),
                 }
             } else {
-                let status = self.status(ctx)?;
+                let status = self.status_with_ports(ctx, ports)?;
                 let mcp = status
                     .integrations
                     .iter()
@@ -518,9 +584,9 @@ impl AgentConnector for OpenClawConnector {
                 Some("MCP 未就绪，已跳过 Skill".into()),
             )
         } else if request.capabilities.contains(&IntegrationCapability::Skill) {
-            common::install_skill(&LocalFs, ctx, &skill)
+            common::install_skill(ports.fs, ctx, &skill)
         } else {
-            let skill_state = common::skill_status(&LocalFs, ctx, &skill);
+            let skill_state = common::skill_status(ports.fs, ctx, &skill);
             common::integration_result(
                 IntegrationCapability::Skill,
                 match skill_state.status {
@@ -563,9 +629,10 @@ impl AgentConnector for OpenClawConnector {
         Ok(outcome)
     }
 
-    fn uninstall(
+    fn uninstall_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         tracing::info!(
@@ -580,7 +647,7 @@ impl AgentConnector for OpenClawConnector {
         let mut mcp_result = IntegrationResult::AlreadyPresent;
 
         if let Ok(program) = require_cli(ctx) {
-            let present = match show_superdev(self.runner.as_ref(), ctx, &program) {
+            let present = match show_superdev(ports.runner, ctx, &program) {
                 Ok(Some(_)) => true,
                 Ok(None) => false,
                 Err(error) => {
@@ -595,7 +662,7 @@ impl AgentConnector for OpenClawConnector {
             };
             if present {
                 let output = run_cli(
-                    self.runner.as_ref(),
+                    ports.runner,
                     ctx,
                     &program,
                     &["mcp", "unset", "superdev"],
@@ -613,7 +680,7 @@ impl AgentConnector for OpenClawConnector {
                                 None,
                                 Some("openclaw mcp unset 失败".into()),
                             ),
-                            common::uninstall_skill(&LocalFs, &skill),
+                            common::uninstall_skill(ports.fs, &skill),
                             common::integration_result(
                                 IntegrationCapability::SessionHook,
                                 IntegrationResult::Skipped,
@@ -639,7 +706,7 @@ impl AgentConnector for OpenClawConnector {
                 Some("未找到 openclaw CLI，请手动运行 openclaw mcp unset superdev".into());
         }
 
-        let skill_result = common::uninstall_skill(&LocalFs, &skill);
+        let skill_result = common::uninstall_skill(ports.fs, &skill);
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
         let changed = mcp_changed || skill_changed;
         let outcome = ConnectorOperationOutcome {
@@ -687,29 +754,6 @@ impl AgentConnector for OpenClawConnector {
             "openclaw uninstall finished"
         );
         Ok(outcome)
-    }
-
-    fn manual_instructions(
-        &self,
-        ctx: &ConnectorRuntimeContext,
-    ) -> Result<ConnectorManualInstructions, ConnectorError> {
-        let canonical = canonical_mcp_json(ctx);
-        Ok(ConnectorManualInstructions {
-            summary: "通过 openclaw 官方 CLI 接入 SuperDev MCP".into(),
-            steps: vec![
-                format!("运行: openclaw mcp set superdev '{}'", canonical),
-                format!("Skill 目标目录: {}", skill_path(ctx).display()),
-                "重启或重新加载 OpenClaw".into(),
-                "可选验证: openclaw doctor --probe".into(),
-                "Session Hook 需按 OpenClaw 文档手动配置".into(),
-            ],
-            config_path: config_hint(ctx),
-            manual_config: Some(format!("openclaw mcp set superdev '{canonical}'")),
-            verification_prompt: Some(
-                "运行 openclaw mcp show superdev --json 确认条目；可选 openclaw doctor --probe"
-                    .into(),
-            ),
-        })
     }
 }
 
@@ -836,6 +880,32 @@ mod tests {
 
     fn configured_show(ctx: &ConnectorRuntimeContext) -> String {
         expected_canonical_json(ctx)
+    }
+
+    #[test]
+    fn ported_install_uses_the_injected_runner_not_the_struct_field() {
+        // 结构体字段上的 runner 绝不应被触碰；注入的 ports.runner 才跑 show→set→show。
+        let home = test_dir("ported-install");
+        let ctx = context_with_cli(home.clone());
+        let struct_runner = FakeCommandRunner::succeed();
+        let injected = FakeCommandRunner::succeed();
+        injected.push_ok(0, "null"); // show missing
+        injected.push_ok(0, ""); // set
+        injected.push_ok(0, &configured_show(&ctx)); // show configured
+        let connector = OpenClawConnector::with_runner(Arc::new(struct_runner.clone()));
+        let ports = ConnectorPorts::new(&LocalFs, &injected);
+        let outcome = connector
+            .install_with_ports(&ctx, install_request(), &ports)
+            .expect("install");
+        assert_eq!(outcome.connector_id, "openclaw");
+        assert_eq!(struct_runner.argv().len(), 0);
+        assert_eq!(injected.argv().len(), 3);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn port_ops_is_available_now_that_commands_go_through_a_port() {
+        assert!(AgentConnector::port_ops(&OpenClawConnector::new()).is_some());
     }
 
     #[test]
