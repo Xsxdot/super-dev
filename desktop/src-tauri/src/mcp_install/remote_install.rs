@@ -2557,11 +2557,19 @@ mod tests {
 
     #[test]
     fn ported_connectors_remote_install_writes_remote_values_only_through_the_port() {
-        // 三家第二波连接器（方言在 connectors/*.rs，经 PortedConnectorOps 端口化）
+        // 五家第二波/CLI 连接器（方言在 connectors/*.rs，经 PortedConnectorOps 端口化）
         // 各跑一遍完整远端安装，同时钉住两件事：
-        //   1. 写出的 command / args / SUPERDEV_AGENT_URL 全是**目标机**的值
+        //   1. 文件型：写出的 command / args / SUPERDEV_AGENT_URL 全是**目标机**的值
         //   2. 一次都没有绕过端口——目标机 HOME 在桌面机磁盘上是个真实存在的空
         //      目录，任何一次 std::fs 写入都会让它不再为空
+        //
+        // openclaw / grok 的 config_rel 含义不同：MCP 配置由 CLI 写、不经文件端口，
+        // 所以断言点是「该路径不该被端口写到」；skill（与 grok 的 hook）仍经 fs。
+        // 假 runner 吐出匹配目标机 agent 的 show/list 响应，让 install 完整走完
+        // MCP + skill，而不会在桌面机 spawn 真 CLI。
+        const OPENCLAW_CONFIGURED_SHOW: &str = r#"{"command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}"#;
+        const GROK_CONFIGURED_LIST: &str = r#"[{"name":"superdev","command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"},"enabled":true,"scope":"user"}]"#;
+
         for (connector_id, cli, config_rel, skill_rel) in [
             (
                 "opencode",
@@ -2581,16 +2589,42 @@ mod tests {
                 ".kimi-code/mcp.json",
                 ".kimi-code/skills/superdev/SKILL.md",
             ),
+            (
+                "openclaw",
+                "openclaw",
+                ".openclaw/openclaw.json",
+                ".openclaw/skills/superdev/SKILL.md",
+            ),
+            (
+                "grok",
+                "grok",
+                ".grok/config.toml",
+                ".grok/skills/superdev/SKILL.md",
+            ),
         ] {
             let skill_source = bundled_skill_dir(connector_id);
             let remote_home = empty_remote_home(connector_id);
             let fs_port = RecordingFs::new();
             let detector = HomedFakeDetector::new(&[cli], &remote_home);
             let connectors = connectors::builtin();
+            // CLI 连接器的 MCP 段经 runner，不经 fs；文件型连接器 runner 空转即可。
+            let is_cli_mcp = matches!(connector_id, "openclaw" | "grok");
+            let runner = FakeCommandRunner::new();
+            if connector_id == "openclaw" {
+                // show missing → set → show 复核
+                runner.push_ok(0, "null");
+                runner.push_ok(0, "");
+                runner.push_ok(0, OPENCLAW_CONFIGURED_SHOW);
+            } else if connector_id == "grok" {
+                // list empty → add → list 复核
+                runner.push_ok(0, "[]");
+                runner.push_ok(0, "");
+                runner.push_ok(0, GROK_CONFIGURED_LIST);
+            }
 
             let outcome = install_remote_connector(
                 &detector,
-                &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+                &ConnectorPorts::new(&fs_port, &runner),
                 &connectors,
                 "host-42",
                 connector_id,
@@ -2602,43 +2636,62 @@ mod tests {
             assert_eq!(outcome.connector_id, connector_id);
 
             let config_path = remote_home.join(config_rel);
-            let written = fs_port
-                .read(&config_path.to_string_lossy())
-                .unwrap_or_else(|| panic!("{connector_id} 的配置必须被写到目标机 HOME 下"));
-            assert!(
-                written.contains("/opt/superdev/superdev-agent"),
-                "{connector_id} 的 command 必须是目标机 agent 的绝对路径: {written}"
-            );
-            assert!(
-                written.contains("http://10.1.2.3:57117"),
-                "{connector_id} 的 SUPERDEV_AGENT_URL 必须指向目标机，不是桌面机默认端口: {written}"
-            );
-            assert!(
-                mentions_mcp_subcommand(connector_id, &written),
-                "{connector_id} 缺 mcp 子命令的话目标机 agent 不会进入 MCP 模式，\
-                 用户会看到'安装成功'却永远连不上: {written}"
-            );
+            if is_cli_mcp {
+                // MCP 由 openclaw mcp set / grok mcp add 写到目标机，文件端口
+                // 根本不该碰 config_rel——碰了就是把 CLI 方言又抄回了 fs 路径。
+                assert!(
+                    fs_port.read(&config_path.to_string_lossy()).is_none(),
+                    "{connector_id} 的 MCP 配置由 CLI 写，文件端口不得直接写 {config_rel}"
+                );
+            } else {
+                let written = fs_port
+                    .read(&config_path.to_string_lossy())
+                    .unwrap_or_else(|| panic!("{connector_id} 的配置必须被写到目标机 HOME 下"));
+                assert!(
+                    written.contains("/opt/superdev/superdev-agent"),
+                    "{connector_id} 的 command 必须是目标机 agent 的绝对路径: {written}"
+                );
+                assert!(
+                    written.contains("http://10.1.2.3:57117"),
+                    "{connector_id} 的 SUPERDEV_AGENT_URL 必须指向目标机，不是桌面机默认端口: {written}"
+                );
+                assert!(
+                    mentions_mcp_subcommand(connector_id, &written),
+                    "{connector_id} 缺 mcp 子命令的话目标机 agent 不会进入 MCP 模式，\
+                     用户会看到'安装成功'却永远连不上: {written}"
+                );
+                // 策略必须一路传到端口：`connectors/common.rs` 里那一处
+                // WritePolicy::CONFIG_FILE 是生产代码里唯一的传递点，丢了它远端就
+                // 同时失去服务端符号链接守卫（require_regular_file）与「新建配置
+                // 0600」（restrict_new_file_mode），而本机侧毫无症状。
+                assert_eq!(
+                    fs_port.policy_for(&config_path.to_string_lossy()),
+                    Some(WritePolicy::CONFIG_FILE),
+                    "{connector_id} 的配置写入必须带上 CONFIG_FILE 策略"
+                );
+            }
             assert!(
                 fs_port
                     .read(&remote_home.join(skill_rel).to_string_lossy())
                     .is_some(),
                 "{connector_id} 的 skill 必须落到目标机的 skill 目录"
             );
-            // 策略必须一路传到端口：`connectors/common.rs` 里那一处
-            // WritePolicy::CONFIG_FILE 是生产代码里唯一的传递点，丢了它远端就
-            // 同时失去服务端符号链接守卫（require_regular_file）与「新建配置
-            // 0600」（restrict_new_file_mode），而本机侧毫无症状。
-            assert_eq!(
-                fs_port.policy_for(&config_path.to_string_lossy()),
-                Some(WritePolicy::CONFIG_FILE),
-                "{connector_id} 的配置写入必须带上 CONFIG_FILE 策略"
-            );
 
-            // 卸载走的是同一条 PortedConnectorOps 分支，同样必须只碰目标机：
-            // 只摘掉 superdev 条目、配置文件本身保留、skill 目录被删。
+            // 卸载走的是同一条 PortedConnectorOps 分支，同样必须只碰目标机。
+            let uninstall_runner = FakeCommandRunner::new();
+            if connector_id == "openclaw" {
+                // show（已装）→ unset
+                uninstall_runner.push_ok(0, OPENCLAW_CONFIGURED_SHOW);
+                uninstall_runner.push_ok(0, "");
+            } else if connector_id == "grok" {
+                // list（已装）→ remove → list 复核（已空）
+                uninstall_runner.push_ok(0, GROK_CONFIGURED_LIST);
+                uninstall_runner.push_ok(0, "");
+                uninstall_runner.push_ok(0, "[]");
+            }
             let removed = uninstall_remote_connector(
                 &detector,
-                &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+                &ConnectorPorts::new(&fs_port, &uninstall_runner),
                 &connectors,
                 "host-42",
                 connector_id,
@@ -2648,13 +2701,15 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("{connector_id} 远端卸载失败: {error}"));
             assert_eq!(removed.operation, ConnectorOperation::Uninstall);
-            let after = fs_port
-                .read(&config_path.to_string_lossy())
-                .unwrap_or_else(|| panic!("{connector_id} 的配置文件本身必须保留"));
-            assert!(
-                !after.contains("/opt/superdev/superdev-agent"),
-                "{connector_id} 的 superdev 条目必须被移除: {after}"
-            );
+            if !is_cli_mcp {
+                let after = fs_port
+                    .read(&config_path.to_string_lossy())
+                    .unwrap_or_else(|| panic!("{connector_id} 的配置文件本身必须保留"));
+                assert!(
+                    !after.contains("/opt/superdev/superdev-agent"),
+                    "{connector_id} 的 superdev 条目必须被移除: {after}"
+                );
+            }
             assert!(
                 fs_port
                     .read(&remote_home.join(skill_rel).to_string_lossy())
@@ -2671,6 +2726,31 @@ mod tests {
                 leaked.is_empty(),
                 "{connector_id} 远端安装把文件写到了【桌面机】自己的磁盘上: {leaked:?}"
             );
+
+            if is_cli_mcp {
+                // 关键断言：桌面机上**没有真的执行过** openclaw / grok。
+                // 假 runner 是唯一的执行出口，真跑过就会绕开它、留下真实的进程调用。
+                assert!(
+                    !runner.calls().is_empty(),
+                    "{connector_id} 安装必须经注入的 runner 调 CLI"
+                );
+                assert!(
+                    runner.calls().iter().all(|spec| spec
+                        .program
+                        .file_name()
+                        .map(|name| name == std::ffi::OsStr::new(cli))
+                        .unwrap_or(false)),
+                    "{connector_id} 的每次命令调用都必须经注入的 runner"
+                );
+                assert!(
+                    uninstall_runner.calls().iter().all(|spec| spec
+                        .program
+                        .file_name()
+                        .map(|name| name == std::ffi::OsStr::new(cli))
+                        .unwrap_or(false)),
+                    "{connector_id} 卸载的每次命令调用也都必须经注入的 runner"
+                );
+            }
 
             let _ = std::fs::remove_dir_all(&remote_home);
             let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());

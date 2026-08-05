@@ -41,7 +41,8 @@ const integrationsExecMaxTimeout = 60 * time.Second
 // 相冲突。
 //
 // 新增一家需要 CLI 写配置的连接器时，在此加一行数据；同时必须更新跨栈清单
-// testdata/desktop-connector-commands.txt 两侧的测试（Task 11）。
+// testdata/desktop-connector-commands.txt 与
+// TestIntegrationsExecAllowlistMatchesDesktopFixture。
 var integrationsExecAllowlist = map[string]map[string]struct{}{
 	"openclaw": {"mcp": {}},
 	"grok":     {"mcp": {}},

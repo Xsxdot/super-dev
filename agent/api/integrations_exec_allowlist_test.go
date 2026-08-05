@@ -144,3 +144,31 @@ func TestIntegrationExecAllowedDefaultsTimeoutWhenZero(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, integrationsExecDefaultTimeout, plan.Timeout)
 }
+
+// TestIntegrationsExecAllowlistMatchesDesktopFixture 跨栈校验：Go 白名单与桌面端
+// 两家 CLI 连接器实际会发出的 (program, 子命令) 形状必须完全一致。
+//
+// 为什么必须有这条：白名单是第三份需要与桌面端同步的数据。前两份里，
+// integrationConfigRoots 曾经只靠注释约定，漏掉 ~/.claude.json 直接让远端安装
+// 必然 403。注释拦不住漂移，测试可以。
+func TestIntegrationsExecAllowlistMatchesDesktopFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "desktop-connector-commands.txt"))
+	require.NoError(t, err, "fixture 由 Rust 侧 writes_connector_command_shapes_fixture 生成")
+
+	expected := map[string]map[string]struct{}{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Fields(line)
+		require.Len(t, parts, 2, "每行必须是「program 子命令」两列：%s", line)
+		if expected[parts[0]] == nil {
+			expected[parts[0]] = map[string]struct{}{}
+		}
+		expected[parts[0]][parts[1]] = struct{}{}
+	}
+
+	assert.Equal(t, expected, integrationsExecAllowlist,
+		"Go 白名单与桌面端连接器实际发出的命令形状不一致——两侧必须一起改")
+}

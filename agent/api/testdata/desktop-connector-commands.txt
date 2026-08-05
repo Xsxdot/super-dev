@@ -1,0 +1,3 @@
+# 由 connectors.rs 的 writes_connector_command_shapes_fixture 生成，勿手改
+openclaw mcp
+grok mcp
