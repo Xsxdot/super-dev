@@ -32,6 +32,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -100,7 +102,7 @@ func (a *App) integrationsExec(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), plan.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, absPath, plan.Args...)
-	cmd.Env = integrationsExecChildEnv(plan.Env)
+	cmd.Env = integrationsExecChildEnv(home, plan.Env)
 	stdout, stderr, exitCode, runErr := runBoundedCommand(cmd)
 	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 
@@ -126,23 +128,68 @@ func (a *App) integrationsExec(w http.ResponseWriter, r *http.Request) {
 // integrationsExecChildEnv 构造子进程环境：最小必要变量 + 白名单 env。
 //
 // 参数：
+//   - home: 目标机用户 home 绝对路径（integrationsHome 解析的那一个）
 //   - allowed: 已过白名单且路径已收敛的环境变量
 //
 // 返回：
 //   - "KEY=VALUE" 形式的环境列表
 //
 // 注意：
-//   - 保留 HOME 与 PATH 是必要的：CLI 自身要靠 HOME 定位默认配置目录，
-//     靠 PATH 找它自己的子进程（如 node）。其余一律不传。
-func integrationsExecChildEnv(allowed map[string]string) []string {
+//   - 只传 HOME 与 PATH，其余一律不传：agent 进程里可能有与接入无关的凭据
+//   - HOME 取**解析出来的那个 home**，不是 os.Getenv("HOME")。路径白名单、
+//     命令解析、子进程 HOME 必须是同一个值——三者取不同来源的话，CLI 会按
+//     一个 home 写配置、白名单按另一个 home 判定，是那种平时看不出来、
+//     一旦不一致就写到白名单外的错
+func integrationsExecChildEnv(home string, allowed map[string]string) []string {
 	env := []string{
-		"HOME=" + os.Getenv("HOME"),
-		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + home,
+		"PATH=" + integrationsExecChildPath(home),
 	}
 	for key, value := range allowed {
 		env = append(env, key+"="+value)
 	}
 	return env
+}
+
+// integrationsExecChildPath 构造子进程的 PATH：agent 自身 PATH + 命令兜底目录。
+//
+// 参数：
+//   - home: 目标机用户 home 绝对路径
+//
+// 返回：
+//   - 用平台分隔符连接、已去重的目录列表
+//
+// 注意：
+//   - 只补不删：agent 自身 PATH 里的目录全部保留且优先级在前，兜底目录追加在后
+//   - 为什么必须补：agent 由 launchd / systemd 拉起时 PATH 是最小集（某台
+//     macOS 目标机实测就是 `/usr/bin:/bin:/usr/sbin:/sbin`）。
+//     integrationCommandResolve 已经靠兜底目录解决了「找不到程序」，但**光解析出
+//     绝对路径不够**——被调用的 CLI 自己还要在 PATH 上找解释器与子进程：npm 系
+//     CLI 的入口是 `#!/usr/bin/env node` 脚本，node 装在 /opt/homebrew/bin 或
+//     ~/.local/bin 这类用户级目录里，最小 PATH 下一律 exit 127。那是与
+//     「装了却报没装」同一类的不对称，只是发生在执行期而不是探测期。
+//   - 补的正是 integrationCommandSearchDirs 那一份清单：解析程序与解析它的
+//     解释器用同一份目录，两者不可能给出不一致的答案
+func integrationsExecChildPath(home string) string {
+	seen := make(map[string]struct{})
+	dirs := make([]string, 0, 16)
+	appendDir := func(dir string) {
+		if dir == "" {
+			return
+		}
+		if _, ok := seen[dir]; ok {
+			return
+		}
+		seen[dir] = struct{}{}
+		dirs = append(dirs, dir)
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		appendDir(dir)
+	}
+	for _, dir := range integrationCommandSearchDirs(home) {
+		appendDir(dir)
+	}
+	return strings.Join(dirs, string(os.PathListSeparator))
 }
 
 // truncateOutput 把输出截断到 integrationsExecMaxOutputBytes。
