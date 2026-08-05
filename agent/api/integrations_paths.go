@@ -4,8 +4,9 @@
 //   - 静态持有 8 家内置 connector 的 home 相对配置根白名单
 //   - integrationPathAllowed 校验任意候选路径是否落在白名单根内，防止
 //     跨机写入通道越界读写 home 目录之外的任意文件
-//   - integrationDeleteAllowed 在此基础上收窄为删除专用白名单：仅允许
-//     各智能体 skill 目录树下的 superdev / superdev.* 目录
+//   - integrationDeleteAllowed 在此基础上收窄为删除专用白名单，允许两类：
+//     (1) 各智能体 skill 目录树下的 superdev / superdev.* 目录；
+//     (2) <root>/hooks/ 正下方 basename 以 superdev- 开头的 SuperDev 独占文件
 //
 // 边界：
 //   - 纯函数，不做除 os.Lstat / filepath.EvalSymlinks 之外的 I/O 副作用，
@@ -197,15 +198,21 @@ func integrationPathAllowed(home, candidate string) (string, error) {
 	return filepath.Join(resolvedAnchor, suffix), nil
 }
 
-// integrationDeleteAllowed 是删除操作的窄白名单：仅允许各智能体 skill 目录树
-// 下名为 superdev 或 superdev.* 前缀（临时/备份目录）的目录——basename 允许带
-// 一个前导点（桌面端的唯一临时目录是隐藏目录，见函数体内注释），且该目录必须落在
-// 命中的白名单根下的 skills 目录之内，即 cleaned 以 <root>/skills/ 为前缀
-// （skills 必须紧跟在根之后）。注意这条前缀检查不限制 skills 之下的嵌套深度
-// ——<root>/skills/a/b/superdev 只要最终 basename 满足要求同样会放行；它真正
-// 排除的是 skills 不紧跟在根之后（如 .claude/x/skills/y/superdev）、或
-// "skills" 出现在其它子目录名之后的伪装路径（如
-// .claude/superdev/skills/superdev.bak）。
+// integrationDeleteAllowed 是删除操作的窄白名单，允许两类路径：
+//
+//  (1) 各智能体 skill 目录树下名为 superdev 或 superdev.* 前缀（临时/备份
+//      目录）的目录——basename 允许带一个前导点（桌面端的唯一临时目录是隐藏
+//      目录，见 skills 分支体内注释），且该目录必须落在命中的白名单根下的
+//      skills 目录之内，即 cleaned 以 <root>/skills/ 为前缀（skills 必须紧
+//      跟在根之后）。注意这条前缀检查不限制 skills 之下的嵌套深度
+//      ——<root>/skills/a/b/superdev 只要最终 basename 满足要求同样会放行；它
+//      真正排除的是 skills 不紧跟在根之后（如 .claude/x/skills/y/superdev）、
+//      或 "skills" 出现在其它子目录名之后的伪装路径（如
+//      .claude/superdev/skills/superdev.bak）。
+//
+//  (2) <root>/hooks/ 正下方 basename 以 superdev- 开头的 SuperDev 独占文件
+//      （例如 ~/.grok/hooks/superdev-session-start.json）。仅一层、不嵌套；
+//      与 skills 那条「允许任意深度」的取舍不同——见 hook 分支体内注释。
 //
 // 返回值经 integrationPathAllowed 解析符号链接：如果 candidate 末段自身是一个
 // 指向白名单根内其它目录的符号链接（例如 .claude/skills/superdev 是指向
@@ -221,10 +228,54 @@ func integrationDeleteAllowed(home, candidate string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// basename 与 skill 根前缀判断基于 Clean 后的字面路径，而不是上面解析后
+	// basename 与 skill/hook 前缀判断基于 Clean 后的字面路径，而不是上面解析后
 	// 的路径：删除白名单约束的是调用方"声明要删除哪个名字"，不应该因为路径
 	// 中途经过一个（已通过白名单校验的）符号链接而改变判断依据。
 	cleaned := filepath.Clean(candidate)
+	matchedRoot, matched := matchIntegrationRoot(home, cleaned)
+	if !matched {
+		// integrationPathAllowed 已经确认过命中某个根；这里理论上不可达，
+		// 仅作防御性兜底。
+		return "", errIntegrationPathDenied
+	}
+
+	// hook 分支：放行 <root>/hooks/superdev-*.json 这类 SuperDev 独占文件。
+	//
+	// 为什么必须单开一条而不是并进 skills 那条：Grok 的 session hook 是一个
+	// SuperDev 完全拥有的独立文件，卸载就是删除它。内置三家的 hook 写在
+	// settings.json / hooks.json 里，卸载是**重写**那个文件，所以此前这条通道
+	// 从不需要删除 skills 之外的东西。
+	//
+	// 放行依据是「名字证明这是我们写的」：basename 必须以 superdev- 开头。
+	// 同时刻意只允许 hooks 正下方一层——hook 文件恒在那里，允许嵌套只会扩大
+	// 删除面而没有任何用例需要它，这与 skills 那条「允许任意深度」的取舍不同，
+	// 因为 skill 目录树天然是多层的。
+	//
+	// basename 的 superdev/superdev. 判据只属于 skills 分支（见下），不可提前
+	// 共用：hook 文件名是 superdev-session-start.json（连字符而非点），会被那
+	// 条判据误拒。
+	hooksPrefix := matchedRoot + string(filepath.Separator) + "hooks" + string(filepath.Separator)
+	if strings.HasPrefix(cleaned, hooksPrefix) {
+		rest := strings.TrimPrefix(cleaned, hooksPrefix)
+		if strings.Contains(rest, string(filepath.Separator)) {
+			return "", errIntegrationPathDenied
+		}
+		if !strings.HasPrefix(rest, "superdev-") {
+			return "", errIntegrationPathDenied
+		}
+		return resolved, nil
+	}
+
+	// skills 分支：必须以 <matchedRoot>/skills/ 为前缀（skills 紧跟在命中的根
+	// 之后），而不是路径中任意位置出现 "/skills/" 子串——否则
+	// .claude/x/skills/y/superdev（skills 未紧跟根）或
+	// .claude/superdev/skills/superdev.bak（skills 出现在其它子目录名之后）这
+	// 类路径会被误放行。skills 之下本身允许任意深度嵌套，最终是否放行只取决于
+	// 下面的 basename 判断。
+	skillsPrefix := matchedRoot + string(filepath.Separator) + "skills" + string(filepath.Separator)
+	if !strings.HasPrefix(cleaned, skillsPrefix) {
+		return "", errIntegrationPathDenied
+	}
 	base := filepath.Base(cleaned)
 	// 判 basename 之前剥掉**至多一个**前导 "."：skill 安装用的唯一临时目录名
 	// 形如 ".superdev.superdev-tmp-<pid>-<nanos>-<n>"，那个前导点是桌面端
@@ -238,21 +289,6 @@ func integrationDeleteAllowed(home, candidate string) (string, error) {
 	// 一道没松。
 	base = strings.TrimPrefix(base, ".")
 	if base != "superdev" && !strings.HasPrefix(base, "superdev.") {
-		return "", errIntegrationPathDenied
-	}
-	matchedRoot, matched := matchIntegrationRoot(home, cleaned)
-	if !matched {
-		// integrationPathAllowed 已经确认过命中某个根；这里理论上不可达，
-		// 仅作防御性兜底。
-		return "", errIntegrationPathDenied
-	}
-	// 必须以 <matchedRoot>/skills/ 为前缀（skills 紧跟在命中的根之后），而不
-	// 是路径中任意位置出现 "/skills/" 子串——否则 .claude/x/skills/y/superdev
-	// （skills 未紧跟根）或 .claude/superdev/skills/superdev.bak（skills 出现
-	// 在其它子目录名之后）这类路径会被误放行。skills 之下本身允许任意深度嵌
-	// 套，最终是否放行只取决于上面的 basename 判断。
-	skillsPrefix := matchedRoot + string(filepath.Separator) + "skills" + string(filepath.Separator)
-	if !strings.HasPrefix(cleaned, skillsPrefix) {
 		return "", errIntegrationPathDenied
 	}
 	return resolved, nil

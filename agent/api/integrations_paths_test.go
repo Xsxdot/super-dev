@@ -4,10 +4,12 @@
 //   - 覆盖 integrationPathAllowed 的矩阵用例：合法白名单根、根不在白名单、
 //     ".." 逃逸、前缀边界（".claudex" 不是 ".claude"）、绝对/相对路径、
 //     根自身符号链接逃逸、根内部（中间目录）符号链接逃逸
-//   - 覆盖 integrationDeleteAllowed 的窄删除白名单：仅命中根下 skills/ 目录
-//     之内（允许任意嵌套深度）basename 为 superdev / superdev.* 的路径可
-//     删，skill 根、配置文件、非法 basename、skills 未紧跟根的嵌套/伪装
-//     路径、经符号链接的逃逸删除均不可删
+//   - 覆盖 integrationDeleteAllowed 的窄删除白名单：两类可删路径——
+//     (1) 命中根下 skills/ 目录之内（允许任意嵌套深度）basename 为
+//     superdev / superdev.* 的路径；(2) <root>/hooks/ 正下方 basename 以
+//     superdev- 开头的 SuperDev 独占 hook 文件。skill 根、配置文件、非法
+//     basename、skills 未紧跟根的嵌套/伪装路径、他人 hook 文件、hooks 目录
+//     自身、hooks 下嵌套路径、经符号链接的逃逸删除均不可删
 //
 // 边界：
 //   - 不测试 Task 3/4 的 handler，只测本文件同目录下的纯函数
@@ -21,6 +23,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestIntegrationPathAllowed 覆盖路径白名单校验的矩阵用例。
@@ -523,4 +528,66 @@ func TestIntegrationDeleteAllowedTempDirSymlinkEscape(t *testing.T) {
 	if _, err := integrationDeleteAllowed(home, link); err == nil {
 		t.Fatal("指向 home 之外的隐藏临时目录符号链接必须被拒，否则一次删除会递归清掉白名单外的真实目录")
 	}
+}
+
+// TestIntegrationDeleteAllowedPermitsSuperdevOwnedHookFile 覆盖 hook 分支正例：
+// SuperDev 独占的 Grok session hook 文件必须可删，远端卸载才能清掉它。
+func TestIntegrationDeleteAllowedPermitsSuperdevOwnedHookFile(t *testing.T) {
+	home := t.TempDir()
+	hookDir := filepath.Join(home, ".grok", "hooks")
+	require.NoError(t, os.MkdirAll(hookDir, 0o755))
+	target := filepath.Join(hookDir, "superdev-session-start.json")
+	require.NoError(t, os.WriteFile(target, []byte("{}"), 0o644))
+
+	got, err := integrationDeleteAllowed(home, target)
+
+	require.NoError(t, err)
+	// 返回值经 EvalSymlinks 解析；macOS 上 t.TempDir 常在 /var → /private/var
+	// 之下，字面路径与解析后路径不一致，因此与期望值都先收敛再比。
+	want, err := filepath.EvalSymlinks(target)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// TestIntegrationDeleteAllowedRejectsForeignHookFile 覆盖 hook 分支负例：
+// hooks 目录里别人的文件必须继续拒绝——放行的依据是「名字证明这是 SuperDev 写的」。
+func TestIntegrationDeleteAllowedRejectsForeignHookFile(t *testing.T) {
+	home := t.TempDir()
+	hookDir := filepath.Join(home, ".grok", "hooks")
+	require.NoError(t, os.MkdirAll(hookDir, 0o755))
+	target := filepath.Join(hookDir, "someone-elses-hook.json")
+	require.NoError(t, os.WriteFile(target, []byte("{}"), 0o644))
+
+	_, err := integrationDeleteAllowed(home, target)
+
+	assert.ErrorIs(t, err, errIntegrationPathDenied,
+		"hooks 目录里别人的文件必须继续拒绝——放行的依据是「名字证明这是 SuperDev 写的」")
+}
+
+// TestIntegrationDeleteAllowedRejectsHookDirItself 覆盖：只放行 hooks 之下的
+// 单个文件，不放行 hooks 目录本身（否则会把用户其它 hook 一并清掉）。
+func TestIntegrationDeleteAllowedRejectsHookDirItself(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, ".grok", "hooks")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+
+	_, err := integrationDeleteAllowed(home, target)
+
+	assert.ErrorIs(t, err, errIntegrationPathDenied,
+		"只放行 hooks 之下的单个文件，不放行 hooks 目录本身")
+}
+
+// TestIntegrationDeleteAllowedRejectsNestedHookPath 覆盖：hook 文件恒在
+// <root>/hooks/ 正下方；允许嵌套只会扩大删除面而没有任何用例需要它。
+func TestIntegrationDeleteAllowedRejectsNestedHookPath(t *testing.T) {
+	home := t.TempDir()
+	nested := filepath.Join(home, ".grok", "hooks", "sub")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+	target := filepath.Join(nested, "superdev-x.json")
+	require.NoError(t, os.WriteFile(target, []byte("{}"), 0o644))
+
+	_, err := integrationDeleteAllowed(home, target)
+
+	assert.ErrorIs(t, err, errIntegrationPathDenied,
+		"hook 文件恒在 <root>/hooks/ 正下方；允许嵌套只会扩大删除面而没有任何用例需要它")
 }
