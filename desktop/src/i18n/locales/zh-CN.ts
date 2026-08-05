@@ -348,6 +348,9 @@ export default {
       mcpMisdirected: '已装 · 指向别处',
       mcpMisdirectedHint: '这台机器上存在 superdev 配置，但未指向它自己的 agent（命令：{command}，Agent URL：{url}）。需要修正指向后才能连接。',
       fixPointer: '修正指向',
+      configOverrideLabel: '目标机配置路径（可选）',
+      configOverridePlaceholder: '留空使用目标机默认路径',
+      configOverrideHint: '目标机若设置了 OPENCLAW_CONFIG_PATH，填在这里，否则会装到默认位置且无法被你的 shell 读到。',
     },
     hosts: {
       title: '主机管理',

@@ -203,6 +203,9 @@ export async function detectRemoteCodingAgents(hostId: string): Promise<RemoteAg
  * 参数：
  *   - hostId: 目标机器 ID
  *   - connectorId: 待安装的连接器 ID
+ *   - options.configPathOverride: 可选；目标机上的 OpenClaw 配置路径覆盖
+ *     （对应 OPENCLAW_CONFIG_PATH）。空串/缺省视为未覆盖，走目标机默认路径。
+ *     目前仅 OpenClaw 远端安装有意义，其它连接器忽略该字段。
  *
  * 返回：
  *   - 与本机同构的连接器操作结果（MCP / skill / session hook 三项）
@@ -211,8 +214,16 @@ export async function detectRemoteCodingAgents(hostId: string): Promise<RemoteAg
  *   - `remote_supported=false` 的连接器会显式 reject 并点名 host 与 connector，
  *     不会静默写出半套配置；调用前应先用 `remote_supported` 禁用入口按钮
  */
-export async function installRemoteAgentConnector(hostId: string, connectorId: ConnectorId): Promise<ConnectorOperationOutcome> {
-  return invoke<ConnectorOperationOutcome>('install_remote_agent_connector', { hostId, connectorId })
+export async function installRemoteAgentConnector(
+  hostId: string,
+  connectorId: ConnectorId,
+  options?: { configPathOverride?: string },
+): Promise<ConnectorOperationOutcome> {
+  return invoke<ConnectorOperationOutcome>('install_remote_agent_connector', {
+    hostId,
+    connectorId,
+    configPathOverride: options?.configPathOverride,
+  })
 }
 
 /**

@@ -25,8 +25,8 @@ use super::contracts::{
 };
 use super::fs_port::ConnectorFs;
 use super::registry::{
-    AgentConnector, ConnectorInstallRequest, ConnectorPorts, ConnectorRuntimeContext,
-    ConnectorStatus,
+    AgentConnector, ConnectorEnvironment, ConnectorInstallRequest, ConnectorPorts,
+    ConnectorRuntimeContext, ConnectorStatus,
 };
 use super::remote_command::RemoteAgentCommandRunner;
 use super::remote_fs::RemoteAgentFs;
@@ -669,6 +669,8 @@ fn unsupported_remote_error(host_id: &str, connector_id: &str) -> String {
 ///   - host_id: 目标机器 ID，仅用于错误文案
 ///   - connector_id: 待安装的连接器 ID
 ///   - skill_source / skill_source_error: 桌面端 bundled skill 源
+///   - config_path_override: 可选目标机 OpenClaw 配置路径覆盖（OPENCLAW_CONFIG_PATH）。
+///     空串 / 仅空白视为未覆盖；其它连接器忽略该字段。
 ///
 /// 返回：
 ///   - 与本机同构的连接器操作结果
@@ -684,10 +686,21 @@ pub fn install_remote_connector(
     connector_id: &str,
     skill_source: Option<PathBuf>,
     skill_source_error: Option<String>,
+    config_path_override: Option<String>,
 ) -> Result<ConnectorOperationOutcome, String> {
     let (connector, plan) = resolve_remote_plan(connectors, host_id, connector_id)?;
     let detected = detect_once(detector, connectors, host_id)?;
-    let ctx = build_remote_context(&detected, skill_source, skill_source_error);
+    let mut ctx = build_remote_context(&detected, skill_source, skill_source_error);
+    // OpenClaw 靠 OPENCLAW_CONFIG_PATH 决定配置写到哪；空串视为未覆盖。
+    // 只注入 openclaw_config_path 字段——其它环境覆盖在远端安装里没有入口。
+    let openclaw_path = config_path_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    if openclaw_path.is_some() {
+        ctx = ctx.with_environment(ConnectorEnvironment::new(None, openclaw_path, None));
+    }
     let kind = match plan {
         RemoteInstallPlan::BuiltInKind(kind) => kind,
         RemoteInstallPlan::Ported => {
@@ -1665,6 +1678,7 @@ mod tests {
             "openclaw",
             None,
             None,
+            None,
         )
         .expect("install");
 
@@ -1674,6 +1688,82 @@ mod tests {
             3,
             "show → set → show 三次都要走远端 runner"
         );
+    }
+
+    /// 远端安装把 config_path_override 注入为 OPENCLAW_CONFIG_PATH，空串当作未覆盖。
+    ///
+    /// 不注入的话目标机若用了自定义路径，show/set 会写到默认位置，用户 shell 读不到。
+    #[test]
+    fn remote_install_applies_openclaw_config_path_override_to_cli_env() {
+        let fs_port = RecordingFs::new();
+        let runner = FakeCommandRunner::new();
+        runner.push_ok(0, "null");
+        runner.push_ok(0, "");
+        runner.push_ok(
+            0,
+            r#"{"command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}"#,
+        );
+        let detector = FakeDetector::new(&["openclaw"]);
+        let connectors = connectors::builtin();
+        let ports = ConnectorPorts::new(&fs_port, &runner);
+
+        install_remote_connector(
+            &detector,
+            &ports,
+            &connectors,
+            "host-42",
+            "openclaw",
+            None,
+            None,
+            Some("/home/u/.openclaw/custom.json".into()),
+        )
+        .expect("install");
+
+        let calls = runner.calls();
+        assert!(!calls.is_empty(), "至少应有一次远端 CLI 调用");
+        for call in &calls {
+            let path = call
+                .env
+                .iter()
+                .find(|(k, _)| k == "OPENCLAW_CONFIG_PATH")
+                .map(|(_, v)| v.to_string_lossy().into_owned());
+            assert_eq!(
+                path.as_deref(),
+                Some("/home/u/.openclaw/custom.json"),
+                "每次 openclaw CLI 调用都应带上配置路径覆盖"
+            );
+        }
+
+        // 空串 / 纯空白不得注入覆盖——否则会把 OPENCLAW_CONFIG_PATH 设成空路径。
+        let runner2 = FakeCommandRunner::new();
+        runner2.push_ok(0, "null");
+        runner2.push_ok(0, "");
+        runner2.push_ok(
+            0,
+            r#"{"command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}"#,
+        );
+        let ports2 = ConnectorPorts::new(&fs_port, &runner2);
+        install_remote_connector(
+            &detector,
+            &ports2,
+            &connectors,
+            "host-42",
+            "openclaw",
+            None,
+            None,
+            Some("   ".into()),
+        )
+        .expect("blank override install");
+        for call in runner2.calls() {
+            let has_override = call
+                .env
+                .iter()
+                .any(|(k, _)| k == "OPENCLAW_CONFIG_PATH");
+            assert!(
+                !has_override,
+                "空白覆盖不得注入 OPENCLAW_CONFIG_PATH"
+            );
+        }
     }
 
     #[test]
@@ -1751,6 +1841,7 @@ mod tests {
             &connectors,
             "host-42",
             "claude-code",
+            None,
             None,
             None,
         )
@@ -1849,6 +1940,7 @@ mod tests {
             "host-42",
             "claude-code",
             Some(skill_source.clone()),
+            None,
             None,
         )
         .expect("remote install");
@@ -2057,6 +2149,7 @@ mod tests {
                 id,
                 Some(skill_source.clone()),
                 None,
+                None,
             )
             .unwrap_or_else(|error| panic!("{id} fixture install: {error}"));
             uninstall_remote_connector(
@@ -2098,6 +2191,7 @@ mod tests {
                 "fixture-host",
                 id,
                 Some(skill_source.clone()),
+                None,
                 None,
             );
         }
@@ -2348,6 +2442,7 @@ mod tests {
                 connector_id,
                 Some(skill_source.clone()),
                 None,
+                None,
             )
             .unwrap_or_else(|error| panic!("{connector_id} 远端安装失败: {error}"));
             assert_eq!(outcome.connector_id, connector_id);
@@ -2474,6 +2569,7 @@ mod tests {
             "claude-code",
             Some(skill_source.clone()),
             None,
+            None,
         )
         .expect("remote install");
 
@@ -2503,6 +2599,7 @@ mod tests {
             "host-42",
             "claude-code",
             Some(skill_source.clone()),
+            None,
             None,
         )
         .expect("remote install");
@@ -2650,6 +2747,7 @@ mod tests {
             "unported-fixture",
             None,
             None,
+            None,
         )
         .expect_err("不支持的连接器必须显式失败，而不是静默写出半套配置");
 
@@ -2671,6 +2769,7 @@ mod tests {
             &connectors,
             "host-42",
             "not-a-connector",
+            None,
             None,
             None,
         )

@@ -348,6 +348,9 @@ export default {
       mcpMisdirected: 'Installed · pointing elsewhere',
       mcpMisdirectedHint: 'A superdev entry exists on this machine but does not point to its own agent (command: {command}, Agent URL: {url}). Fix the pointer before it can connect.',
       fixPointer: 'Fix pointer',
+      configOverrideLabel: 'Config path on target machine (optional)',
+      configOverridePlaceholder: 'Leave empty to use the default path',
+      configOverrideHint: 'If the target machine sets OPENCLAW_CONFIG_PATH, enter it here — otherwise the entry lands in the default location and your shell will not see it.',
     },
     hosts: {
       title: 'Hosts',

@@ -270,6 +270,8 @@ fn detect_remote_coding_agents(
 /// 参数：
 ///   - host_id: 目标机器 ID
 ///   - connector_id: 连接器 ID（八家内置之一）
+///   - config_path_override: 可选；目标机 OpenClaw 配置路径覆盖（OPENCLAW_CONFIG_PATH）。
+///     空串视为未覆盖；目前仅 openclaw 远端安装会消费该字段。
 ///
 /// 返回：
 ///   - 与本机同构的连接器操作结果（MCP / skill / session hook 三项）
@@ -284,6 +286,7 @@ fn install_remote_agent_connector(
     agent_state: State<'_, AgentProcess>,
     host_id: String,
     connector_id: String,
+    config_path_override: Option<String>,
 ) -> Result<ConnectorOperationOutcome, String> {
     run_remote_connector_command(&connector_id, "remote_install", &host_id, || {
         let (detector, fs_port, runner, (skill_source, skill_source_error)) =
@@ -297,6 +300,7 @@ fn install_remote_agent_connector(
             &connector_id,
             skill_source,
             skill_source_error,
+            config_path_override,
         )
     })
 }

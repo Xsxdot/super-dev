@@ -16,7 +16,7 @@ MCP 管理设置页签
     本机 agent 代理链或 nodetransport 转发细节
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ask } from '@tauri-apps/plugin-dialog'
 import { useI18n } from 'vue-i18n'
 import ManualAgentConnectDialog from '@/components/Onboarding/ManualAgentConnectDialog.vue'
@@ -78,6 +78,9 @@ const manualDialogOpen = ref(false)
 const selectedHostId = ref<string>('')
 const remoteStatuses = ref<RemoteAgentStatus[]>([])
 const remoteLoading = ref(false)
+// configPathOverrides 按 connector_id 存用户填的目标机配置路径覆盖。
+// 只有 OpenClaw 会用到，做成 map 是为了将来别的连接器需要时不用改结构。
+const configPathOverrides = reactive<Record<string, string>>({})
 const remoteError = ref('')
 const remoteOperationAgent = ref<ConnectorId | null>(null)
 const remoteOperationMessage = ref<Record<string, string>>({})
@@ -344,7 +347,9 @@ async function installRemote(status: RemoteAgentStatus) {
   remoteOperationTone.value[agent] = 'info'
   try {
     emitConnectorDiagnostic('remote_install.started', 'info', { surface: 'settings', connectorId: agent, hostId })
-    const outcome = await installRemoteAgentConnector(hostId, agent)
+    const outcome = await installRemoteAgentConnector(hostId, agent, {
+      configPathOverride: configPathOverrides[agent] || undefined,
+    })
     if (selectedHostId.value !== hostId) {
       emitConnectorDiagnostic('remote_install.discarded_stale_host', 'info', { surface: 'settings', connectorId: agent, hostId })
       return
@@ -775,6 +780,32 @@ async function showManualConfig(agent: ConnectorId, label: string) {
           </header>
 
           <!--
+            仅 OpenClaw 需要这一格：它靠 OPENCLAW_CONFIG_PATH 决定配置写哪里，
+            而 agent 由 launchd/systemd 拉起、看不到用户 shell 里的这个变量。
+            不给这一格的话，目标机若设了自定义路径就会装到默认位置，而且复核
+            照样通过（show/set 在同一进程环境里当然互相看得见），用户在自己
+            shell 里却用不上——一个查不出来的静默错。
+            留空即目标机默认路径。仅在 remote_supported 时展示（不支持远端时
+            填了也装不了）。
+          -->
+          <div
+            v-if="status.connector_id === 'openclaw' && status.remote_supported"
+            class="mcp-remote-override"
+          >
+            <label :for="`mcp-override-${status.connector_id}`">
+              {{ t('settings.mcpRemote.configOverrideLabel') }}
+            </label>
+            <input
+              :id="`mcp-override-${status.connector_id}`"
+              v-model="configPathOverrides[status.connector_id]"
+              :data-test="`mcp-remote-config-override-${status.connector_id}`"
+              :placeholder="t('settings.mcpRemote.configOverridePlaceholder')"
+              type="text"
+            />
+            <small>{{ t('settings.mcpRemote.configOverrideHint') }}</small>
+          </div>
+
+          <!--
             四态互斥，且刻意不共用同一个 v-else 分支：
               1. !remote_supported → 三个状态位整体「查不到」，见 unsupportedNotice
               2. remote_supported 但 !cli_present → detect_remote_agents 对这类行
@@ -954,6 +985,36 @@ async function showManualConfig(agent: ConnectorId, label: string) {
 
 .mcp-remote-row-disabled {
   opacity: 0.55;
+}
+
+.mcp-remote-override {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 12px;
+  max-width: 480px;
+}
+
+.mcp-remote-override label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.mcp-remote-override input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  background: var(--bg-secondary, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.mcp-remote-override small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .mcp-agent-list {

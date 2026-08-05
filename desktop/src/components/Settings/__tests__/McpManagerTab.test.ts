@@ -639,8 +639,49 @@ describe('McpManagerTab', () => {
       await wrapper.find('[data-test="mcp-remote-install-codex"]').trigger('click')
       await flushPromises()
 
-      expect(api.installRemoteAgentConnector).toHaveBeenCalledWith('host-1', 'codex')
+      expect(api.installRemoteAgentConnector).toHaveBeenCalledWith('host-1', 'codex', {
+        configPathOverride: undefined,
+      })
       expect(api.detectRemoteCodingAgents).toHaveBeenCalledTimes(2)
+    })
+
+    it('OpenClaw 远端行提供配置路径覆盖输入框，且值随安装请求下发', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([
+        remoteStatus({ connector_id: 'openclaw', display_name: 'OpenClaw', remote_supported: true, cli_present: true }),
+      ])
+      vi.mocked(api.installRemoteAgentConnector).mockResolvedValue({
+        ...operationOutcome, connector_id: 'openclaw', operation: 'install', result: 'success',
+      })
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      const input = wrapper.find('[data-test="mcp-remote-config-override-openclaw"]')
+      expect(input.exists()).toBe(true)
+
+      await input.setValue('/home/u/.openclaw/openclaw.json')
+      await wrapper.find('[data-test="mcp-remote-install-openclaw"]').trigger('click')
+      await flushPromises()
+
+      expect(api.installRemoteAgentConnector).toHaveBeenCalledWith(
+        'host-1',
+        'openclaw',
+        { configPathOverride: '/home/u/.openclaw/openclaw.json' },
+      )
+    })
+
+    it('其他连接器不显示配置路径覆盖输入框', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([
+        remoteStatus({ connector_id: 'grok', display_name: 'Grok', remote_supported: true, cli_present: true }),
+      ])
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="mcp-remote-config-override-grok"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="mcp-remote-config-override-openclaw"]').exists()).toBe(false)
     })
 
     it('confirms before uninstalling a remote connector and calls the API with host and connector id', async () => {
