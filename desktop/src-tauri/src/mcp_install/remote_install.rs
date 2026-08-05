@@ -108,6 +108,20 @@ pub struct RemoteAgentStatus {
     /// 之所以显式暴露这个布尔量而不是让三个状态位默默为 false：后者会让前端把
     /// 「查不到」渲染成「没装」，正是本任务要消灭的那类静默错误。
     pub remote_supported: bool,
+    /// status_error 是「状态没读出来」的原因（读成功时为 None）。
+    ///
+    /// 与 `remote_supported` / `cli_present` 是同一条纪律的第三种情形：那两种
+    /// 情况下三个状态位是**占位** false，本字段非空时同样是占位 false——目标机
+    /// 可达、也真的问过它，但配置读回来是坏的（JSON/TOML 解析失败、目标机 403、
+    /// 传输中断……）。没有这个字段，「读失败」与「真的没装」在 UI 上完全无法
+    /// 区分，用户会照着一个假的红灯去点安装，或者以为自己刚装的东西丢了。
+    ///
+    /// 之前这两条分支只 `tracing::warn!` 一行就把错误吞掉了——日志不是 UI，
+    /// 用户看不见桌面端日志。
+    ///
+    /// 与 `mcp_command` / `agent_url` 一致地始终序列化（None 落成 null），不加
+    /// skip_serializing_if：前端拿到的形状恒定，少一处「字段在不在」的分支。
+    pub status_error: Option<String>,
 }
 
 /// RemoteIntegrationDetector 抽象「问一次目标机哪些 CLI 存在」这个非文件端点调用。
@@ -463,6 +477,7 @@ pub fn remote_status_for(
         skill_installed: false,
         hook_installed: false,
         remote_supported: plan.is_some(),
+        status_error: None,
     };
     let Some(plan) = plan else {
         return base;
@@ -479,14 +494,21 @@ pub fn remote_status_for(
     let home = ctx.home_dir();
     let config = super::read_config_status(fs_port, kind, &kind.config_path(home));
     if let Some(error) = config.error.as_ref() {
-        // 配置读不出来（格式坏了 / 远端拒绝）时不把它伪装成"未安装"——记一条 warn，
-        // 让排障能在桌面端日志里找到线索；返回值仍是 false，但用户看到的是
-        // 「远端读取失败」而不是「配置没了」这类误导，因为 install 会立刻复报同一错误。
+        // 配置读不出来（格式坏了 / 远端拒绝）时不把它伪装成"未安装"——记一条 warn
+        // 留排障线索，**并把原因回给前端**（status_error）：日志不是 UI，只记日志
+        // 等于让用户对着一个假的红灯做决定。
         tracing::warn!(
             connector_id = descriptor.id(),
             error = %error,
             "remote connector config status unavailable"
         );
+        // 直接返回 base（三个状态位保持占位 false）而不是接着读 skill/hook：
+        // 前端对 status_error 非空的行走的是「不渲染状态网格」的互斥分支，那两项
+        // 读回来也不会被展示，白白多两趟经隧道的往返。
+        return RemoteAgentStatus {
+            status_error: Some(error.clone()),
+            ..base
+        };
     }
     // 判「是否指向这台机器自己的 agent」，不是判「有没有 superdev 这一项」——
     // 理由见 RemoteAgentStatus::mcp_installed 的文档。
@@ -546,14 +568,18 @@ fn ported_remote_status(
     let status = match ops.status_with_fs(ctx, fs_port) {
         Ok(status) => status,
         Err(error) => {
-            // 与内置方言分支同一纪律：读不出来时记 warn 留痕，返回值仍是全 false，
-            // 但用户随后点安装会立刻收到同一条错误，不会停留在"配置没了"的误解上。
+            // 与内置方言分支同一纪律：读不出来时记 warn 留痕，三个状态位保持
+            // 占位 false，**并把原因经 status_error 回给前端**——否则「读失败」
+            // 与「真的没装」在面板上一模一样，用户会对着假红灯做决定。
             tracing::warn!(
                 connector_id = connector.descriptor().id(),
                 error_code = error.code(),
                 "remote connector status unavailable"
             );
-            return base;
+            return RemoteAgentStatus {
+                status_error: Some(error.to_string()),
+                ..base
+            };
         }
     };
     let mcp_status = integration_status(&status, IntegrationCapability::Mcp);
@@ -930,12 +956,18 @@ mod tests {
             &self,
             path: &Path,
             content: &str,
-            _backup: bool,
+            backup: bool,
             _labels: WriteLabels<'_>,
             policy: WritePolicy,
         ) -> Result<Option<String>, String> {
             self.hit();
             self.touch(PATH_OP, path);
+            if backup {
+                // 只**记录**「这次写入要求备份」，不模拟备份行为（不造备份文件、
+                // 不回 backup_path）：本 fake 的用途是给跨栈清单提供真实的
+                // (操作, 路径) 流水，模拟备份语义是另一件事，会牵动一批既有断言。
+                self.touch(BACKUP_OP, path);
+            }
             self.policies
                 .borrow_mut()
                 .push((path.to_path_buf(), policy));
@@ -1194,6 +1226,58 @@ mod tests {
         assert!(status.skill_installed, "skill 目录已存在于目标机");
         assert!(status.hook_installed, "hook 条目已存在于目标机");
         assert!(fs_port.calls() >= 3, "三项状态各自至少读一次目标机");
+    }
+
+    /// 状态读失败必须**回给前端**，不能只落一行 warn 就伪装成「未安装」。
+    ///
+    /// 两条分支各覆盖一次（内置方言 / 端口化连接器），因为它们是两段独立的错误
+    /// 处理代码，任何一条漏了都会让面板把「查不到」渲染成事实。
+    #[test]
+    fn unreadable_remote_config_is_reported_as_status_error_not_as_not_installed() {
+        let ctx = build_remote_context(&detect_fixture(), None, None);
+
+        // 内置方言分支：目标机上的 ~/.claude.json 内容坏了（半截 JSON）。
+        let broken = RecordingFs::new().with_file("/home/remote/.claude.json", "{ this is not json");
+        let status = remote_status_for(claude_code_connector().as_ref(), &ctx, &broken, true);
+        assert!(
+            status.status_error.is_some(),
+            "配置读不出来时必须给出原因，否则前端只能把它渲染成「没装」"
+        );
+        assert!(
+            !status.mcp_installed && !status.skill_installed && !status.hook_installed,
+            "读失败时三个状态位只是占位值，必须保持 false"
+        );
+
+        // 端口化分支：kimi-code 的 mcp.json 同样坏掉。
+        let broken_ported =
+            RecordingFs::new().with_file("/home/remote/.kimi-code/mcp.json", "{ this is not json");
+        let ported = remote_status_for(
+            ported_connector("kimi-code").as_ref(),
+            &ctx,
+            &broken_ported,
+            true,
+        );
+        assert!(
+            ported.status_error.is_some(),
+            "端口化连接器的 status 失败同样必须回给前端"
+        );
+        assert!(!ported.mcp_installed);
+    }
+
+    /// 反面：状态**读成功**时 status_error 必须是 None——否则前端会把每一行
+    /// 正常的机器都渲染成「读不出来」，这条防线自己变成新的假话。
+    #[test]
+    fn healthy_remote_status_carries_no_status_error() {
+        let fs_port = RecordingFs::new().with_file(
+            "/home/remote/.claude.json",
+            r#"{"mcpServers":{"superdev":{"command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}}}"#,
+        );
+        let ctx = build_remote_context(&detect_fixture(), None, None);
+
+        let status = remote_status_for(claude_code_connector().as_ref(), &ctx, &fs_port, true);
+
+        assert_eq!(status.status_error, None);
+        assert!(status.mcp_installed);
     }
 
     /// claude_code_connector 取生产工厂里的 claude-code，避免测试里另造一个假连接器。
@@ -1548,6 +1632,20 @@ mod tests {
     /// PATH_OP 标注「走 Go 侧 integrationPathAllowed 那条白名单」的操作。
     const PATH_OP: &str = "path";
 
+    /// BACKUP_OP 标注「这次写入会先在目标机上落一个 `.superdev-bak` 备份」。
+    ///
+    /// 行形状比另两类多一列：`backup <被备份的配置路径> <备份文件路径>`。多出来
+    /// 的那一列是**桌面端 Rust `backup_path()` 的实际产出**，Go 侧据此断言
+    /// `integrationBackupPath` 对同一输入逐字节相同，并且那条备份路径能过白名单。
+    ///
+    /// 为什么值得单列一类：备份命名是一条跨语言契约，两侧至今只靠**注释互相
+    /// 声明**（Go 的 integrationBackupPath 与 Rust 的 backup_path 各写了一句
+    /// 「必须与对方一致」）。`~/.claude.json` 事故已经证明注释不是机制。而且
+    /// 备份路径现在还要单独过一次白名单（Go 侧 write 端点的备份分支），
+    /// 「命名对不上」与「备份路径不在白名单里」这两类缺口都只有跑真实安装才
+    /// 照得出来——`~/.claude.json.superdev-bak` 就是这么被发现漏在白名单外的。
+    const BACKUP_OP: &str = "backup";
+
     /// DELETE_OP 标注「走 Go 侧 integrationDeleteAllowed 那条**更窄**白名单」的操作。
     ///
     /// 必须与 PATH_OP 分开：删除白名单额外要求 basename 是 superdev / superdev.*
@@ -1739,7 +1837,14 @@ mod tests {
             .iter()
             .chain(failing_records.touched_paths().iter())
             .filter_map(|(operation, path)| {
-                normalize_fixture_path(path).map(|rel| format!("{operation} {rel}"))
+                let rel = normalize_fixture_path(path)?;
+                if *operation != BACKUP_OP {
+                    return Some(format!("{operation} {rel}"));
+                }
+                // backup 行多带一列：备份路径由**生产代码里的那一个** backup_path()
+                // 现算，Go 侧据此比对自己的 integrationBackupPath 是否逐字节相同。
+                let backup_rel = normalize_fixture_path(&crate::mcp_install::backup_path(path))?;
+                Some(format!("{operation} {rel} {backup_rel}"))
             })
             .collect();
 
