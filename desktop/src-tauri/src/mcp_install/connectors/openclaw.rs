@@ -11,7 +11,7 @@
 //   - Registry verify 仅委托 status（只读 show），不跑 doctor --probe
 
 use super::common;
-use super::process::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
+use crate::mcp_install::command_port::{CommandOutput, CommandRunner, CommandSpec, SystemCommandRunner};
 use crate::mcp_install::contracts::*;
 // openclaw / grok 的读写没有全程经端口（它们靠目标机上运行自身 CLI 写配置），
 // 因此恒绑定本机实现：显式写出 LocalFs 而不是让 common 里藏一个默认值，

@@ -9,7 +9,6 @@ mod hermes;
 mod kimi_code;
 mod openclaw;
 mod opencode;
-mod process;
 
 use super::contracts::*;
 use super::fs_port::LocalFs;

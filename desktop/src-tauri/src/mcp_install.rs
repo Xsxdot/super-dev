@@ -15,6 +15,7 @@
 //   - 不渲染前端状态
 //   - 不猜测未知 Agent 的私有配置位置、schema 方言、Skill 或 Hook
 
+pub mod command_port;
 pub mod compat;
 pub mod connectors;
 pub mod contracts;

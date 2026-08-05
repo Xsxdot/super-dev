@@ -9,6 +9,13 @@
 //   - 不解析 shell 语法、不拼接命令字符串
 //   - 不把 argv、stdout、stderr 或完整路径写入用户可见错误/结构化日志字段
 //   - 不负责 OpenClaw 等具体 CLI 的业务语义
+//
+// 本模块与 fs_port 并列，是连接器的第二个副作用端口：
+//   - fs_port::ConnectorFs   —— 文件读写
+//   - command_port::CommandRunner —— 进程调用
+// 两者一起构成 registry::ConnectorPorts。之所以从 connectors/process.rs 提到
+// 这一层：远端实现（remote_command::RemoteAgentCommandRunner）住在 mcp_install
+// 下，连接器私有模块对它不可见。
 
 // stderr 等字段由调用方按需消费；保留完整输出摘要避免 API 半成品。
 #![allow(dead_code)]
@@ -23,11 +30,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// MAX_CAPTURED_BYTES 是每个输出流保留的最大字节数（64 KiB）。
-pub(super) const MAX_CAPTURED_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_CAPTURED_BYTES: usize = 64 * 1024;
 
 /// CommandSpec 描述一次 argv 级进程调用。
 #[derive(Clone, Debug)]
-pub(super) struct CommandSpec {
+pub(crate) struct CommandSpec {
     /// program 是可执行文件路径（不经 PATH shell 展开时由调用方解析）。
     pub program: PathBuf,
     /// args 是原始参数列表。
@@ -44,7 +51,7 @@ impl CommandSpec {
     /// 参数：
     ///   - program: 可执行文件
     ///   - args: 可迭代的参数序列
-    pub(super) fn new(
+    pub(crate) fn new(
         program: impl Into<PathBuf>,
         args: impl IntoIterator<Item = impl Into<OsString>>,
     ) -> Self {
@@ -57,13 +64,13 @@ impl CommandSpec {
     }
 
     /// with_timeout 覆盖等待时限。
-    pub(super) fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
     /// with_env 追加一条环境变量。
-    pub(super) fn with_env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+    pub(crate) fn with_env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.env.push((key.into(), value.into()));
         self
     }
@@ -71,7 +78,7 @@ impl CommandSpec {
 
 /// CommandOutput 是有界捕获后的进程输出摘要。
 #[derive(Clone, Debug)]
-pub(super) struct CommandOutput {
+pub(crate) struct CommandOutput {
     /// status_code 是进程退出码（被信号杀死时可能为 None）。
     pub status_code: Option<i32>,
     /// stdout 是截断后的标准输出（有损 UTF-8 替换）。
@@ -84,19 +91,19 @@ pub(super) struct CommandOutput {
 
 impl CommandOutput {
     /// success 表示进程以 0 退出。
-    pub(super) fn success(&self) -> bool {
+    pub(crate) fn success(&self) -> bool {
         self.status_code == Some(0)
     }
 }
 
 /// CommandRunner 抽象可注入的进程执行后端。
-pub(super) trait CommandRunner: Send + Sync {
+pub(crate) trait CommandRunner: Send + Sync {
     /// run 按规格执行命令并返回有界输出或稳定错误。
     fn run(&self, spec: CommandSpec) -> Result<CommandOutput, ConnectorError>;
 }
 
 /// SystemCommandRunner 使用 std::process::Command 的真实系统实现。
-pub(super) struct SystemCommandRunner;
+pub(crate) struct SystemCommandRunner;
 
 impl CommandRunner for SystemCommandRunner {
     /// run 以 argv 启动子进程，分线程排空输出，并在超时后强制终止。
