@@ -515,6 +515,74 @@ describe('McpManagerTab', () => {
       expect(wrapper.find('[data-test="mcp-remote-operation-message-codex"]').exists()).toBe(false)
     })
 
+    it('does not leave host-2\'s identical connector row disabled by a still-pending host-1 operation', async () => {
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One'), remoteHost('host-2', 'Box Two')]
+      vi.mocked(api.detectRemoteCodingAgents).mockResolvedValue([remoteStatus({ connector_id: 'codex', display_name: 'Codex' })])
+      // host-1's install deliberately never resolves within this test — proves the
+      // "operation in flight" disabled state doesn't leak across the machine switch
+      // while it's still pending (remoteOperationAgent has no host_id in its key).
+      let resolveInstall: (value: ConnectorOperationOutcome) => void = () => {}
+      vi.mocked(api.installRemoteAgentConnector).mockReturnValueOnce(new Promise((resolve) => { resolveInstall = resolve }))
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+
+      await wrapper.find('[data-test="mcp-remote-install-codex"]').trigger('click')
+      await flushPromises()
+      // Sanity: host-1's own codex row is correctly disabled while its install is pending.
+      expect(wrapper.find('[data-test="mcp-remote-install-codex"]').attributes('disabled')).toBeDefined()
+
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-2')
+      await flushPromises()
+
+      // host-2's codex row must NOT be disabled by host-1's still-in-flight install.
+      expect(wrapper.find('[data-test="mcp-remote-install-codex"]').attributes('disabled')).toBeUndefined()
+      expect(wrapper.find('[data-test="mcp-remote-uninstall-codex"]').attributes('disabled')).toBeUndefined()
+
+      // Resolving the stale install afterwards must not write anything onto host-2's row.
+      resolveInstall({ ...operationOutcome, connector_id: 'codex', operation: 'install', result: 'success' })
+      await flushPromises()
+      expect(wrapper.find('[data-test="mcp-remote-operation-message-codex"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="mcp-remote-install-codex"]').attributes('disabled')).toBeUndefined()
+    })
+
+    it('discards a stale detect response that resolves after the user has already switched to a different host', async () => {
+      // Two independently-controlled pending promises simulate genuine out-of-order
+      // network arrival: host-1's request is issued first but resolves last, after
+      // host-2 is already selected. Asserting only the final state would not catch a
+      // missing race guard — this property only shows itself mid-flight.
+      useAgentsStore().agents = [remoteHost('host-1', 'Box One'), remoteHost('host-2', 'Box Two')]
+      let resolveHostOne: (value: RemoteAgentStatus[]) => void = () => {}
+      let resolveHostTwo: (value: RemoteAgentStatus[]) => void = () => {}
+      vi.mocked(api.detectRemoteCodingAgents)
+        .mockReturnValueOnce(new Promise((resolve) => { resolveHostOne = resolve }))
+        .mockReturnValueOnce(new Promise((resolve) => { resolveHostTwo = resolve }))
+
+      const wrapper = await mountTab()
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-1')
+      await flushPromises()
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(false)
+
+      // Switch away before host-1's request comes back; this fires host-2's own
+      // (also-pending) detect.
+      await wrapper.find('[data-test="mcp-machine-picker"]').setValue('host-2')
+      await flushPromises()
+
+      // host-1's request finally resolves, out of order, after host-2 is selected.
+      resolveHostOne([remoteStatus({ connector_id: 'codex', display_name: 'Codex', mcp_installed: true })])
+      await flushPromises()
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(false)
+
+      // host-2's own (later-issued) request resolves — this is the data that should render.
+      resolveHostTwo([remoteStatus({ connector_id: 'cursor', display_name: 'Cursor' })])
+      await flushPromises()
+
+      expect(wrapper.find('[data-test="mcp-remote-row-cursor"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="mcp-remote-row-codex"]').exists()).toBe(false)
+      expect(api.detectRemoteCodingAgents).toHaveBeenNthCalledWith(1, 'host-1')
+      expect(api.detectRemoteCodingAgents).toHaveBeenNthCalledWith(2, 'host-2')
+    })
+
     it('installs a remote connector with the correct host and connector id and refreshes remote status', async () => {
       useAgentsStore().agents = [remoteHost('host-1', 'Box One')]
       vi.mocked(api.detectRemoteCodingAgents)

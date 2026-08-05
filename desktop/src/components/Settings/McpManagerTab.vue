@@ -126,15 +126,22 @@ onMounted(() => {
 // 保证「首项本机走现有本地路径」在切换回来时也成立。
 //
 // 注意：
-//   - 切换前必须先清空 remoteStatuses/remoteOperationMessage/remoteOperationTone。
-//     它们都以 connector_id 为键，不含 host_id；不同机器上完全可能有同名
-//     connector（codex、cursor 都是全局词表）。不清空的话，在新 detect 请求
-//     经隧道往返完成前的那段时间——以及旧 outcome 文案本身——都会被误渲染成
-//     「新机器」的状态，这正是本任务要杜绝的「把 A 机的事实说成 B 机」
+//   - 切换前必须先清空 remoteStatuses/remoteOperationMessage/remoteOperationTone/
+//     remoteOperationAgent。前三者都以 connector_id 为键，不含 host_id；不同机器
+//     上完全可能有同名 connector（codex、cursor 都是全局词表）。不清空的话，在
+//     新 detect 请求经隧道往返完成前的那段时间——以及旧 outcome 文案本身——都会
+//     被误渲染成「新机器」的状态。remoteOperationAgent 同理：不清空会让 host-1
+//     上还没落地的 install/uninstall 继续把 host-2 同名 connector 的按钮误判为
+//     「正在操作中」而禁用，这正是本任务要杜绝的「把 A 机的事实说成 B 机」
+//   - 仅清空这里的快照状态不够——还需要让「切机时正在飞的那次 detect/install/
+//     uninstall」在回来后认出自己已经过期、不再落地任何东西。见 refreshRemoteStatus/
+//     installRemote/confirmUninstallRemote 里对 `selectedHostId.value !== hostId`
+//     的一致校验（乱序 host-1→host-2→host-3 时，先发后至的 host-1 响应必须能被丢弃）
 watch(selectedHostId, () => {
   remoteStatuses.value = []
   remoteOperationMessage.value = {}
   remoteOperationTone.value = {}
+  remoteOperationAgent.value = null
   void refreshCurrentStatuses()
 })
 
@@ -257,6 +264,12 @@ async function refreshDocs() {
  * 注意：
  *   - detect 失败（目标机不可达/本机 agent 代理转发失败等）时把 remoteError 填成
  *     可读文案，而不是留一份空列表——空列表会让用户误以为「这台机器什么都没有」
+ *   - 响应落地前必须重新核对 `selectedHostId.value === hostId`：快速连续切换
+ *     host-1 → host-2 → host-3 时，host-1 那次 detect 完全可能在切到 host-3
+ *     之后才经隧道往返回来。不比对的话，先发后至的响应会把 host-1 的数据/错误
+ *     贴到 host-3 的标签下——成功与失败两条路径都要丢弃，把过期的错误说成
+ *     当前机器的错误同样是在撒谎。watch(selectedHostId) 里的清空只处理了
+ *     「切换那一刻」，处理不了这种飞行中响应乱序落地的情形，两者互补
  */
 async function refreshRemoteStatus() {
   const hostId = selectedHostId.value
@@ -266,12 +279,21 @@ async function refreshRemoteStatus() {
   remoteError.value = ''
   emitConnectorDiagnostic('remote_detect.started', 'info', { surface: 'settings', hostId })
   try {
-    remoteStatuses.value = await detectRemoteCodingAgents(hostId)
+    const result = await detectRemoteCodingAgents(hostId)
+    if (selectedHostId.value !== hostId) {
+      emitConnectorDiagnostic('remote_detect.discarded_stale_host', 'info', { surface: 'settings', hostId })
+      return
+    }
+    remoteStatuses.value = result
     emitConnectorDiagnostic('remote_detect.succeeded', 'info', {
-      surface: 'settings', hostId, connectorCount: remoteStatuses.value.length,
+      surface: 'settings', hostId, connectorCount: result.length,
       durationMs: Math.round(performance.now() - started),
     })
   } catch (err) {
+    if (selectedHostId.value !== hostId) {
+      emitConnectorDiagnostic('remote_detect.discarded_stale_host', 'error', { surface: 'settings', hostId })
+      return
+    }
     remoteStatuses.value = []
     remoteError.value = t('settings.mcpRemote.targetUnreachable', { message: errorMessage(err) })
     emitConnectorDiagnostic('remote_detect.failed', 'error', {
@@ -279,7 +301,9 @@ async function refreshRemoteStatus() {
       durationMs: Math.round(performance.now() - started),
     })
   } finally {
-    remoteLoading.value = false
+    if (selectedHostId.value === hostId) {
+      remoteLoading.value = false
+    }
   }
 }
 
@@ -301,6 +325,15 @@ function remoteActionDisabled(status: RemoteAgentStatus): boolean {
   return !status.remote_supported || !status.cli_present || remoteOperationAgent.value === status.connector_id
 }
 
+/**
+ * installRemote 在目标机上安装/修正指向单个远端连接器。
+ *
+ * 注意：
+ *   - 与 refreshRemoteStatus 同一纪律：写回结果前必须核对 `selectedHostId.value
+ *     === hostId`，否则用户在等待期间切走机器时，这条结果会被误贴到新机器同名
+ *     connector 的行上（remoteOperationMessage/remoteOperationTone 都只按
+ *     connector_id 建键，不含 host_id）
+ */
 async function installRemote(status: RemoteAgentStatus) {
   const hostId = selectedHostId.value
   if (!hostId) return
@@ -312,6 +345,10 @@ async function installRemote(status: RemoteAgentStatus) {
   try {
     emitConnectorDiagnostic('remote_install.started', 'info', { surface: 'settings', connectorId: agent, hostId })
     const outcome = await installRemoteAgentConnector(hostId, agent)
+    if (selectedHostId.value !== hostId) {
+      emitConnectorDiagnostic('remote_install.discarded_stale_host', 'info', { surface: 'settings', connectorId: agent, hostId })
+      return
+    }
     remoteOperationMessage.value[agent] = formatOutcomeMessage(outcome)
     remoteOperationTone.value[agent] = outcomeTone(outcome.result)
     emitConnectorDiagnostic('remote_install.completed', outcome.result === 'failed' ? 'error' : outcome.result === 'partial' ? 'warn' : 'info', {
@@ -321,6 +358,10 @@ async function installRemote(status: RemoteAgentStatus) {
     })
     await refreshRemoteStatus()
   } catch (err) {
+    if (selectedHostId.value !== hostId) {
+      emitConnectorDiagnostic('remote_install.discarded_stale_host', 'error', { surface: 'settings', connectorId: agent, hostId })
+      return
+    }
     remoteOperationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
     remoteOperationTone.value[agent] = 'danger'
     emitConnectorDiagnostic('remote_mutation.failed', 'error', {
@@ -329,10 +370,19 @@ async function installRemote(status: RemoteAgentStatus) {
       durationMs: Math.round(performance.now() - started),
     })
   } finally {
-    remoteOperationAgent.value = null
+    if (selectedHostId.value === hostId) {
+      remoteOperationAgent.value = null
+    }
   }
 }
 
+/**
+ * confirmUninstallRemote 在目标机上移除单个远端连接器。
+ *
+ * 注意：
+ *   - 同 installRemote 的过期响应纪律：写回结果与调用 refreshRemoteStatus 前都要
+ *     核对 `selectedHostId.value === hostId`
+ */
 async function confirmUninstallRemote(status: RemoteAgentStatus) {
   const hostId = selectedHostId.value
   if (!hostId) return
@@ -349,6 +399,10 @@ async function confirmUninstallRemote(status: RemoteAgentStatus) {
   try {
     emitConnectorDiagnostic('remote_uninstall.started', 'info', { surface: 'settings', connectorId: agent, hostId })
     const outcome = await uninstallRemoteAgentConnector(hostId, agent)
+    if (selectedHostId.value !== hostId) {
+      emitConnectorDiagnostic('remote_uninstall.discarded_stale_host', 'info', { surface: 'settings', connectorId: agent, hostId })
+      return
+    }
     remoteOperationMessage.value[agent] = outcome.result === 'failed'
       ? formatOutcomeMessage(outcome)
       : t('settings.mcp.uninstallDone')
@@ -360,6 +414,10 @@ async function confirmUninstallRemote(status: RemoteAgentStatus) {
     })
     await refreshRemoteStatus()
   } catch (err) {
+    if (selectedHostId.value !== hostId) {
+      emitConnectorDiagnostic('remote_uninstall.discarded_stale_host', 'error', { surface: 'settings', connectorId: agent, hostId })
+      return
+    }
     remoteOperationMessage.value[agent] = t('settings.mcp.actionFailed', { message: errorMessage(err) })
     remoteOperationTone.value[agent] = 'danger'
     emitConnectorDiagnostic('remote_uninstall.failed', 'error', {
@@ -368,7 +426,9 @@ async function confirmUninstallRemote(status: RemoteAgentStatus) {
       durationMs: Math.round(performance.now() - started),
     })
   } finally {
-    remoteOperationAgent.value = null
+    if (selectedHostId.value === hostId) {
+      remoteOperationAgent.value = null
+    }
   }
 }
 
