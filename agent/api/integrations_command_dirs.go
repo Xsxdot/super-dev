@@ -4,7 +4,7 @@
 // 职责：
 //   - 给出「PATH 之外还要扫描哪些命令目录」的静态清单（integrationCommandSearchDirs）
 //   - 给出某个命令在磁盘上可能的文件名（integrationCommandFileNames，Windows 多后缀）
-//   - 把两者与 exec.LookPath 合成一个存在性判定（integrationCommandPresent）
+//   - 合成路径解析（integrationCommandResolve）与在其上的存在性判定（integrationCommandPresent）
 //
 // 边界：
 //   - 只做存在性判定，不执行任何被探测到的命令
@@ -76,6 +76,41 @@ func integrationCommandFileNames(command string) []string {
 	return []string{command}
 }
 
+// integrationCommandResolve 把命令名解析成这台机器上的绝对路径。
+//
+// 参数：
+//   - home: 目标机用户 home 绝对路径
+//   - name: 已过 integrationCommandPattern 校验的命令名
+//
+// 返回：
+//   - 命中时返回绝对路径与 true；未命中返回 ("", false)
+//
+// 注意：
+//   - 与 integrationCommandPresent 共用同一份目录清单与同一套判据，两者不可能
+//     给出不一致的答案——exec 端点必须拿绝对路径去 execve，不能退回 PATH 查找：
+//     agent 由 launchd/systemd 拉起时 PATH 是最小集，会出现「detect 说有、
+//     exec 说找不到」，那正是 961b873 修掉的那类不对称。
+//   - exec.LookPath 已经返回可执行文件路径，但它可能是相对路径（PATH 里有相对
+//     项时），因此统一过一次 filepath.Abs。
+func integrationCommandResolve(home, name string) (string, bool) {
+	if path, err := exec.LookPath(name); err == nil {
+		if abs, err := filepath.Abs(path); err == nil {
+			return abs, true
+		}
+		return path, true
+	}
+	for _, dir := range integrationCommandSearchDirs(home) {
+		for _, fileName := range integrationCommandFileNames(name) {
+			candidate := filepath.Join(dir, fileName)
+			info, err := os.Stat(candidate)
+			if err == nil && info.Mode().IsRegular() {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
+}
+
 // integrationCommandPresent 判定 name 在这台机器上是否可用。
 //
 // 参数：
@@ -91,17 +126,8 @@ func integrationCommandFileNames(command string) []string {
 //     那正是本函数要消灭的那类不对称，所以这里刻意不比桌面端更严。
 //   - os.Stat 跟随符号链接是有意的：`~/.local/bin/claude` 常常是指向真实安装
 //     位置的软链，按链接本身判类型会把它当成非普通文件而漏掉。
+//   - 实现委托 integrationCommandResolve，保证 detect 与 exec 判据永远一致。
 func integrationCommandPresent(home, name string) bool {
-	if _, err := exec.LookPath(name); err == nil {
-		return true
-	}
-	for _, dir := range integrationCommandSearchDirs(home) {
-		for _, fileName := range integrationCommandFileNames(name) {
-			info, err := os.Stat(filepath.Join(dir, fileName))
-			if err == nil && info.Mode().IsRegular() {
-				return true
-			}
-		}
-	}
-	return false
+	_, ok := integrationCommandResolve(home, name)
+	return ok
 }

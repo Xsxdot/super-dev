@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,4 +113,40 @@ func TestIntegrationCommandPresentFollowsSymlinks(t *testing.T) {
 func TestIntegrationCommandPresentRejectsMissingCommand(t *testing.T) {
 	t.Setenv("PATH", filepath.FromSlash("/nonexistent-dir-for-test"))
 	require.False(t, integrationCommandPresent(t.TempDir(), "definitely-not-a-cli-xyz"))
+}
+
+func TestIntegrationCommandResolveReturnsAbsolutePathFromFallbackDir(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".local", "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	target := filepath.Join(binDir, "openclaw")
+	require.NoError(t, os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755))
+
+	got, ok := integrationCommandResolve(home, "openclaw")
+
+	assert.True(t, ok)
+	assert.Equal(t, target, got)
+	assert.True(t, filepath.IsAbs(got), "解析结果必须是绝对路径，exec 不能再依赖 PATH")
+}
+
+func TestIntegrationCommandResolveMissesUnknownCommand(t *testing.T) {
+	home := t.TempDir()
+
+	got, ok := integrationCommandResolve(home, "definitely-not-installed-xyz")
+
+	assert.False(t, ok)
+	assert.Empty(t, got)
+}
+
+func TestIntegrationCommandPresentStillAgreesWithResolve(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".cargo", "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "grok"), []byte(""), 0o644))
+
+	_, ok := integrationCommandResolve(home, "grok")
+
+	assert.True(t, ok)
+	assert.Equal(t, ok, integrationCommandPresent(home, "grok"),
+		"两个判据必须永远一致，否则会出现「detect 说有、exec 说找不到」")
 }
