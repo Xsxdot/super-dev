@@ -853,6 +853,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/integrations/fs/write-batch", a.integrationsFsWriteBatch)
 	mux.HandleFunc("DELETE /api/integrations/fs", a.integrationsFsDelete)
 
+	// 受限命令执行：OpenClaw / Grok 的 MCP 段只能由它们自己的 CLI 写，
+	// 文件端点覆盖不到。白名单在 integrations_exec_allowlist.go，服务端强制。
+	mux.HandleFunc("POST /api/integrations/exec", a.integrationsExec)
+
 	// integrations 代理：桌面端 connector 远端安装的唯一跨机通道。
 	// 与 adoption 代理同一红线：本代理路径绝不加入 securityBypassPath。
 	mux.HandleFunc("/api/agents/{host_id}/integrations/{rest...}", a.proxyAgentIntegrations)
