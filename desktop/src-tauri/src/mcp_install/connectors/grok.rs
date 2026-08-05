@@ -117,13 +117,23 @@ fn resolve_cli(ctx: &ConnectorRuntimeContext) -> Option<PathBuf> {
 }
 
 /// require_cli 要求 status/install/uninstall 的 MCP 路径必须能解析到 grok CLI。
+///
+/// 本机：在 `command_dirs` 里解析出绝对路径。
+/// 远端：`build_remote_context` 故意把 `command_dirs` 留空（扫的是桌面机磁盘），
+/// CLI 是否存在已由 detect 端点的存在性表判定；这里回落成命令名，由目标机 agent
+/// 用 `integrationCommandResolve` 解析绝对路径。`RemoteAgentCommandRunner` 下发
+/// 时也只取 basename，桌面机上的绝对路径在目标机上毫无意义。
 fn require_cli(ctx: &ConnectorRuntimeContext) -> Result<PathBuf, ConnectorError> {
-    resolve_cli(ctx).ok_or_else(|| {
-        ConnectorError::new(
-            "cli_not_found",
-            "未找到 grok CLI，无法通过官方命令管理 MCP",
-        )
-    })
+    if let Some(path) = resolve_cli(ctx) {
+        return Ok(path);
+    }
+    if ctx.command_dirs().is_empty() {
+        return Ok(PathBuf::from(CLI_COMMAND));
+    }
+    Err(ConnectorError::new(
+        "cli_not_found",
+        "未找到 grok CLI，无法通过官方命令管理 MCP",
+    ))
 }
 
 /// run_cli 以 argv 方式调用 grok，超时 30s；不注入 HOME，不经 shell。

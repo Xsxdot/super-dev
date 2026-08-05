@@ -190,7 +190,7 @@ fn verify_agent_connector(
     })
 }
 
-/// remote_install_inputs 解析一次远端接入调用所需的三样东西。
+/// remote_install_inputs 解析一次远端接入调用所需的全部入口。
 ///
 /// 参数：
 ///   - app: 用于定位随桌面端打包的 skill 资源目录
@@ -198,11 +198,12 @@ fn verify_agent_connector(
 ///   - host_id: 目标机器在本机 agent 里的注册 ID
 ///
 /// 返回：
-///   - (detect 客户端, 目标机文件端口, bundled skill 源解析结果)
+///   - (detect 客户端, 目标机文件端口, 目标机命令端口, bundled skill 源解析结果)
 ///
 /// 注意：
-///   - token 只被交给 detect 客户端与文件端口，用于拼 `Authorization` 头；本函数
+///   - token 只被交给 detect 客户端与两个端口，用于拼 `Authorization` 头；本函数
 ///     与调用方都不得把它写进日志或错误串
+///   - 文件端口与命令端口经 [`remote_agent_ports`] 成对构造，保证副作用指向同一台机器
 ///   - skill 源解析失败不阻断调用：它会作为 skill_source_error 随上下文下传，
 ///     让 MCP 配置照样能装、skill 那一项单独报错
 fn remote_install_inputs(
@@ -213,6 +214,7 @@ fn remote_install_inputs(
     (
         mcp_install::remote_install::AgentProxyDetector,
         mcp_install::remote_fs::RemoteAgentFs,
+        mcp_install::remote_command::RemoteAgentCommandRunner,
         (Option<std::path::PathBuf>, Option<String>),
     ),
     String,
@@ -224,11 +226,12 @@ fn remote_install_inputs(
         token.clone(),
         host_id.to_string(),
     );
-    let fs_port = mcp_install::remote_install::remote_agent_fs(&base, &token, host_id);
+    let (fs_port, runner) =
+        mcp_install::remote_install::remote_agent_ports(&base, &token, host_id);
     let skill = mcp_install::remote_install::skill_source_pair(mcp_install::resolve_skill_source_dir(
         app,
     ));
-    Ok((detector, fs_port, skill))
+    Ok((detector, fs_port, runner, skill))
 }
 
 /// detect_remote_coding_agents 探测目标机上已安装的编程智能体及其 SuperDev 接入状态。
@@ -240,7 +243,7 @@ fn remote_install_inputs(
 ///   - 每个内置连接器在目标机上的 CLI 存在性与三项接入状态
 ///
 /// 注意：
-///   - 只读操作；CLI 不在目标机上时不会对该智能体发任何文件请求
+///   - 只读操作；CLI 不在目标机上时不会对该智能体发任何文件/命令请求
 #[tauri::command]
 fn detect_remote_coding_agents(
     app: tauri::AppHandle,
@@ -248,11 +251,12 @@ fn detect_remote_coding_agents(
     host_id: String,
 ) -> Result<Vec<mcp_install::remote_install::RemoteAgentStatus>, String> {
     run_remote_connector_command("all", "remote_detect", &host_id, || {
-        let (detector, fs_port, (skill_source, skill_source_error)) =
+        let (detector, fs_port, runner, (skill_source, skill_source_error)) =
             remote_install_inputs(&app, agent_state, &host_id)?;
+        let ports = mcp_install::registry::ConnectorPorts::new(&fs_port, &runner);
         mcp_install::remote_install::detect_remote_agents(
             &detector,
-            &fs_port,
+            &ports,
             &mcp_install::remote_install::remote_connectors(),
             &host_id,
             skill_source,
@@ -265,13 +269,15 @@ fn detect_remote_coding_agents(
 ///
 /// 参数：
 ///   - host_id: 目标机器 ID
-///   - connector_id: 连接器 ID（claude-code / codex / cursor）
+///   - connector_id: 连接器 ID（八家内置之一）
 ///
 /// 返回：
 ///   - 与本机同构的连接器操作结果（MCP / skill / session hook 三项）
 ///
 /// 注意：
 ///   - 不支持远端接入的连接器会显式失败并说明原因，不会静默写出半套配置
+///   - openclaw / grok 的 CLI 调用经 `RemoteAgentCommandRunner` 落到目标机，
+///     不会在桌面机上 spawn
 #[tauri::command]
 fn install_remote_agent_connector(
     app: tauri::AppHandle,
@@ -280,10 +286,8 @@ fn install_remote_agent_connector(
     connector_id: String,
 ) -> Result<ConnectorOperationOutcome, String> {
     run_remote_connector_command(&connector_id, "remote_install", &host_id, || {
-        let (detector, fs_port, (skill_source, skill_source_error)) =
+        let (detector, fs_port, runner, (skill_source, skill_source_error)) =
             remote_install_inputs(&app, agent_state, &host_id)?;
-        // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-        let runner = mcp_install::command_port::SystemCommandRunner;
         let ports = mcp_install::registry::ConnectorPorts::new(&fs_port, &runner);
         mcp_install::remote_install::install_remote_connector(
             &detector,
@@ -308,10 +312,8 @@ fn uninstall_remote_agent_connector(
     connector_id: String,
 ) -> Result<ConnectorOperationOutcome, String> {
     run_remote_connector_command(&connector_id, "remote_uninstall", &host_id, || {
-        let (detector, fs_port, (skill_source, skill_source_error)) =
+        let (detector, fs_port, runner, (skill_source, skill_source_error)) =
             remote_install_inputs(&app, agent_state, &host_id)?;
-        // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-        let runner = mcp_install::command_port::SystemCommandRunner;
         let ports = mcp_install::registry::ConnectorPorts::new(&fs_port, &runner);
         mcp_install::remote_install::uninstall_remote_connector(
             &detector,

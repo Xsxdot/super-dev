@@ -19,7 +19,6 @@
 //     端点返回的存在性表为准
 //   - 不做 UI：返回值形状由前端契约固定，展示逻辑在 Vue 侧
 
-use super::command_port::SystemCommandRunner;
 use super::connectors;
 use super::contracts::{
     ConnectorOperation, ConnectorOperationOutcome, IntegrationCapability, IntegrationStateStatus,
@@ -29,6 +28,7 @@ use super::registry::{
     AgentConnector, ConnectorInstallRequest, ConnectorPorts, ConnectorRuntimeContext,
     ConnectorStatus,
 };
+use super::remote_command::RemoteAgentCommandRunner;
 use super::remote_fs::RemoteAgentFs;
 use super::{AgentKind, McpLaunchSpec};
 use serde::{Deserialize, Serialize};
@@ -247,16 +247,16 @@ fn built_in_remote_kind(connector_id: &str) -> Option<AgentKind> {
 
 /// RemoteInstallPlan 描述一家连接器在远端要走哪条安装路径。
 ///
-/// 两条路径都全程经 `ConnectorFs` 端口，差别只在方言逻辑住在哪：
+/// 两条路径都全程经 [`ConnectorPorts`]（文件 + 进程），差别只在方言逻辑住在哪：
 enum RemoteInstallPlan {
     /// BuiltInKind 走 mcp_install 的内置方言机器（claude-code / codex / cursor）。
     ///
     /// 不复用连接器自己的 `install()`：远端编排要给出指向目标机的手动指引
     /// （`remote_manual_instructions`），与本机版本不同，走连接器会拿到本机文案。
     BuiltInKind(AgentKind),
-    /// Ported 走连接器自身实现的 [`PortedConnectorOps`]（opencode / hermes /
-    /// kimi-code）：方言在 `connectors/*.rs`，本机与远端是同一份实现，
-    /// 只有端口不同。
+    /// Ported 走连接器自身实现的 [`PortedConnectorOps`]（opencode / openclaw /
+    /// hermes / kimi-code / grok）：方言在 `connectors/*.rs`，本机与远端是同一份
+    /// 实现，只有端口不同——CLI 连接器的进程调用经 `ports.runner`。
     Ported,
 }
 
@@ -270,8 +270,8 @@ enum RemoteInstallPlan {
 ///
 /// 注意：
 ///   - `port_ops()` 返回 Some 的前提是那家连接器真的实现了 `PortedConnectorOps`
-///     （即它的 status/install/uninstall 全部接受端口）。这条判据不需要维护
-///     一份 ID 清单，因此不可能与代码事实漂移
+///     （即它的 status/install/uninstall 的**全部副作用**——文件 + 进程调用——
+///     都收端口）。这条判据不需要维护一份 ID 清单，因此不可能与代码事实漂移
 fn remote_plan(connector: &dyn AgentConnector) -> Option<RemoteInstallPlan> {
     if let Some(kind) = built_in_remote_kind(connector.descriptor().id()) {
         return Some(RemoteInstallPlan::BuiltInKind(kind));
@@ -450,20 +450,21 @@ pub fn build_remote_context(
 /// 参数：
 ///   - connector: 连接器（只取 descriptor 的 id/display_name，不调它的 detect）
 ///   - ctx: 远端运行上下文
-///   - fs_port: 目标机文件操作端口
+///   - ports: 目标机副作用端口集合（文件 + 进程）；CLI 连接器的 status 会经
+///     `ports.runner` 调目标机上的 show/list，**不得**再塞本机 `SystemCommandRunner`
 ///   - cli_present: detect 端点回报的 CLI 存在性
 ///
 /// 返回：
 ///   - 该连接器的远端状态
 ///
 /// 注意：
-///   - `cli_present == false` 或该连接器不支持远端接入时**一次文件操作都不发**：
-///     远端每次 stat/read 都是一趟经隧道的往返，为一台根本没装该智能体的机器
-///     发三次请求既慢又会在目标机日志里留下无意义的白名单命中记录
+///   - `cli_present == false` 或该连接器不支持远端接入时**一次副作用都不发**：
+///     远端每次 stat/read/exec 都是一趟经隧道的往返，为一台根本没装该智能体的机器
+///     发请求既慢又会在目标机日志里留下无意义的白名单命中记录
 pub fn remote_status_for(
     connector: &dyn AgentConnector,
     ctx: &ConnectorRuntimeContext,
-    fs_port: &dyn ConnectorFs,
+    ports: &ConnectorPorts<'_>,
     cli_present: bool,
 ) -> RemoteAgentStatus {
     let descriptor = connector.descriptor();
@@ -489,18 +490,11 @@ pub fn remote_status_for(
     let kind = match plan {
         RemoteInstallPlan::BuiltInKind(kind) => kind,
         RemoteInstallPlan::Ported => {
-            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-            let runner = SystemCommandRunner;
-            return ported_remote_status(
-                connector,
-                ctx,
-                &ConnectorPorts::new(fs_port, &runner),
-                base,
-            );
+            return ported_remote_status(connector, ctx, ports, base);
         }
     };
     let home = ctx.home_dir();
-    let config = super::read_config_status(fs_port, kind, &kind.config_path(home));
+    let config = super::read_config_status(ports.fs, kind, &kind.config_path(home));
     if let Some(error) = config.error.as_ref() {
         // 配置读不出来（格式坏了 / 远端拒绝）时不把它伪装成"未安装"——记一条 warn
         // 留排障线索，**并把原因回给前端**（status_error）：日志不是 UI，只记日志
@@ -530,13 +524,13 @@ pub fn remote_status_for(
         );
     }
     let (skill_installed, _, _) = super::skill_status_for_target(
-        fs_port,
+        ports.fs,
         ctx.skill_source(),
         ctx.skill_source_error().map(str::to_string),
         &kind.skill_dir(home),
     );
     let hook_installed =
-        super::session_hook_status_with_fs(fs_port, kind, &kind.session_hook_path(home));
+        super::session_hook_status_with_fs(ports.fs, kind, &kind.session_hook_path(home));
     RemoteAgentStatus {
         mcp_installed,
         mcp_command: config.command,
@@ -620,7 +614,7 @@ fn ported_remote_status(
 ///
 /// 参数：
 ///   - detector: detect 端点客户端
-///   - fs_port: 目标机文件操作端口
+///   - ports: 目标机副作用端口集合（文件 + 进程）；必须与 detector 指向同一台机器
 ///   - connectors: 按注册顺序排列的连接器列表
 ///   - skill_source / skill_source_error: 桌面端 bundled skill 源
 ///
@@ -629,9 +623,11 @@ fn ported_remote_status(
 ///
 /// 注意：
 ///   - detect 只调用**一次**，带全部连接器命令名的去重合集；不是每家各问一次
+///   - openclaw / grok 的 status 会经 `ports.runner` 调目标机 CLI；传本机 runner
+///     会在桌面机上跑 show/list，把读到的内容当成远端状态——静默错误
 pub fn detect_remote_agents(
     detector: &dyn RemoteIntegrationDetector,
-    fs_port: &dyn ConnectorFs,
+    ports: &ConnectorPorts<'_>,
     connectors: &[Arc<dyn AgentConnector>],
     host_id: &str,
     skill_source: Option<PathBuf>,
@@ -647,7 +643,7 @@ pub fn detect_remote_agents(
                 .cli_commands()
                 .iter()
                 .any(|command| detected.commands.get(command).copied().unwrap_or(false));
-            remote_status_for(connector.as_ref(), &ctx, fs_port, cli_present)
+            remote_status_for(connector.as_ref(), &ctx, ports, cli_present)
         })
         .collect())
 }
@@ -816,11 +812,45 @@ pub fn remote_connectors() -> Vec<Arc<dyn AgentConnector>> {
 ///
 /// 单独包一层是为了让 main.rs 的 Tauri command 不必直接依赖 `remote_fs` 模块，
 /// 远端接入的全部入口收敛在本模块。
+///
+/// 新代码优先用 [`remote_agent_ports`]：文件与进程端口必须成对指向同一台机器。
 pub fn remote_agent_fs(local_agent_base: &str, local_token: &str, host_id: &str) -> RemoteAgentFs {
     RemoteAgentFs::new(
         local_agent_base.to_string(),
         local_token.to_string(),
         host_id.to_string(),
+    )
+}
+
+/// remote_agent_ports 构造一台目标机的完整端口集合。
+///
+/// 参数：
+///   - local_agent_base / local_token / host_id: 同 [`remote_agent_fs`]
+///
+/// 返回：
+///   - 文件端口与命令端口的**拥有者**；调用方用 `ConnectorPorts::new(&fs, &runner)`
+///     组成借用视图后传给编排函数
+///
+/// 注意：
+///   - 两个端口必须指向同一台机器：分别构造再拼起来是可行的，但那样会出现
+///     「文件写到 A 机、命令跑在 B 机」这种没人能推理的状态，因此只提供成对构造
+pub fn remote_agent_ports(
+    local_agent_base: &str,
+    local_token: &str,
+    host_id: &str,
+) -> (RemoteAgentFs, RemoteAgentCommandRunner) {
+    tracing::debug!(
+        host_id = %host_id,
+        local_agent_base = %local_agent_base,
+        "constructing paired remote agent ports (fs + command)"
+    );
+    (
+        remote_agent_fs(local_agent_base, local_token, host_id),
+        RemoteAgentCommandRunner::new(
+            local_agent_base.to_string(),
+            local_token.to_string(),
+            host_id.to_string(),
+        ),
     )
 }
 
@@ -835,11 +865,71 @@ pub fn skill_source_pair(resolved: Result<PathBuf, String>) -> (Option<PathBuf>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp_install::command_port::{CommandOutput, CommandRunner, CommandSpec};
     use crate::mcp_install::fs_port::{BatchFile, FsStat, WriteLabels, WritePolicy};
     // LocalFs 只有一致性集成测试用得上：它是「本机那一遍」的端口实现。
     use crate::mcp_install::fs_port::LocalFs;
+    use crate::mcp_install::registry::ConnectorError;
     use std::cell::RefCell;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, VecDeque};
+    use std::sync::{Arc, Mutex};
+
+
+    /// FakeCommandRunner 记录每次 CommandSpec，并可按队列吐出预设响应。
+    ///
+    /// 队列耗尽时按 argv 给一个「缺省成功」响应：openclaw 的 show 回 `null`、
+    /// grok 的 list 回 `[]`、其余回空串——足以让 collect_target_machine_paths
+    /// 在八家全进支持集合后不 spawn 真 CLI，又不会 panic。
+    #[derive(Clone, Default)]
+    struct FakeCommandRunner {
+        calls: Arc<Mutex<Vec<CommandSpec>>>,
+        responses: Arc<Mutex<VecDeque<Result<CommandOutput, ConnectorError>>>>,
+    }
+
+    impl FakeCommandRunner {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn push_ok(&self, status: i32, stdout: &str) {
+            self.responses.lock().expect("lock").push_back(Ok(CommandOutput {
+                status_code: Some(status),
+                stdout: stdout.into(),
+                stderr: String::new(),
+                truncated: false,
+            }));
+        }
+
+        fn calls(&self) -> Vec<CommandSpec> {
+            self.calls.lock().expect("lock").clone()
+        }
+    }
+
+    impl CommandRunner for FakeCommandRunner {
+        fn run(&self, spec: CommandSpec) -> Result<CommandOutput, ConnectorError> {
+            self.calls.lock().expect("lock").push(spec.clone());
+            if let Some(next) = self.responses.lock().expect("lock").pop_front() {
+                return next;
+            }
+            // 默认：按子命令形状回一个「成功但未配置」的空响应，避免真 spawn。
+            let sub = spec
+                .args
+                .get(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let stdout = match sub.as_str() {
+                "show" => "null".to_string(),
+                "list" => "[]".to_string(),
+                _ => String::new(),
+            };
+            Ok(CommandOutput {
+                status_code: Some(0),
+                stdout,
+                stderr: String::new(),
+                truncated: false,
+            })
+        }
+    }
 
     /// RecordingFs 是一个内存 `ConnectorFs`：记录调用次数、保存写入内容，
     /// 用于断言「不该发文件请求时一次都没发」与「写出的配置内容是什么」。
@@ -1179,7 +1269,12 @@ mod tests {
             .find(|connector| connector.descriptor().id() == "claude-code")
             .expect("claude-code connector");
 
-        let status = remote_status_for(connector.as_ref(), &ctx, &fs_port, false);
+        let status = remote_status_for(
+            connector.as_ref(),
+            &ctx,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+            false,
+        );
 
         assert_eq!(
             fs_port.calls(),
@@ -1295,7 +1390,12 @@ mod tests {
         };
         let fs_port = RecordingFs::new();
         let ctx = build_remote_context(&detect_fixture(), None, None);
-        let status = remote_status_for(&fixture, &ctx, &fs_port, true);
+        let status = remote_status_for(
+            &fixture,
+            &ctx,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+            true,
+        );
         assert!(
             !status.remote_supported,
             "未端口化的连接器不得声称支持远端接入"
@@ -1325,7 +1425,12 @@ mod tests {
             .find(|connector| connector.descriptor().id() == "claude-code")
             .expect("claude-code connector");
 
-        let status = remote_status_for(connector.as_ref(), &ctx, &fs_port, true);
+        let status = remote_status_for(
+            connector.as_ref(),
+            &ctx,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+            true,
+        );
 
         assert!(status.cli_present);
         assert!(status.mcp_installed, "配置里已有 superdev 条目");
@@ -1344,7 +1449,12 @@ mod tests {
 
         // 内置方言分支：目标机上的 ~/.claude.json 内容坏了（半截 JSON）。
         let broken = RecordingFs::new().with_file("/home/remote/.claude.json", "{ this is not json");
-        let status = remote_status_for(claude_code_connector().as_ref(), &ctx, &broken, true);
+        let status = remote_status_for(
+            claude_code_connector().as_ref(),
+            &ctx,
+            &ConnectorPorts::new(&broken, &FakeCommandRunner::new()),
+            true,
+        );
         assert!(
             status.status_error.is_some(),
             "配置读不出来时必须给出原因，否则前端只能把它渲染成「没装」"
@@ -1360,7 +1470,7 @@ mod tests {
         let ported = remote_status_for(
             ported_connector("kimi-code").as_ref(),
             &ctx,
-            &broken_ported,
+            &ConnectorPorts::new(&broken_ported, &FakeCommandRunner::new()),
             true,
         );
         assert!(
@@ -1380,7 +1490,12 @@ mod tests {
         );
         let ctx = build_remote_context(&detect_fixture(), None, None);
 
-        let status = remote_status_for(claude_code_connector().as_ref(), &ctx, &fs_port, true);
+        let status = remote_status_for(
+            claude_code_connector().as_ref(),
+            &ctx,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+            true,
+        );
 
         assert_eq!(status.status_error, None);
         assert!(status.mcp_installed);
@@ -1404,7 +1519,12 @@ mod tests {
         );
         let ctx = build_remote_context(&detect_fixture(), None, None);
 
-        let status = remote_status_for(claude_code_connector().as_ref(), &ctx, &fs_port, true);
+        let status = remote_status_for(
+            claude_code_connector().as_ref(),
+            &ctx,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+            true,
+        );
 
         assert!(
             !status.mcp_installed,
@@ -1429,7 +1549,12 @@ mod tests {
         );
         let ctx = build_remote_context(&detect_fixture(), None, None);
 
-        let status = remote_status_for(claude_code_connector().as_ref(), &ctx, &fs_port, true);
+        let status = remote_status_for(
+            claude_code_connector().as_ref(),
+            &ctx,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+            true,
+        );
 
         assert!(
             !status.mcp_installed,
@@ -1451,7 +1576,12 @@ mod tests {
             .find(|connector| connector.descriptor().id() == "codex")
             .expect("codex connector");
 
-        let status = remote_status_for(codex.as_ref(), &ctx, &fs_port, true);
+        let status = remote_status_for(
+            codex.as_ref(),
+            &ctx,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+            true,
+        );
 
         assert!(!status.mcp_installed);
         assert_eq!(
@@ -1461,13 +1591,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_support_is_pinned_to_the_eight_fully_ported_connectors() {
-        // 正面钉死支持集合。两条判据各管一半，都不是可以"顺手"扩大的：
-        //   - 内置方言三家走 `built_in_remote_kind` 的列举式 match
-        //   - 其余走 `AgentConnector::port_ops()`——返回 Some 的前提是这家
-        //     连接器真的实现了 PortedConnectorOps（即它的 status/install/uninstall
-        //     全部接受端口），没端口化就根本写不出那个 Some
-        // Task 7/8 把 openclaw / grok 也端口化后，内置八家全部进入远端支持集合。
+    fn remote_support_covers_every_built_in_connector() {
+        // 两条判据各管一半，都不是可以"顺手"扩大的：
+        //   - 内置方言三家走 built_in_remote_kind 的列举式 match
+        //   - 其余五家走 AgentConnector::port_ops()——返回 Some 的前提是
+        //     status/install/uninstall 的**全部副作用**（文件 + 进程调用）都收端口
         let supported: Vec<String> = connectors::builtin()
             .iter()
             .filter(|connector| remote_plan(connector.as_ref()).is_some())
@@ -1486,14 +1614,13 @@ mod tests {
                 "kimi-code".to_string(),
                 "grok".to_string(),
             ],
-            "远端支持集合只能是「安装/卸载/状态读取全程经端口」的那几家"
+            "八家内置连接器现在全部可远端接入"
         );
         assert!(built_in_remote_kind("not-a-connector").is_none());
     }
 
-    /// Task 7/8：openclaw / grok 已实现 PortedConnectorOps（命令经 runner 端口、
-    /// 文件经 fs 端口）。Task 9 会完整替换远端支持集合的集成断言；这里只钉住
-    /// 「端口化标志位已亮」这一前置条件，避免旧负例把真支持挡在门外。
+    /// openclaw / grok 必须实现 PortedConnectorOps（命令经 runner、文件经 fs），
+    /// 否则它们进不了远端支持集合。
     #[test]
     fn openclaw_and_grok_expose_port_ops_for_remote_support() {
         for id in ["openclaw", "grok"] {
@@ -1510,6 +1637,43 @@ mod tests {
                 "{id} 应进入远端支持集合（Ported 路径）"
             );
         }
+    }
+
+    /// openclaw 的三次 CLI 调用必须落在注入的远端 runner 上——落在本机 runner
+    /// 上意味着「远端安装」实际在桌面机身上跑了 openclaw。
+    #[test]
+    fn remote_install_routes_cli_connectors_through_the_remote_runner() {
+        let fs_port = RecordingFs::new();
+        let runner = FakeCommandRunner::new();
+        // show missing → set → show 复核（body 与 detect 启动规格对齐，确保
+        // entry_matches 通过后 MCP 路径完整走完三次调用）。
+        runner.push_ok(0, "null");
+        runner.push_ok(0, "");
+        runner.push_ok(
+            0,
+            r#"{"command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}"#,
+        );
+        let detector = FakeDetector::new(&["openclaw"]);
+        let connectors = connectors::builtin();
+        let ports = ConnectorPorts::new(&fs_port, &runner);
+
+        let outcome = install_remote_connector(
+            &detector,
+            &ports,
+            &connectors,
+            "host-42",
+            "openclaw",
+            None,
+            None,
+        )
+        .expect("install");
+
+        assert_eq!(outcome.connector_id, "openclaw");
+        assert_eq!(
+            runner.calls().len(),
+            3,
+            "show → set → show 三次都要走远端 runner"
+        );
     }
 
     #[test]
@@ -1574,7 +1738,7 @@ mod tests {
 
         let detect_error = detect_remote_agents(
             &BlankFieldDetector,
-            &fs_port,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
             &connectors,
             "host-42",
             None,
@@ -1583,8 +1747,7 @@ mod tests {
         .expect_err("detect 入口必须挡住空字段");
         let install_error = install_remote_connector(
             &BlankFieldDetector,
-            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
             &connectors,
             "host-42",
             "claude-code",
@@ -1594,8 +1757,7 @@ mod tests {
         .expect_err("install 入口必须挡住空字段");
         let uninstall_error = uninstall_remote_connector(
             &BlankFieldDetector,
-            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
             &connectors,
             "host-42",
             "claude-code",
@@ -1620,7 +1782,14 @@ mod tests {
         let connectors = connectors::builtin();
 
         let statuses =
-            detect_remote_agents(&detector, &fs_port, &connectors, "host-42", None, None)
+            detect_remote_agents(
+                &detector,
+                &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+                &connectors,
+                "host-42",
+                None,
+                None,
+            )
                 .expect("detect");
 
         assert_eq!(detector.call_count(), 1, "detect 只能调用一次");
@@ -1675,8 +1844,7 @@ mod tests {
 
         let outcome = install_remote_connector(
             &detector,
-            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
             &connectors,
             "host-42",
             "claude-code",
@@ -1858,27 +2026,32 @@ mod tests {
     /// 每条形如 `<操作类别> <home 相对路径>`。
     ///
     /// 两个来源，都不是手写清单：
-    ///   1. 真的跑一遍六家 remote-supported 连接器的 **install + status + uninstall**，
+    ///   1. 真的跑一遍八家 remote-supported 连接器的 **install + status + uninstall**，
     ///      把端口收到的每个路径记下来——这一条会自动带上手写清单绝对想不起来的
     ///      东西（skill 的唯一临时目录、备份目录、hermes 的 hook 信任文件）
-    ///   2. 八家（含 openclaw / grok）各自 `status()` 上报的 target_path 与
-    ///      `manual_instructions()` 的 config_path——那两家今天不走远端，但将来
-    ///      若接入，路径漂移问题一样存在，先纳入判据
+    ///   2. 八家各自 `status()` 上报的 target_path 与 `manual_instructions()` 的
+    ///      config_path（CLI 连接器的 MCP 段不经文件端口，自报路径补上缺口）
+    ///
+    /// openclaw / grok 的进程调用走 FakeCommandRunner（默认回未配置空响应），
+    /// 不会在桌面机 spawn 真 CLI；skill/hook 文件路径仍经 fs 端口记下来。
     fn collect_target_machine_paths() -> Vec<String> {
         let skill_source = bundled_skill_dir("cross-stack-paths");
         let fs_port = RecordingFs::new();
         let connectors = connectors::builtin();
         let detector = FixtureDetector;
+        // 共用一个 runner：默认 show/list 回「未配置」，install 仍会写 skill/hook
+        // 文件路径进清单（MCP 段由 CLI 拥有、不经 fs）。
+        let runner = FakeCommandRunner::new();
 
         for connector in &connectors {
             let id = connector.descriptor().id();
             if remote_plan(connector.as_ref()).is_none() {
                 continue;
             }
+            let ports = ConnectorPorts::new(&fs_port, &runner);
             install_remote_connector(
                 &detector,
-                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+                &ports,
                 &connectors,
                 "fixture-host",
                 id,
@@ -1888,8 +2061,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("{id} fixture install: {error}"));
             uninstall_remote_connector(
                 &detector,
-                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+                &ports,
                 &connectors,
                 "fixture-host",
                 id,
@@ -1900,7 +2072,7 @@ mod tests {
         }
         detect_remote_agents(
             &detector,
-            &fs_port,
+            &ConnectorPorts::new(&fs_port, &runner),
             &connectors,
             "fixture-host",
             Some(skill_source.clone()),
@@ -1921,8 +2093,7 @@ mod tests {
             }
             let _ = install_remote_connector(
                 &detector,
-                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-                &ConnectorPorts::new(&failing, &SystemCommandRunner),
+                &ConnectorPorts::new(&failing, &runner),
                 &connectors,
                 "fixture-host",
                 id,
@@ -1947,7 +2118,7 @@ mod tests {
             })
             .collect();
 
-        // 第二个来源：连接器自报的路径，覆盖 openclaw / grok 这两家不走远端的。
+        // 第二个来源：连接器自报的路径（CLI 连接器的 MCP 配置不经文件端口）。
         let ctx = ConnectorRuntimeContext::new(
             PathBuf::from(FIXTURE_HOME),
             Vec::new(),
@@ -2034,7 +2205,12 @@ mod tests {
         let ctx = build_remote_context(&detect_fixture(), Some(skill_source.clone()), None);
 
         let status =
-            remote_status_for(ported_connector("kimi-code").as_ref(), &ctx, &fs_port, true);
+            remote_status_for(
+            ported_connector("kimi-code").as_ref(),
+            &ctx,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+            true,
+        );
 
         assert!(
             status.remote_supported,
@@ -2070,7 +2246,12 @@ mod tests {
         let ctx = build_remote_context(&detect_fixture(), None, None);
 
         let status =
-            remote_status_for(ported_connector("kimi-code").as_ref(), &ctx, &fs_port, true);
+            remote_status_for(
+            ported_connector("kimi-code").as_ref(),
+            &ctx,
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
+            true,
+        );
 
         assert!(!status.mcp_installed);
         assert_eq!(
@@ -2161,8 +2342,7 @@ mod tests {
 
             let outcome = install_remote_connector(
                 &detector,
-                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+                &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
                 &connectors,
                 "host-42",
                 connector_id,
@@ -2209,8 +2389,7 @@ mod tests {
             // 只摘掉 superdev 条目、配置文件本身保留、skill 目录被删。
             let removed = uninstall_remote_connector(
                 &detector,
-                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+                &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
                 &connectors,
                 "host-42",
                 connector_id,
@@ -2289,8 +2468,7 @@ mod tests {
 
         install_remote_connector(
             &detector,
-            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
             &connectors,
             "host-42",
             "claude-code",
@@ -2320,8 +2498,7 @@ mod tests {
         let connectors = connectors::builtin();
         install_remote_connector(
             &detector,
-            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
             &connectors,
             "host-42",
             "claude-code",
@@ -2332,8 +2509,7 @@ mod tests {
 
         let outcome = uninstall_remote_connector(
             &detector,
-            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
             &connectors,
             "host-42",
             "claude-code",
@@ -2468,8 +2644,7 @@ mod tests {
 
         let error = install_remote_connector(
             &detector,
-            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
             &connectors,
             "host-42",
             "unported-fixture",
@@ -2492,8 +2667,7 @@ mod tests {
 
         let error = install_remote_connector(
             &detector,
-            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
-            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
+            &ConnectorPorts::new(&fs_port, &FakeCommandRunner::new()),
             &connectors,
             "host-42",
             "not-a-connector",
