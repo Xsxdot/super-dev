@@ -151,9 +151,14 @@ func TestIntegrationExecAllowedDefaultsTimeoutWhenZero(t *testing.T) {
 // 为什么必须有这条：白名单是第三份需要与桌面端同步的数据。前两份里，
 // integrationConfigRoots 曾经只靠注释约定，漏掉 ~/.claude.json 直接让远端安装
 // 必然 403。注释拦不住漂移，测试可以。
+//
+// fixture 的生成侧是**真的把连接器跑一遍**收出来的（见文件头注释），不是手抄
+// 清单——手抄的话它不会因为 connectors/*.rs 改了 argv 而变化，本条照样绿，
+// 漂移要到运行时 403 才暴露。
 func TestIntegrationsExecAllowlistMatchesDesktopFixture(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "desktop-connector-commands.txt"))
-	require.NoError(t, err, "fixture 由 Rust 侧 writes_connector_command_shapes_fixture 生成")
+	require.NoError(t, err,
+		"fixture 由 Rust 侧 desktop_connector_commands_fixture_matches_what_the_connectors_actually_run 产出")
 
 	expected := map[string]map[string]struct{}{}
 	for _, line := range strings.Split(string(raw), "\n") {
@@ -168,6 +173,10 @@ func TestIntegrationsExecAllowlistMatchesDesktopFixture(t *testing.T) {
 		}
 		expected[parts[0]][parts[1]] = struct{}{}
 	}
+
+	// 清单被清空 / 只剩注释时，上面的 Equal 会退化成「白名单也得是空的」这种
+	// 无意义比对，看起来仍像一条活着的跨栈校验。显式挡住。
+	require.NotEmpty(t, expected, "跨栈清单不得为空，否则这条校验静默变成空转")
 
 	assert.Equal(t, expected, integrationsExecAllowlist,
 		"Go 白名单与桌面端连接器实际发出的命令形状不一致——两侧必须一起改")

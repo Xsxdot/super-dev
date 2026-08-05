@@ -40,9 +40,11 @@ const integrationsExecMaxTimeout = 60 * time.Second
 // 再往细钉（完整 argv 模板）就等于把连接器方言下沉到 Go，与「方言 Rust 单源」
 // 相冲突。
 //
-// 新增一家需要 CLI 写配置的连接器时，在此加一行数据；同时必须更新跨栈清单
-// testdata/desktop-connector-commands.txt 与
-// TestIntegrationsExecAllowlistMatchesDesktopFixture。
+// 新增一家需要 CLI 写配置的连接器、或改了已有连接器的 argv 时，不必手工维护
+// 本表与桌面端的对应关系：桌面端那条测试会**真的把连接器跑一遍**、发现
+// testdata/desktop-connector-commands.txt 过期后先红并打印新清单，更新 fixture
+// 之后 TestIntegrationsExecAllowlistMatchesDesktopFixture 紧接着红，指出本表
+// 缺哪一条。两条测试构成的链路才是同步机制，本注释不是。
 var integrationsExecAllowlist = map[string]map[string]struct{}{
 	"openclaw": {"mcp": {}},
 	"grok":     {"mcp": {}},

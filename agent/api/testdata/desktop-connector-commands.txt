@@ -1,3 +1,25 @@
-# 由 connectors.rs 的 writes_connector_command_shapes_fixture 生成，勿手改
-openclaw mcp
+# desktop-connector-commands.txt 是【桌面端会在目标机上执行的命令形状】的跨栈清单。
+#
+# 每行形如 `<program> <首个子命令>`，按字典序排列。只有这两列：那正是 Go 侧
+# exec 白名单钉的粒度（integrations_exec_allowlist.go 的 integrationsExecAllowlist）。
+# 完整 argv 是连接器方言，必须留在 Rust 单源——把方言复制到 Go 会让同一件事有
+# 两个真相源，改一次 argv 要动两栈。
+#
+# 为什么要有这份清单：exec 白名单是第三份需要与桌面端同步的数据。前两份里，
+# integrationConfigRoots 曾经只靠注释约定「与桌面端一一对应」，漏掉 ~/.claude.json
+# 直接让远端安装必然 403。注释不是机制，测试才是。
+#
+# 生成方：desktop/src-tauri 的
+#   mcp_install::remote_install::tests::desktop_connector_commands_fixture_matches_what_the_connectors_actually_run
+# 它**真的把八家连接器跑一遍**（未配置状态的 install + uninstall + detect，再加
+# 一遍已配置状态的 uninstall 以逼出 unset / remove 分支），从注入的 CommandRunner
+# 端口上把每次 CommandSpec 的 (program basename, args[0]) 收出来，与本文件逐行
+# 比对。connectors/*.rs 改了 argv 而没改这里，Rust 侧先红。
+#
+# 消费方：agent/api 的
+#   TestIntegrationsExecAllowlistMatchesDesktopFixture
+# 它读同一份清单，断言 integrationsExecAllowlist 与之逐条相同；Go 侧漏跟进则 Go 先红。
+#
+# 两侧都断言「清单非空」，避免有人清空文件让这条跨栈校验静默变成空转。
 grok mcp
+openclaw mcp

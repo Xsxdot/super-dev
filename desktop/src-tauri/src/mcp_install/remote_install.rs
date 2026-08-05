@@ -23,7 +23,6 @@ use super::connectors;
 use super::contracts::{
     ConnectorOperation, ConnectorOperationOutcome, IntegrationCapability, IntegrationStateStatus,
 };
-use super::fs_port::ConnectorFs;
 use super::registry::{
     AgentConnector, ConnectorEnvironment, ConnectorInstallRequest, ConnectorPorts,
     ConnectorRuntimeContext, ConnectorStatus,
@@ -917,7 +916,9 @@ pub fn skill_source_pair(resolved: Result<PathBuf, String>) -> (Option<PathBuf>,
 mod tests {
     use super::*;
     use crate::mcp_install::command_port::{CommandOutput, CommandRunner, CommandSpec};
-    use crate::mcp_install::fs_port::{BatchFile, FsStat, WriteLabels, WritePolicy};
+    // ConnectorFs 只有测试用得上：生产编排一律经 ConnectorPorts 借用它，
+    // 从不直接命名这个 trait；测试里的 RecordingFs / FailingRenameFs 要实现它。
+    use crate::mcp_install::fs_port::{BatchFile, ConnectorFs, FsStat, WriteLabels, WritePolicy};
     // LocalFs 只有一致性集成测试用得上：它是「本机那一遍」的端口实现。
     use crate::mcp_install::fs_port::LocalFs;
     use crate::mcp_install::registry::ConnectorError;
@@ -2133,6 +2134,14 @@ mod tests {
     /// FIXTURE_HOME 是跨栈路径清单里冒充「目标机 HOME」的固定前缀。
     const FIXTURE_HOME: &str = "/superdev-fixture-home";
 
+    /// OPENCLAW_CONFIGURED_SHOW 是 `openclaw mcp show superdev --json` 在「已按
+    /// 目标机值装好」时的输出。喂给 FakeCommandRunner 用来驱动 uninstall 的
+    /// `mcp unset` 分支——默认响应是「未配置」，那条分支跑不到。
+    const OPENCLAW_CONFIGURED_SHOW: &str = r#"{"command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}"#;
+
+    /// GROK_CONFIGURED_LIST 是 `grok mcp list --json` 在已装好时的输出，用途同上。
+    const GROK_CONFIGURED_LIST: &str = r#"[{"name":"superdev","command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"},"enabled":true,"scope":"user"}]"#;
+
     /// PATH_OP 标注「走 Go 侧 integrationPathAllowed 那条白名单」的操作。
     const PATH_OP: &str = "path";
 
@@ -2162,6 +2171,10 @@ mod tests {
     /// 放在 agent 的 testdata 下，是因为消费方是 Go 测试；Rust 这边只负责生成
     /// 与校验它是否还与代码事实一致。
     const DESKTOP_PATHS_FIXTURE: &str = "../../agent/api/testdata/desktop-connector-paths.txt";
+
+    /// DESKTOP_COMMANDS_FIXTURE 是跨栈命令形状清单的落盘位置。
+    const DESKTOP_COMMANDS_FIXTURE: &str =
+        "../../agent/api/testdata/desktop-connector-commands.txt";
 
     /// FixtureDetector 回一份 home 指向 FIXTURE_HOME、且**所有 CLI 都存在**的
     /// detect 响应——要让六家都真的走完文件操作，才能收集到全部路径。
@@ -2432,6 +2445,161 @@ mod tests {
         );
     }
 
+    /// collect_target_machine_commands 收集「桌面端会在目标机上执行的全部命令
+    /// 形状」，每条形如 `<program> <首个子命令>`。
+    ///
+    /// 与 collect_target_machine_paths 同一手法：**真的把连接器跑一遍**，从注入的
+    /// 端口上把事实收出来，而不是在测试里手抄一份清单。之所以必须这样——手抄的
+    /// 清单不会因为 connectors/*.rs 改了 argv 而变化，Go 侧照样绿，运行时 403。
+    /// 只钉 `(program, args[0])` 两列：那正是 Go 白名单钉的粒度，完整 argv 是
+    /// 方言、必须留在 Rust 单源。
+    ///
+    /// 跑两遍是必要的：
+    ///   1. 「未配置」状态下的 install + uninstall + detect
+    ///   2. 「已配置」状态下的 uninstall——只有走到这条分支才会发出
+    ///      `openclaw mcp unset` / `grok mcp remove`；第一遍的默认响应说「没装」，
+    ///      那两条命令根本不会发出去，漏掉的正是**只在卸载路径上出现**的形状
+    fn collect_target_machine_commands() -> Vec<String> {
+        let skill_source = bundled_skill_dir("cross-stack-commands");
+        let connectors = connectors::builtin();
+        let detector = FixtureDetector;
+        let mut specs: Vec<CommandSpec> = Vec::new();
+
+        // 第一遍：未配置状态，install + uninstall + detect 共用一个 runner。
+        let fs_port = RecordingFs::new();
+        let runner = FakeCommandRunner::new();
+        for connector in &connectors {
+            let id = connector.descriptor().id();
+            if remote_plan(connector.as_ref()).is_none() {
+                continue;
+            }
+            let ports = ConnectorPorts::new(&fs_port, &runner);
+            install_remote_connector(
+                &detector,
+                &ports,
+                &connectors,
+                "fixture-host",
+                id,
+                Some(skill_source.clone()),
+                None,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{id} fixture install: {error}"));
+            uninstall_remote_connector(
+                &detector,
+                &ports,
+                &connectors,
+                "fixture-host",
+                id,
+                Some(skill_source.clone()),
+                None,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{id} fixture uninstall: {error}"));
+        }
+        detect_remote_agents(
+            &detector,
+            &ConnectorPorts::new(&fs_port, &runner),
+            &connectors,
+            "fixture-host",
+            Some(skill_source.clone()),
+            None,
+            None,
+        )
+        .expect("fixture detect");
+        specs.extend(runner.calls());
+
+        // 第二遍：已配置状态下的卸载，逼出 unset / remove 那一支。
+        for (id, configured) in [
+            ("openclaw", OPENCLAW_CONFIGURED_SHOW),
+            ("grok", GROK_CONFIGURED_LIST),
+        ] {
+            let removal_fs = RecordingFs::new();
+            let removal_runner = FakeCommandRunner::new();
+            // 只需喂第一条「已装」响应；后续 unset/remove/复核由默认响应兜住。
+            removal_runner.push_ok(0, configured);
+            uninstall_remote_connector(
+                &detector,
+                &ConnectorPorts::new(&removal_fs, &removal_runner),
+                &connectors,
+                "fixture-host",
+                id,
+                Some(skill_source.clone()),
+                None,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{id} fixture configured-uninstall: {error}"));
+            specs.extend(removal_runner.calls());
+        }
+
+        let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());
+
+        let mut shapes: Vec<String> = specs
+            .iter()
+            .filter_map(|spec| {
+                // program 只取 basename：RemoteAgentCommandRunner 下发的也是它，
+                // 目标机 agent 再用 integrationCommandResolve 解析绝对路径。
+                let program = spec.program.file_name()?.to_string_lossy().into_owned();
+                let subcommand = spec.args.first()?.to_string_lossy().into_owned();
+                Some(format!("{program} {subcommand}"))
+            })
+            .collect();
+        shapes.sort();
+        shapes.dedup();
+        shapes
+    }
+
+    /// 跨栈一致性：桌面端**实际**会在目标机上执行的命令形状必须与落盘 fixture 一致。
+    ///
+    /// 这条测试是「exec 白名单同步义务」执行机制的**上半段**：下半段是 Go 侧的
+    /// `TestIntegrationsExecAllowlistMatchesDesktopFixture`，它读同一份 fixture
+    /// 并断言 `integrationsExecAllowlist` 与之逐条相同。
+    ///
+    /// 连锁效果：connector 改了 argv → 本条先红（fixture 过期）→ 开发者更新
+    /// fixture → Go 侧那条紧接着红（新形状不在白名单里）→ 白名单跟着改。少了
+    /// 上半段，白名单就退化成一份没人对账的手抄清单——`integrationConfigRoots`
+    /// 已经这样漏过一次（`~/.claude.json`），那次让远端安装必然 403。
+    #[test]
+    fn desktop_connector_commands_fixture_matches_what_the_connectors_actually_run() {
+        let actual = collect_target_machine_commands();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(DESKTOP_COMMANDS_FIXTURE);
+        let recorded = std::fs::read_to_string(&fixture).unwrap_or_default();
+        let expected: Vec<String> = recorded
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_string)
+            .collect();
+
+        assert!(
+            !actual.is_empty(),
+            "一条命令都没收集到说明驱动路径断了，而不是「本来就没有命令」——\
+             空清单会让 Go 侧的比对静默变成空转"
+        );
+        assert_eq!(
+            actual,
+            expected,
+            "桌面端在目标机上会执行的命令形状变了。请把下面这份清单更新进 {}\n{}",
+            fixture.display(),
+            actual.join("\n")
+        );
+
+        // 附带钉住：清单里的每个 program 都真的是某个连接器 cli_commands() 上报
+        // 的命令名——否则 detect 不会去探测它，面板会说「未检测到 CLI」，
+        // 而 exec 白名单却放行着一个永远不会被调用的 program。
+        let reported: Vec<String> = connectors::builtin()
+            .iter()
+            .flat_map(|connector| connector.cli_commands())
+            .collect();
+        for line in &actual {
+            let program = line.split(' ').next().expect("program");
+            assert!(
+                reported.iter().any(|command| command == program),
+                "{program} 必须是某个连接器 cli_commands() 上报的命令名"
+            );
+        }
+    }
+
     /// ported_connector 从生产工厂里取一家第二波连接器。
     fn ported_connector(id: &str) -> Arc<dyn AgentConnector> {
         connectors::builtin()
@@ -2565,11 +2733,9 @@ mod tests {
         //
         // openclaw / grok 的 config_rel 含义不同：MCP 配置由 CLI 写、不经文件端口，
         // 所以断言点是「该路径不该被端口写到」；skill（与 grok 的 hook）仍经 fs。
-        // 假 runner 吐出匹配目标机 agent 的 show/list 响应，让 install 完整走完
-        // MCP + skill，而不会在桌面机 spawn 真 CLI。
-        const OPENCLAW_CONFIGURED_SHOW: &str = r#"{"command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"}}"#;
-        const GROK_CONFIGURED_LIST: &str = r#"[{"name":"superdev","command":"/opt/superdev/superdev-agent","args":["mcp"],"env":{"SUPERDEV_AGENT_URL":"http://10.1.2.3:57117"},"enabled":true,"scope":"user"}]"#;
-
+        // 假 runner 吐出匹配目标机 agent 的 show/list 响应（模块级常量，跨栈命令
+        // 清单的第二遍也用同一份），让 install 完整走完 MCP + skill，而不会在桌面机
+        // spawn 真 CLI。
         for (connector_id, cli, config_rel, skill_rel) in [
             (
                 "opencode",

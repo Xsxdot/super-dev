@@ -1711,32 +1711,4 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// 生成跨栈清单：Go 侧 exec 白名单必须覆盖桌面端两家 CLI 连接器实际会发出的
-    /// (program, 首个子命令) 组合。手法与 desktop-command-search-dirs.txt 相同——
-    /// Rust 侧产出事实，Go 侧断言自己的白名单与之一致。清单里只放**形状**，不放
-    /// 完整 argv：那是方言，必须留在 Rust。
-    #[test]
-    fn writes_connector_command_shapes_fixture() {
-        let lines = ["openclaw mcp", "grok mcp"];
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../agent/api/testdata/desktop-connector-commands.txt");
-        let body = format!(
-            "# 由 connectors.rs 的 writes_connector_command_shapes_fixture 生成，勿手改\n{}\n",
-            lines.join("\n")
-        );
-        std::fs::write(&path, body).expect("write fixture");
-
-        // 同时钉住：清单里的每个 program 都真的是某个连接器上报的 CLI 命令名
-        let reported: Vec<String> = builtin()
-            .iter()
-            .flat_map(|connector| connector.cli_commands())
-            .collect();
-        for line in lines {
-            let program = line.split(' ').next().expect("program");
-            assert!(
-                reported.iter().any(|command| command == program),
-                "{program} 必须是某个连接器 cli_commands() 上报的命令名"
-            );
-        }
-    }
 }
