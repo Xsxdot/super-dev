@@ -1,8 +1,8 @@
-// integrations_command_dirs_test.go 覆盖 detect 的命令存在性判定与它的跨栈契约。
+// integrations_command_dirs_test.go 覆盖 detect 的命令路径解析/存在性判定与跨栈契约。
 //
 // 职责：
 //   - 断言 integrationCommandSearchDirs 与桌面端那份清单逐行一致（读同一份 fixture）
-//   - 断言 integrationCommandPresent 的两条路（PATH / 兜底目录）与边界行为
+//   - 断言 integrationCommandResolve / Present 的两条路（PATH / 兜底目录）与边界行为
 //
 // 边界：
 //   - 不覆盖 HTTP 层（那在 handler_integrations_detect_test.go）
@@ -115,8 +115,14 @@ func TestIntegrationCommandPresentRejectsMissingCommand(t *testing.T) {
 	require.False(t, integrationCommandPresent(t.TempDir(), "definitely-not-a-cli-xyz"))
 }
 
+// TestIntegrationCommandResolveReturnsAbsolutePathFromFallbackDir 钉住兜底目录
+// 解析：PATH 为空时仍能从 ~/.local/bin 等目录拿到绝对路径。
+//
+// 必须隔离 PATH——本机若已装 openclaw，LookPath 会先命中，断言就测不到兜底扫描。
 func TestIntegrationCommandResolveReturnsAbsolutePathFromFallbackDir(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("PATH", filepath.FromSlash("/nonexistent-dir-for-test"))
+
 	binDir := filepath.Join(home, ".local", "bin")
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
 	target := filepath.Join(binDir, "openclaw")
@@ -129,8 +135,11 @@ func TestIntegrationCommandResolveReturnsAbsolutePathFromFallbackDir(t *testing.
 	assert.True(t, filepath.IsAbs(got), "解析结果必须是绝对路径，exec 不能再依赖 PATH")
 }
 
+// TestIntegrationCommandResolveMissesUnknownCommand 钉住否定面：隔离 PATH 后，
+// 兜底目录里也没有的命令必须解析失败。
 func TestIntegrationCommandResolveMissesUnknownCommand(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("PATH", filepath.FromSlash("/nonexistent-dir-for-test"))
 
 	got, ok := integrationCommandResolve(home, "definitely-not-installed-xyz")
 
@@ -138,15 +147,34 @@ func TestIntegrationCommandResolveMissesUnknownCommand(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+// TestIntegrationCommandPresentStillAgreesWithResolve 钉住 Present 与 Resolve
+// 共用判据：隔离 PATH 后只靠兜底目录命中，两者仍必须一致。
 func TestIntegrationCommandPresentStillAgreesWithResolve(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("PATH", filepath.FromSlash("/nonexistent-dir-for-test"))
+
 	binDir := filepath.Join(home, ".cargo", "bin")
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "grok"), []byte(""), 0o644))
 
-	_, ok := integrationCommandResolve(home, "grok")
+	got, ok := integrationCommandResolve(home, "grok")
 
 	assert.True(t, ok)
+	assert.Equal(t, filepath.Join(binDir, "grok"), got)
 	assert.Equal(t, ok, integrationCommandPresent(home, "grok"),
 		"两个判据必须永远一致，否则会出现「detect 说有、exec 说找不到」")
+}
+
+// TestIntegrationCommandResolveReturnsAbsolutePathFromPATH 覆盖 PATH 命中时
+// 也返回绝对路径——exec 侧同样不能再依赖运行时 PATH。
+func TestIntegrationCommandResolveReturnsAbsolutePathFromPATH(t *testing.T) {
+	dir := t.TempDir()
+	target := writeFakeCLI(t, dir, "faux-on-path")
+	t.Setenv("PATH", dir)
+
+	got, ok := integrationCommandResolve(t.TempDir(), "faux-on-path")
+
+	assert.True(t, ok)
+	assert.Equal(t, target, got)
+	assert.True(t, filepath.IsAbs(got), "PATH 命中也必须返回绝对路径")
 }

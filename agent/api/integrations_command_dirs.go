@@ -7,7 +7,7 @@
 //   - 合成路径解析（integrationCommandResolve）与在其上的存在性判定（integrationCommandPresent）
 //
 // 边界：
-//   - 只做存在性判定，不执行任何被探测到的命令
+//   - 只做路径解析与存在性判定，不执行任何被探测到的命令
 //   - 清单是**服务端静态数据**，绝不接受调用方下发或扩展（与 integrations_paths.go
 //     的白名单同一条纪律）
 //
