@@ -802,6 +802,8 @@ pub fn skill_source_pair(resolved: Result<PathBuf, String>) -> (Option<PathBuf>,
 mod tests {
     use super::*;
     use crate::mcp_install::fs_port::{BatchFile, FsStat, WriteLabels, WritePolicy};
+    // LocalFs 只有一致性集成测试用得上：它是「本机那一遍」的端口实现。
+    use crate::mcp_install::fs_port::LocalFs;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
@@ -2194,5 +2196,145 @@ mod tests {
             "{error}"
         );
         assert_eq!(fs_port.calls(), 0);
+    }
+
+    /// disk_tree 递归收集真实目录下的「相对路径 → 内容」，目录本身不入表。
+    ///
+    /// 相对路径统一用 `/` 分隔，好让两边的键在 Windows 上也能直接比较。
+    fn disk_tree(root: &Path) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(error) => panic!("读取目录 {} 失败: {error}", dir.display()),
+            };
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let rel = path
+                    .strip_prefix(root)
+                    .expect("prefix")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let content = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("读取 {} 失败: {error}", path.display()));
+                out.insert(rel, content);
+            }
+        }
+        out
+    }
+
+    /// port_tree 收集内存 fake 里落在 root 之下的「相对路径 → 内容」。
+    ///
+    /// 键的形状与 [`disk_tree`] 一致，两者可以直接 `assert_eq!`。
+    fn port_tree(fs_port: &RecordingFs, root: &Path) -> BTreeMap<String, String> {
+        fs_port
+            .files
+            .borrow()
+            .iter()
+            .filter_map(|(path, content)| {
+                path.strip_prefix(root)
+                    .ok()
+                    .map(|rel| (rel.to_string_lossy().replace('\\', "/"), content.clone()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn local_and_remote_paths_write_byte_identical_files_for_the_same_launch_spec() {
+        // 一致性集成测试：同一个 connector、**同一份启动规格**、**同一个 HOME 路径**，
+        // 分别经 LocalFs（真实磁盘）与内存 fake「远端」端口走完整套安装
+        // （MCP 配置 + skill + SessionStart hook），断言两边落盘的文件集合与内容
+        // 逐字节一致、返回的 InstallOutcome 也完全相同。
+        //
+        // 为什么把 launch spec 与 home 都设成同一个：本机与远端天然有这两处差异
+        // （本机是独立 mcp 二进制 + 默认 URL + 桌面机 HOME），不消掉的话两边内容
+        // 必然不同，比较就无从谈起。消掉之后**剩下的任何差异都是缺陷**——要么是
+        // 某条路径绕过端口直连了 std::fs（远端那次会少文件），要么是端口实现之间
+        // 出现了不该有的行为分叉（内容不同）。
+        //
+        // 与既有测试的分工：`remote_install_writes_the_remote_agent_command_args_and_url`
+        // 只点名断言 3 个文件的若干字段；本测试断言的是**整棵树**，因此新增一条
+        // 绕过端口的写入（既有断言不看的文件）也会被抓住。内置三家此前也没有
+        // `ported_connectors_remote_install_...` 那样的「桌面机 HOME 仍为空」泄漏
+        // 探针，本测试一并补上。
+        for agent in ["claude-code", "codex", "cursor"] {
+            let skill_source = bundled_skill_dir(&format!("parity-{agent}"));
+            let home = empty_remote_home(&format!("parity-{agent}"));
+            let launch = McpLaunchSpec {
+                command: PathBuf::from("/opt/superdev/superdev-agent"),
+                args: vec!["mcp".to_string()],
+                agent_url: "http://10.1.2.3:57117".to_string(),
+            };
+
+            // 先跑远端那一遍：此刻 home 在**桌面机磁盘**上还是空的，任何一次绕过
+            // 端口的写入都会留在里面。
+            let fs_port = RecordingFs::new();
+            let remote = crate::mcp_install::install_mcp_for_paths_with_fs(
+                &fs_port,
+                agent,
+                &home,
+                &launch,
+                Some(&skill_source),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{agent} 经端口安装失败: {error}"));
+
+            let leaked = disk_tree(&home);
+            assert!(
+                leaked.is_empty(),
+                "{agent} 经端口安装时有写入绕过了端口、落到了【桌面机】磁盘上: {:?}",
+                leaked.keys().collect::<Vec<_>>()
+            );
+
+            // 再跑本机那一遍：起点与上一遍完全相同（空 HOME、同一路径、同一 spec）。
+            let local = crate::mcp_install::install_mcp_for_paths_with_fs(
+                &LocalFs,
+                agent,
+                &home,
+                &launch,
+                Some(&skill_source),
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{agent} 经 LocalFs 安装失败: {error}"));
+
+            assert!(
+                local.installed && remote.installed,
+                "{agent} 两条路径都必须真的写入了 MCP 配置"
+            );
+
+            // 先把「两棵树都不是空的」钉住：两边都空的话下面那条 assert_eq! 恒真，
+            // 整个测试会退化成什么都不测。
+            let local_tree = disk_tree(&home);
+            assert!(
+                local_tree
+                    .keys()
+                    .any(|rel| rel.ends_with("skills/superdev/SKILL.md")),
+                "{agent} 本机安装必须真的把 skill 落到磁盘上: {:?}",
+                local_tree.keys().collect::<Vec<_>>()
+            );
+            assert!(
+                local_tree.len() >= 4,
+                "{agent} 本机安装至少应产出 MCP 配置 + skill 三件套: {:?}",
+                local_tree.keys().collect::<Vec<_>>()
+            );
+            assert_eq!(
+                local_tree,
+                port_tree(&fs_port, &home),
+                "{agent} 本机与远端两条路径落盘的文件集合/内容必须逐字节一致"
+            );
+            assert_eq!(
+                local, remote,
+                "{agent} 本机与远端两条路径返回的 InstallOutcome 必须完全相同\
+                 （含 manual_config、skill 与 hook 的每一项）"
+            );
+
+            let _ = std::fs::remove_dir_all(&home);
+            let _ = std::fs::remove_dir_all(skill_source.parent().and_then(Path::parent).unwrap());
+        }
     }
 }
