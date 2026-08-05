@@ -530,9 +530,13 @@ impl ConnectorFs for RemoteAgentFs {
 
     fn remove_file(&self, path: &Path) -> Result<(), String> {
         // 与 remove_dir_all 打同一 DELETE 端点；服务端按白名单分支区分文件/目录语义。
-        // 404 → Ok：卸载幂等，与 LocalFs::remove_file 的 NotFound 语义对齐。
-        // execute 把非 2xx 收成通用错误串，这里按 HTTP 404 文案分支识别（见 execute 的
-        // Status 分支模板「HTTP {status}」）。
+        //
+        // 幂等性实际由**服务端**保证：`integrationsFsDelete` 用 `os.RemoveAll`，
+        // 路径不存在时返回 200 而不是 404，所以正常路径上根本走不到下面那个分支。
+        // 仍保留它是防御性冗余——「不存在即成功」是这个方法的语义（与
+        // LocalFs::remove_file 的 NotFound → Ok 对齐），不该依赖服务端某一版实现
+        // 恰好用了 RemoveAll。execute 把非 2xx 收成通用错误串，这里按 HTTP 404
+        // 文案分支识别（见 execute 的 Status 分支模板「HTTP {status}」）。
         tracing::info!(host_id = %self.host_id, path = %path.display(), "remote fs remove_file");
         let path_str = path.to_string_lossy().into_owned();
         match self.execute(
@@ -1149,6 +1153,9 @@ mod tests {
             .request_target
             .starts_with("/api/agents/h1/integrations/fs?path="));
 
+        // 404 分支是防御性的：现役服务端用 os.RemoveAll，缺失路径回 200，走不到
+        // 这里。钉住它是因为「不存在即成功」是本方法的语义契约，不该依赖服务端
+        // 某一版实现恰好选了 RemoveAll。
         let (base, _rx) = spawn_fake_agent(|_req| {
             status(404, "Not Found", r#"{"error":"not found"}"#)
         });

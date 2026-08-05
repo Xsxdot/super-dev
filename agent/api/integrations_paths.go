@@ -200,19 +200,19 @@ func integrationPathAllowed(home, candidate string) (string, error) {
 
 // integrationDeleteAllowed 是删除操作的窄白名单，允许两类路径：
 //
-//  (1) 各智能体 skill 目录树下名为 superdev 或 superdev.* 前缀（临时/备份
-//      目录）的目录——basename 允许带一个前导点（桌面端的唯一临时目录是隐藏
-//      目录，见 skills 分支体内注释），且该目录必须落在命中的白名单根下的
-//      skills 目录之内，即 cleaned 以 <root>/skills/ 为前缀（skills 必须紧
-//      跟在根之后）。注意这条前缀检查不限制 skills 之下的嵌套深度
-//      ——<root>/skills/a/b/superdev 只要最终 basename 满足要求同样会放行；它
-//      真正排除的是 skills 不紧跟在根之后（如 .claude/x/skills/y/superdev）、
-//      或 "skills" 出现在其它子目录名之后的伪装路径（如
-//      .claude/superdev/skills/superdev.bak）。
+//	(1) 各智能体 skill 目录树下名为 superdev 或 superdev.* 前缀（临时/备份
+//	    目录）的目录——basename 允许带一个前导点（桌面端的唯一临时目录是隐藏
+//	    目录，见 skills 分支体内注释），且该目录必须落在命中的白名单根下的
+//	    skills 目录之内，即 cleaned 以 <root>/skills/ 为前缀（skills 必须紧
+//	    跟在根之后）。注意这条前缀检查不限制 skills 之下的嵌套深度
+//	    ——<root>/skills/a/b/superdev 只要最终 basename 满足要求同样会放行；它
+//	    真正排除的是 skills 不紧跟在根之后（如 .claude/x/skills/y/superdev）、
+//	    或 "skills" 出现在其它子目录名之后的伪装路径（如
+//	    .claude/superdev/skills/superdev.bak）。
 //
-//  (2) <root>/hooks/ 正下方 basename 以 superdev- 开头的 SuperDev 独占文件
-//      （例如 ~/.grok/hooks/superdev-session-start.json）。仅一层、不嵌套；
-//      与 skills 那条「允许任意深度」的取舍不同——见 hook 分支体内注释。
+//	(2) <root>/hooks/ 正下方 basename 以 superdev- 开头的 SuperDev 独占文件
+//	    （例如 ~/.grok/hooks/superdev-session-start.json）。仅一层、不嵌套；
+//	    与 skills 那条「允许任意深度」的取舍不同——见 hook 分支体内注释。
 //
 // 返回值经 integrationPathAllowed 解析符号链接：如果 candidate 末段自身是一个
 // 指向白名单根内其它目录的符号链接（例如 .claude/skills/superdev 是指向
