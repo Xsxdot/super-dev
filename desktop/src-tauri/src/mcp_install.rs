@@ -21,6 +21,7 @@ pub mod connectors;
 pub mod contracts;
 pub mod fs_port;
 pub mod registry;
+pub mod remote_command;
 pub mod remote_fs;
 pub mod remote_install;
 
