@@ -48,7 +48,32 @@ var integrationConfigRoots = []string{
 // 光靠这条注释已经漏过一次（.claude.json），因此另有
 // TestIntegrationPathAllowedCoversEveryDesktopConnectorPath 用桌面端**实际
 // 产出**的路径清单做跨栈校验，见该测试头注释。
-var integrationConfigFiles = []string{".claude.json"}
+var integrationConfigFiles = integrationConfigFileEntries()
+
+// integrationConfigFileNames 是精确文件条目的**源数据**：新增一条智能体配置
+// 文件（不是目录）时只改这里。
+var integrationConfigFileNames = []string{".claude.json"}
+
+// integrationConfigFileEntries 把每条精确文件条目连同它的**备份文件名**一起
+// 展开成最终白名单。
+//
+// 为什么备份名必须显式进白名单：write 端点 backup=true 时会写一个
+// `<name>.<ext>.superdev-bak` 的兄弟文件，而那条路径同样要过
+// integrationPathAllowed（见 handler_integrations_fs.go 备份分支的注释）。
+// 目录根条目天然覆盖了自己树下的备份文件（前缀匹配），但精确文件条目是
+// 「恰好等于」语义——~/.claude.json 的备份 ~/.claude.json.superdev-bak 既不
+// 等于它、也不在任何目录根之下，不展开就会让 Claude Code 这家最主要的连接器
+// 在「目标机上 ~/.claude.json 已存在」（也就是几乎所有真实机器）时安装必然 403。
+//
+// 用 integrationBackupPath 现算而不是再手写一行常量：备份命名规则是一条跨栈
+// 契约（见该函数头注释），手写第二份就又多一处会漂移的数据。
+func integrationConfigFileEntries() []string {
+	entries := make([]string, 0, len(integrationConfigFileNames)*2)
+	for _, name := range integrationConfigFileNames {
+		entries = append(entries, name, integrationBackupPath(name))
+	}
+	return entries
+}
 
 // errIntegrationPathDenied 是路径白名单拒绝时返回的 sentinel error。
 var errIntegrationPathDenied = errors.New("path not allowed")
@@ -99,7 +124,7 @@ func existingAncestor(path string) string {
 
 // integrationPathAllowed 校验 candidate 是否落在 home 下的白名单配置根内。
 // 校验顺序：绝对路径 → Clean 后前缀命中某根（含边界检查，".claudex" 不是
-// ".claude"）→ 命中的根自身 EvalSymlinks 后仍在 home 内 → candidate 已存在的
+// ".claude"）→ 命中的根自身 EvalSymlinks 后**仍在它自己那个位置** → candidate 已存在的
 // 最深祖先 EvalSymlinks 后仍在【命中的根】内（而不是仅仅在 home 内——否则
 // 白名单根下的一个符号链接，例如 .claude/link -> ~/.ssh，就能借道整个 home
 // 目录树越权读写任意文件）。任何一步失败返回 errIntegrationPathDenied。
@@ -126,14 +151,32 @@ func integrationPathAllowed(home, candidate string) (string, error) {
 
 	// 根边界：取白名单根自身已存在的最深祖先并解析符号链接。根尚未创建时，
 	// 这个祖先会一路收缩到 home 本身——完全安全，因为不存在的路径段不可能是
-	// 恶意符号链接。这个边界必须落在 resolvedHome 之内，否则根这一级（或其
-	// 祖先）本身就是逃逸 home 的符号链接（例如整个 .claude 被换成指向别处的
-	// 软链）。
-	resolvedRootAnchor, err := filepath.EvalSymlinks(existingAncestor(matchedRoot))
+	// 恶意符号链接。
+	//
+	// 收敛目标是【这个祖先自己那个位置】（resolvedHome 下同名的相对路径），
+	// 不是「仍在 resolvedHome 之内」。差别就是一个真实的越权写通道：
+	// `~/.claude.json -> ~/dotfiles/claude.json` 与
+	// `~/.claude.json -> ~/.ssh/authorized_keys` 在「仍在 home 内」这条判据下
+	// 走的是同一条分支、同样放行，于是整条受限通道可以借白名单根这一级的软链
+	// 落到 home 里的任意文件（目录根同理：`.claude -> ~/.ssh` 会把整棵 .ssh
+	// 放进白名单）。精确文件条目引入后这条尤其容易触发——dotfile 软链是最常见
+	// 的形态。
+	//
+	// 代价（明确接受）：靠软链管理 dotfiles 的机器（`~/.claude -> ~/dotfiles/claude`
+	// 这类 stow/chezmoi 布局）会被拒绝远端接入，返回 403 path_not_allowed 并在
+	// 目标机日志里点名路径。这是 fail-closed 的一侧：从外部无法区分「用户自己
+	// 摆的 dotfiles 软链」和「攻击者预置的重定向软链」，两者在文件系统上是同一
+	// 个东西，只能拒。本机安装不受影响（本机不走这条白名单）。
+	rootAnchor := existingAncestor(matchedRoot)
+	resolvedRootAnchor, err := filepath.EvalSymlinks(rootAnchor)
 	if err != nil {
 		return "", errIntegrationPathDenied
 	}
-	if resolvedRootAnchor != resolvedHome && !strings.HasPrefix(resolvedRootAnchor, resolvedHome+string(filepath.Separator)) {
+	rootAnchorRel, err := filepath.Rel(home, rootAnchor)
+	if err != nil {
+		return "", errIntegrationPathDenied
+	}
+	if resolvedRootAnchor != filepath.Join(resolvedHome, rootAnchorRel) {
 		return "", errIntegrationPathDenied
 	}
 

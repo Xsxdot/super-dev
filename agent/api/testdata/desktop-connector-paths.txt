@@ -3,8 +3,14 @@
 # 每行形如 `<操作类别> <home 相对路径>`：
 #   path   —— 走 Go 侧 integrationPathAllowed（读/写/改名等）
 #   delete —— 走 Go 侧 integrationDeleteAllowed（**更窄**的删除白名单）
-# 两类必须分开：只断言 integrationPathAllowed 照不出删除专属的缺口，本任务就
-# 漏过一次（skill 临时目录名的前导点不满足删除白名单的 basename 判据）。
+#   backup —— 这次写入会先落一个备份；**多带一列**：
+#             `backup <被备份的配置路径> <备份文件路径>`
+# 三类必须分开：只断言 integrationPathAllowed 照不出删除专属的缺口，本任务就
+# 漏过一次（skill 临时目录名的前导点不满足删除白名单的 basename 判据）；
+# backup 那一列则钉住备份命名的跨语言契约（Rust backup_path ⟷ Go
+# integrationBackupPath）以及「备份路径自己也要过白名单」——`.claude.json` 的
+# 备份 `.claude.json.superdev-bak` 既不等于精确条目、也不在任何目录根之下，
+# 正是这条清单照出来的。
 #
 # 生成方：desktop/src-tauri 的
 #   mcp_install::remote_install::tests::desktop_connector_paths_fixture_matches_what_the_connectors_actually_touch
@@ -18,6 +24,7 @@
 # 消费方：agent/api 的
 #   TestIntegrationPathAllowedCoversEveryDesktopConnectorPath（path 行）
 #   TestIntegrationDeleteAllowedCoversEveryDesktopDeletePath（delete 行）
+#   TestIntegrationBackupPathMatchesDesktopConvention（backup 行）
 # 两侧一上一下，构成 integrationConfigRoots / integrationConfigFiles「数据同步
 # 义务」的执行机制：connector 改了默认路径 → 上面那条先红（清单过期）→ 更新本
 # 文件 → 下面那条紧接着红（新路径不在白名单里）。光靠注释已经漏过一次
@@ -27,6 +34,15 @@
 # （真实名字带进程号与纳秒时间戳，逐次不同；白名单的裁决与那串数字无关）。
 #
 # 改这个文件请跑上面那条 Rust 测试确认，不要手工编辑。
+backup .claude.json .claude.json.superdev-bak
+backup .claude/settings.json .claude/settings.json.superdev-bak
+backup .codex/config.toml .codex/config.toml.superdev-bak
+backup .codex/hooks.json .codex/hooks.json.superdev-bak
+backup .config/opencode/opencode.json .config/opencode/opencode.json.superdev-bak
+backup .cursor/hooks.json .cursor/hooks.json.superdev-bak
+backup .cursor/mcp.json .cursor/mcp.json.superdev-bak
+backup .hermes/config.yaml .hermes/config.yaml.superdev-bak
+backup .kimi-code/mcp.json .kimi-code/mcp.json.superdev-bak
 delete .claude/skills/.superdev.superdev-tmp-PID-NANOS-N
 delete .claude/skills/superdev
 delete .codex/skills/.superdev.superdev-tmp-PID-NANOS-N

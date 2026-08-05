@@ -394,8 +394,32 @@ func (a *App) integrationsFsWrite(w http.ResponseWriter, r *http.Request) {
 	if req.Backup && targetExists {
 		// 只在目标已存在时才有旧内容可备份；命名规则见 integrationBackupPath
 		// 头注释，必须与桌面端 Rust backup_path() 逐字节一致。
-		backupPath = integrationBackupPath(target)
-		if err := copyFile(target, backupPath); err != nil {
+		//
+		// 备份路径是从【请求声明的路径】派生出来的，它自己**必须再过一次白名单**
+		// ——req.Path 过了不代表它过：备份文件名是另一个文件名，目标机上完全可以
+		// 预先存在一条 `<config>.superdev-bak -> /etc/cron.d/x` 的符号链接，而
+		// 上面那道 require_regular_file 守卫只 lstat req.Path、根本看不到备份目标。
+		// 漏掉这一步的后果不是「只有恶意客户端才触发」：六家 connector 的正常
+		// 安装/卸载全部 backup=true，一次普通安装就会把用户配置的旧内容经链接
+		// 写到白名单外的任意文件（与 Task 2 修的那条 target 侧逃逸形状完全相同，
+		// 只是当时漏了这条派生路径）。
+		//
+		// 为什么从 req.Path 而不是从已解析的 target 派生：target 是
+		// integrationPathAllowed 的返回值，已按 resolvedHome 收敛过；拿它再去
+		// 过一次以 home（未解析）为基准的白名单会在「home 自身是符号链接」的机器
+		// 上必然落空。而且桌面端本机侧 LocalFs 的 backup_path() 同样作用于调用方
+		// 声明的路径，从 req.Path 派生才与那条跨栈命名契约同源。
+		derivedBackup := integrationBackupPath(filepath.Clean(req.Path))
+		backupTarget, backupErr := integrationPathAllowed(home, derivedBackup)
+		if backupErr != nil {
+			name, _, _ := principalFromRequest(r)
+			log.Printf("[SuperDev] integrations: 备份路径被白名单拒绝 path=%s backup=%s by=%s",
+				req.Path, derivedBackup, name)
+			jsonCodeError(w, http.StatusForbidden, "path_not_allowed", "backup path not allowed", nil)
+			return
+		}
+		backupPath = backupTarget
+		if err := copyFile(target, backupTarget); err != nil {
 			log.Printf("[SuperDev] integrations: 备份失败 path=%s：%v", target, err)
 			jsonError(w, http.StatusInternalServerError, "backup failed")
 			return
@@ -691,10 +715,18 @@ func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
 // copyFile 把 src 的内容原样复制到 dst（备份用途），不保留 src 的权限位——
 // 备份文件统一按 0o600 落盘：配置文件里可能含用户为其它 MCP server 配置的
 // API key，宁紧勿松。
+//
+// 落盘走 atomicWriteFile（同目录临时文件 + rename）而不是裸 os.WriteFile：
+// os.WriteFile **跟随**符号链接，dst 若是一条指向别处的链接就会把内容写穿过去。
+// 调用方传进来的 dst 已经是 integrationPathAllowed 的返回值（符号链接全部解析
+// 完毕、且确认落在白名单内），temp+rename 则连「校验之后、写入之前被换成链接」
+// 这个 TOCTOU 窗口也一并关掉：rename 替换的是路径本身，永远不会穿过链接。
+// 注意不能改用 O_EXCL——备份文件在重复安装时本来就该被覆盖（与桌面端本机侧
+// fs::copy 的覆盖语义一致），O_EXCL 会让第二次安装直接失败。
 func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o600)
+	return atomicWriteFile(dst, data, 0o600)
 }

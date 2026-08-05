@@ -83,8 +83,11 @@ func (a *App) integrationsDetect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 审计日志只放 Principal 的展示名，绝不放 token 值——principalFromRequest
-	// 从 withSecurity 注入的 ctx 中推导，本端点必然经过该中间件（不在 bypass
-	// 白名单内），故此处必有 Principal。
+	// 从 withSecurity 注入的 ctx 中推导。本端点不在 bypass 白名单内，正常情况下
+	// 一定带 Principal；但 withSecurity 在 securityStore == nil 时会整体短路、
+	// 不注入 Principal（见 security_handler.go），那条分支生产不可达（App 启动
+	// 必然装配 securityStore），所以这里不是「必有 Principal」而是
+	// 「生产环境必有」——principalFromRequest 对无主体返回空值，不会 panic。
 	name, _, _ := principalFromRequest(r)
 	log.Printf("[SuperDev] integrations: detect 完成 commands=%d home 已解析 by=%s", len(presence), name)
 	jsonOK(w, map[string]any{"home": home, "commands": presence, "agent": spec})

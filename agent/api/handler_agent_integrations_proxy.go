@@ -104,6 +104,13 @@ func (a *App) proxyAgentIntegrations(w http.ResponseWriter, r *http.Request) {
 	// 一起打到目标机任意端点。
 	targetPath := path.Clean(integrationsProxyBasePath + "/" + r.PathValue("rest"))
 	if targetPath != integrationsProxyBasePath && !strings.HasPrefix(targetPath, integrationsProxyBasePath+"/") {
+		// 这是一条**安全控制**，拒绝必须留痕：不打日志的话，`%2E%2E` 这类
+		// 借代理越权打到目标机任意端点的尝试在事后是零审计痕迹的。
+		// 路径可以进日志（目标机自己的 handler 也这么做），token 值与文件内容不行；
+		// 这里既不读也不转发请求体，落的只有 host_id 与被拒的收敛结果。
+		name, _, _ := principalFromRequest(r)
+		log.Printf("[SuperDev] integrations: 代理路径收敛守卫拒绝 host=%s %s rest=%q 收敛后=%s by=%s",
+			hostID, r.Method, r.PathValue("rest"), targetPath, name)
 		jsonError(w, http.StatusNotFound, "not found")
 		return
 	}

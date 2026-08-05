@@ -270,6 +270,108 @@ func TestIntegrationsFsWriteBackupNamingMatchesDesktopConvention(t *testing.T) {
 	require.Equal(t, `{"v":2}`, string(newContent))
 }
 
+// TestIntegrationsFsWriteBackupRefusesSymlinkedBackupPathEscape 复现并钉死
+// 「备份这一步写穿白名单」的越权向量。
+//
+// 攻击构造（与终审 probe 一模一样，只是走真实 write 端点而不是直调 copyFile）：
+// 目标机上预先存在一条 `~/.claude/settings.json.superdev-bak -> <白名单外文件>`
+// 的符号链接。备份路径是从 req.Path **派生**出来的，它自己一度从不过白名单，
+// 而 copyFile 当时用裸 os.WriteFile（**跟随**符号链接）落盘，于是：
+//  1. 一次合法的 backup=false 写入把攻击者想要的内容放进 settings.json
+//  2. 紧接着一次 backup=true 写入，备份步骤读出第 1 步的内容、经链接写到
+//     白名单外的任意文件（终审实测把 ssh 公钥写进了 /etc/cron.d/x）
+//
+// 这条不是「只有恶意客户端才触发」：六家 connector 的正常安装/卸载全部
+// backup=true（WritePolicy::CONFIG_FILE / RESTRICTED_NEW_FILE），被预置了链接的
+// 机器上一次普通安装就会写穿。
+//
+// 断言三件事：白名单外的文件既没被创建也没被改；端点给出**明确拒绝**（403
+// path_not_allowed）而不是 500；符号链接本身与写入目标都保持原样（fail-closed，
+// 拒绝发生在配置被改写之前）。
+func TestIntegrationsFsWriteBackupRefusesSymlinkedBackupPathEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 建符号链接需要额外权限")
+	}
+	app, home := newIntegrationsFsTestApp(t)
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "authorized_keys")
+	target := filepath.Join(home, ".claude", "settings.json")
+
+	// 第 1 步：白名单内的合法写入，内容由调用方完全控制。
+	require.Equal(t, http.StatusOK, doWriteRequest(t, app, target, "ssh-rsa AAAA-ATTACKER-KEY\n", false).Code)
+
+	// 预置越权链接：备份文件名指向白名单外的受害文件（该文件此刻并不存在，
+	// 写穿会**创建**它——这正是 /etc/cron.d 这类投放点的形态）。
+	require.NoError(t, os.Symlink(victim, target+".superdev-bak"))
+	_, statErr := os.Lstat(victim)
+	require.True(t, os.IsNotExist(statErr), "受害文件在攻击前必须不存在")
+
+	// 第 2 步：同一路径、backup=true——修复前这里会把第 1 步的内容写进 victim。
+	resp := doWriteRequest(t, app, target, `{"v":2}`, true)
+
+	require.Equal(t, http.StatusForbidden, resp.Code,
+		"备份路径逃出白名单必须是明确拒绝（403），不是 500 或静默成功：%s", resp.Body.String())
+	require.Contains(t, resp.Body.String(), "path_not_allowed")
+
+	_, statErr = os.Lstat(victim)
+	require.True(t, os.IsNotExist(statErr),
+		"白名单外的文件必须没有被创建——一旦存在就说明备份步骤穿过了符号链接")
+
+	// fail-closed：拒绝发生在实际写入之前，用户的配置内容没被这次请求改动。
+	current, err := os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, "ssh-rsa AAAA-ATTACKER-KEY\n", string(current),
+		"备份被拒时不得已经把新内容写进目标文件")
+
+	info, err := os.Lstat(target + ".superdev-bak")
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&os.ModeSymlink, "拒绝路径不该动那条符号链接本身")
+}
+
+// TestIntegrationsFsWriteBackupOverwritesExistingBackup 钉死「备份文件可被重复
+// 安装覆盖」这条既有语义：C1 的修复把 copyFile 从裸 os.WriteFile 换成了
+// temp+rename，如果换成 O_EXCL（另一种防跟随写法）第二次安装就会直接失败。
+// 桌面端本机侧 LocalFs 用 fs::copy（覆盖语义），两条路径必须一致。
+func TestIntegrationsFsWriteBackupOverwritesExistingBackup(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude", "settings.json")
+
+	require.Equal(t, http.StatusOK, doWriteRequest(t, app, target, `{"v":1}`, false).Code)
+	require.Equal(t, http.StatusOK, doWriteRequest(t, app, target, `{"v":2}`, true).Code)
+	second := doWriteRequest(t, app, target, `{"v":3}`, true)
+	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
+
+	backupContent, err := os.ReadFile(target + ".superdev-bak")
+	require.NoError(t, err)
+	require.Equal(t, `{"v":2}`, string(backupContent), "第二次备份必须覆盖掉第一次的内容")
+}
+
+// TestIntegrationsFsWriteBacksUpClaudeJsonAtHomeRoot 覆盖精确文件条目
+// ~/.claude.json 的备份路径必须在白名单内。
+//
+// 它是 C1 修复引入的一条新前置条件的回归护栏：备份路径现在也要过
+// integrationPathAllowed，而 ~/.claude.json.superdev-bak 既不等于精确条目
+// ".claude.json"（那是「恰好等于」语义），也不在任何目录根之下——不把备份名
+// 一并展开进白名单，Claude Code 这家最主要的连接器在「目标机上 ~/.claude.json
+// 已存在」（几乎所有真实机器）时会 403，普通安装直接失败。
+func TestIntegrationsFsWriteBacksUpClaudeJsonAtHomeRoot(t *testing.T) {
+	app, home := newIntegrationsFsTestApp(t)
+	target := filepath.Join(home, ".claude.json")
+
+	require.Equal(t, http.StatusOK, doWriteRequest(t, app, target, `{"v":1}`, false).Code)
+	resp := doWriteRequest(t, app, target, `{"v":2}`, true)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+
+	var out struct {
+		BackupPath string `json:"backup_path"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &out))
+	require.Equal(t, ".claude.json.superdev-bak", filepath.Base(out.BackupPath))
+	backupContent, err := os.ReadFile(out.BackupPath)
+	require.NoError(t, err)
+	require.Equal(t, `{"v":1}`, string(backupContent))
+}
+
 // TestIntegrationsFsWriteBackupNoExtension 覆盖无扩展名文件的备份命名：
 // <name>.superdev-bak（不带中间的扩展名段）。
 func TestIntegrationsFsWriteBackupNoExtension(t *testing.T) {

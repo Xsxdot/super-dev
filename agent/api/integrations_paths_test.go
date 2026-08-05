@@ -88,6 +88,103 @@ func TestIntegrationPathAllowedSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestIntegrationPathAllowedRootSymlinkStayingInsideHomeIsDenied 验证白名单根
+// **自身**是符号链接、且指向 home 内某处时同样必须被拒。
+//
+// 旧判据只要求根解析后「仍在 resolvedHome 之内」，于是这两条走的是同一条分支、
+// 同样放行：
+//   - `~/.claude.json -> ~/dotfiles/claude.json`（用户的 dotfiles 布局）
+//   - `~/.claude.json -> ~/.ssh/authorized_keys`（攻击者预置的重定向）
+//
+// 文件系统上这两者没有任何可区分的特征，只能一起拒——本测试钉住的正是这一步
+// 从「仍在 home 内」收紧成「仍在它自己那个位置」。逃逸目标必须选在 home 内部，
+// 否则旧判据本身就能拦住，测不出这条子句的价值（同
+// TestIntegrationPathAllowedIntermediateSymlinkEscape 的理由）。
+func TestIntegrationPathAllowedRootSymlinkStayingInsideHomeIsDenied(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 建符号链接需要额外权限")
+	}
+	t.Run("精确文件条目软链到 home 内的敏感文件", func(t *testing.T) {
+		home := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+			t.Fatalf("mkdir .ssh: %v", err)
+		}
+		victim := filepath.Join(home, ".ssh", "authorized_keys")
+		if err := os.WriteFile(victim, []byte("# empty\n"), 0o600); err != nil {
+			t.Fatalf("seed victim: %v", err)
+		}
+		if err := os.Symlink(victim, filepath.Join(home, ".claude.json")); err != nil {
+			t.Fatalf("seed symlink: %v", err)
+		}
+		if _, err := integrationPathAllowed(home, filepath.Join(home, ".claude.json")); err == nil {
+			t.Fatal("~/.claude.json 软链到 ~/.ssh/authorized_keys 必须被拒，否则一次普通安装就写穿它")
+		}
+	})
+	t.Run("目录根软链到 home 内的非白名单目录", func(t *testing.T) {
+		home := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(home, "dotfiles", "claude"), 0o755); err != nil {
+			t.Fatalf("mkdir dotfiles: %v", err)
+		}
+		if err := os.Symlink(filepath.Join(home, "dotfiles", "claude"), filepath.Join(home, ".claude")); err != nil {
+			t.Fatalf("seed symlink: %v", err)
+		}
+		// 明确接受的代价：这是合法的 stow/chezmoi dotfiles 布局，改后同样被拒。
+		// 判据里没有任何信息能把它与上一条子测试的攻击构造区分开。
+		if _, err := integrationPathAllowed(home, filepath.Join(home, ".claude", "settings.json")); err == nil {
+			t.Fatal("整个白名单目录根被换成软链时必须被拒——同一条判据放行它就等于放行 `.claude -> ~/.ssh`")
+		}
+	})
+}
+
+// TestIntegrationPathAllowedAllowsHomeItselfBeingASymlink 钉住上面那条收紧的
+// 边界：收敛目标是「resolvedHome 下同名的相对位置」，**home 自身**是符号链接
+// （macOS 的 /var -> /private/var 就是这种形态，跑测试的 t.TempDir() 天天如此）
+// 必须照常放行，否则这条修复会把所有正常机器一起拒掉。
+func TestIntegrationPathAllowedAllowsHomeItselfBeingASymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 建符号链接需要额外权限")
+	}
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("seed home symlink: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(real, ".claude"), 0o755); err != nil {
+		t.Fatalf("mkdir .claude: %v", err)
+	}
+	resolved, err := integrationPathAllowed(link, filepath.Join(link, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatalf("home 自身是软链时必须照常放行：%v", err)
+	}
+	// 期望值同样要 EvalSymlinks：t.TempDir() 在 macOS 上本身就落在 /var ->
+	// /private/var 这条软链下，硬写 real 会把测试自己绑死在某个平台上。
+	realResolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatalf("resolve real home: %v", err)
+	}
+	if want := filepath.Join(realResolved, ".claude", "settings.json"); resolved != want {
+		t.Fatalf("返回值应是解析后的真实路径 %q，实际 %q", want, resolved)
+	}
+}
+
+// TestIntegrationConfigFilesDoNotOverlapConfigRoots 给 matchIntegrationRoot 头
+// 注释里那句「两类不会重叠，因此匹配顺序无关」补一条机械保证。
+//
+// 那句话今天成立，但没有任何东西拦着以后有人往 integrationConfigFiles 里加一条
+// 落在某个目录根之下的路径（例如 ".claude/settings.json"）——一旦发生，目录树
+// 分支会先命中，精确文件条目的「恰好等于」语义被静默旁路，而两份清单的头注释
+// 都还写着它们互不重叠。
+func TestIntegrationConfigFilesDoNotOverlapConfigRoots(t *testing.T) {
+	for _, file := range integrationConfigFiles {
+		for _, root := range integrationConfigRoots {
+			if file == root || strings.HasPrefix(file, root+string(filepath.Separator)) {
+				t.Errorf("精确文件条目 %q 落在目录根 %q 之下——两类清单必须不重叠，"+
+					"否则 matchIntegrationRoot 的匹配顺序会变得有意义（目录树分支先命中）", file, root)
+			}
+		}
+	}
+}
+
 // TestIntegrationPathAllowedIntermediateSymlinkEscape 验证白名单根内部（而非根
 // 自身）的符号链接逃逸拦截：.claude 是真实目录，但其下的 link 子项指向
 // home 内、根外的另一个真实目录（.ssh——brief 自己的 deny 用例，直连会被拒）。
@@ -187,7 +284,7 @@ func readDesktopConnectorPaths(t *testing.T, operation string) []string {
 		if !ok {
 			t.Fatalf("清单行缺少操作类别前缀：%q", line)
 		}
-		if op != "path" && op != "delete" {
+		if op != "path" && op != "delete" && op != "backup" {
 			t.Fatalf("清单出现未知操作类别 %q（行：%q）——生成侧加了新类别就必须在这里消费它", op, line)
 		}
 		if op == operation {
@@ -257,6 +354,50 @@ func TestIntegrationDeleteAllowedCoversEveryDesktopDeletePath(t *testing.T) {
 	if !sawTempDir {
 		t.Error("清单的 delete 行里没有 skill 临时目录——生成侧那条注入 rename 失败的用例失效了，" +
 			"这条测试会退化成只覆盖 skill 目标目录")
+	}
+}
+
+// TestIntegrationBackupPathMatchesDesktopConvention 是备份命名跨语言契约的执行机制。
+//
+// 在此之前这条契约只有**注释互相声明**：Go 的 integrationBackupPath 头注释写着
+// 「与桌面端 Rust backup_path() 逐字节一致」，Rust 那边写着同样一句话，没有任何
+// 东西在它们分叉时会红。这正是 `~/.claude.json` 事故的形状——注释不是机制。
+//
+// 清单的 backup 行由生成侧跑真实安装产出，第二列是 Rust `backup_path()` 的**实际
+// 输出**。本测试对同一输入调 integrationBackupPath，断言两件事：
+//  1. 产出逐字节相同（命名契约本身）
+//  2. 备份路径能过 integrationPathAllowed——这是 write 端点备份分支的新前置条件
+//     （备份路径也要过白名单），而 `.claude.json.superdev-bak` 既不等于精确条目
+//     ".claude.json"、也不落在任何目录根之下，漏了它 Claude Code 这家最主要的
+//     连接器在目标机上安装必然 403
+func TestIntegrationBackupPathMatchesDesktopConvention(t *testing.T) {
+	home := t.TempDir()
+	sawHomeRootFile := false
+	for _, line := range readDesktopConnectorPaths(t, "backup") {
+		source, expected, ok := strings.Cut(line, " ")
+		if !ok {
+			t.Fatalf("backup 行必须是 `backup <配置路径> <备份路径>` 三列，实际：%q", line)
+		}
+		if !strings.Contains(source, "/") {
+			sawHomeRootFile = true
+		}
+		got := integrationBackupPath(filepath.Join(home, filepath.FromSlash(source)))
+		want := filepath.Join(home, filepath.FromSlash(expected))
+		if got != want {
+			t.Errorf("备份命名与桌面端不一致：输入 %s\n  Go   产出 %s\n  Rust 产出 %s\n"+
+				"→ 两侧命名规则已分叉，本机与远端安装会在目标机上留下不同名字的备份",
+				source, got, want)
+			continue
+		}
+		if _, err := integrationPathAllowed(home, got); err != nil {
+			t.Errorf("桌面端安装会在目标机上写备份 %s，但白名单拒绝了它：%v\n"+
+				"→ 一次普通安装（六家 connector 全部 backup=true）会直接 403 失败",
+				expected, err)
+		}
+	}
+	if !sawHomeRootFile {
+		t.Error("清单的 backup 行里没有一条 home 根下的配置文件（如 .claude.json）——" +
+			"精确文件条目的备份路径是唯一不被目录根前缀天然覆盖的一类，这条测试会退化")
 	}
 }
 

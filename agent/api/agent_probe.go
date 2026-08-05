@@ -18,6 +18,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -58,6 +59,9 @@ const (
 //     开销可接受（守卫探测与纳管均为低频交互路径）。tunnel 链路上失败尝试
 //     可能触发一次隧道重建，同样以低频为前提可接受
 //   - 经本助手转发的 body 可能含一次性 adoption token，绝不落日志
+//   - **非幂等请求不无条件重放**：换 scheme 重试等于把同一份 body 再发一次，
+//     而第一次失败并不代表它没被送达（响应读取失败 / 隧道中断都是「已送达但
+//     没拿到回执」）。判据见 plaintextRetrySafe
 func (a *App) doAgentRequestSchemeAware(ctx context.Context, hostID string, method, path string, headers http.Header, body []byte) (nodetransport.NodeResponse, string, agentProbeVerdict, error) {
 	attempts := []struct {
 		scheme string
@@ -68,7 +72,7 @@ func (a *App) doAgentRequestSchemeAware(ctx context.Context, hostID string, meth
 	}
 	var errs []error
 	refused := false
-	for _, attempt := range attempts {
+	for i, attempt := range attempts {
 		tlsSpec := attempt.tls
 		req := nodetransport.NodeRequest{
 			Method:      method,
@@ -96,6 +100,14 @@ func (a *App) doAgentRequestSchemeAware(ctx context.Context, hostID string, meth
 			// 总预算已被第一次尝试耗尽，第二次注定超时，不再做无谓尝试。
 			break
 		}
+		if i+1 < len(attempts) && !plaintextRetrySafe(method, err) {
+			// 非幂等请求 + 无法证明「请求没被送达」：不换 scheme 重放。
+			// 直接返回失败让调用方看见错误，比悄悄把同一份 body 再发一次安全
+			// 得多，理由与代价见 plaintextRetrySafe 头注释。
+			log.Printf("[SuperDev] scheme 感知请求：host=%s %s %s HTTPS 尝试失败且无法确认请求未送达，"+
+				"非幂等请求不回退明文", hostID, method, path)
+			break
+		}
 	}
 	verdict := agentProbeInconclusive
 	if refused {
@@ -106,6 +118,81 @@ func (a *App) doAgentRequestSchemeAware(ctx context.Context, hostID string, meth
 		verdict = agentProbeUnreachable
 	}
 	return nodetransport.NodeResponse{}, "", verdict, errors.Join(errs...)
+}
+
+// plaintextRetrySafe 判断「HTTPS 尝试失败后再用同一份 body 试一次明文」是否安全。
+//
+// 参数：
+//   - method: 本次请求的 HTTP method
+//   - err: HTTPS 尝试的失败原因
+//
+// 返回：
+//   - true 表示可以回退明文（重放无害或可证明请求未送达）
+//
+// 为什么需要它：换 scheme 重试是一次**重放**——同一份 body 再发一次。传输层
+// 错误里既有「压根没连上」，也有「请求已经送达、只是响应没读回来 / 隧道中断」，
+// 两者在调用方眼里长得一样。对非幂等请求盲目重放会造成真实损害，两个已实证的
+// 具体后果：
+//   - POST fs/rename：第一次其实成功了，第二次 from 已不存在 → 500 →
+//     用户看到「安装失败」，而远端其实已经生效
+//   - PUT fs/write backup:true：第二次备份的是**第一次刚写进去的新内容** →
+//     用户原始配置的备份被销毁，回滚依据没了
+//
+// 判据（deny by default，只对能证明「请求根本没上路」的失败放行）：
+//   - 幂等 method（GET/HEAD/OPTIONS）一律放行——重放无副作用，且这是安装守卫
+//     探测与纳管状态轮询的形态，行为与本判据引入前逐字节一致
+//   - 连接被拒：TCP 都没建起来，body 不可能发出去
+//   - TLS 握手阶段失败：HTTP 请求字节要等握手完成才写，握手没成就一定没送达。
+//     明文目标下 HTTPS 尝试的**真实**形态就在这里——Go 的 net/http 会把首个
+//     record 形如 "HTTP/" 的 tls.RecordHeaderError 换成
+//     "http: server gave HTTP response to HTTPS client" 这条纯文本错误（类型
+//     信息在那一步被丢掉，所以既 errors.As 又匹文本，两条都要）
+//
+// 代价：非幂等请求遇到无法归类的传输层错误时直接失败，即便目标其实是明文的。
+// 这是刻意选的方向——让用户看见一次明确失败并重试，好过静默写坏远端配置。
+func plaintextRetrySafe(method string, err error) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return isPreDeliveryFailure(err)
+	default:
+		return true
+	}
+}
+
+// preDeliveryErrorMarkers 是「失败发生在请求送达之前」的错误文本特征。
+//
+// 与 isConnectionRefused 同一理由用文本兜底：错误经 NodeError / url.Error 多层
+// 包装后 errors.As 未必还能取到原始类型（tunnel 链路尤其）。这里的漏判方向是
+// 安全的——归不了类就不重放。
+var preDeliveryErrorMarkers = []string{
+	// net/http 对「明文服务端应答了 TLS ClientHello」的归一化文案。
+	"server gave http response to https client",
+	// tls.RecordHeaderError 的原始文案（首个 record 不是 "HTTP/" 时的形态）。
+	"does not look like a tls handshake",
+	// 握手阶段的告警：对端确实在说 TLS，但没谈成——同样没有请求字节被写出去。
+	"tls: handshake failure",
+	"remote error: tls:",
+}
+
+// isPreDeliveryFailure 判断错误是否可证明「请求还没被送到对端」。
+func isPreDeliveryFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isConnectionRefused(err) {
+		return true
+	}
+	var recordErr tls.RecordHeaderError
+	if errors.As(err, &recordErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range preDeliveryErrorMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isConnectionRefused 判断错误链中是否含「连接被拒」。
