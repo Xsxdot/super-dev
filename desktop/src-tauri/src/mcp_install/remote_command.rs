@@ -3,7 +3,9 @@
 // 职责：
 //   - 把一次 CommandSpec 翻译成本机 agent 的 integrations 代理请求
 //     （POST /api/agents/{host_id}/integrations/exec），并把响应还原成 CommandOutput
-//   - 把 HTTP 层失败（连不上、非 2xx、响应无法解析）映射成稳定 ConnectorError 码
+//   - 把 HTTP 层失败（连不上、非 2xx、响应无法解析）映射成稳定 ConnectorError 码；
+//     4xx（白名单否决，子进程一定没起来）与 5xx（没送达 / 目标机异常，命令可能
+//     已经在目标机上执行完）分成两个错误码，不混为一句「被拒绝」
 //   - 把目标机 agent 报告的 timed_out=true 映射为与本机 SystemCommandRunner
 //     一致的 command_timeout 错误（CommandOutput 本身没有 timed_out 字段）
 //
@@ -22,10 +24,19 @@ use std::time::Duration;
 
 /// REMOTE_COMMAND_HTTP_TIMEOUT 是本机 → agent 这一跳的 HTTP 超时。
 ///
-/// 比命令自身的时限宽裕：命令超时由目标机 agent 判定并以 timed_out=true 正常
-/// 返回，HTTP 层不该先于它失败，否则调用方分不清「命令超时」和「网络断了」。
-/// 命令时限上限 60s，这里取 90s 留出代理转发与杀进程的余量。
-const REMOTE_COMMAND_HTTP_TIMEOUT: Duration = Duration::from_secs(90);
+/// 命令超时由**目标机 agent** 判定并以 timed_out=true 正常返回，桌面端据此把
+/// 「命令跑太久」和「送不到」区分开。这条链路上有三层时限，必须严格递增，
+/// 任何一层比它内层更小，内层那套语义就整个失效：
+///
+/// | 层 | 时限 | 定义处 |
+/// |---|---|---|
+/// | 目标机命令上限 | 60s | `integrations_exec_allowlist.go` integrationsExecMaxTimeout |
+/// | 本机 agent 代理转发预算 | 90s | `handler_agent_integrations_proxy.go` integrationsProxyExecTimeout |
+/// | 本结构的 HTTP 超时 | 120s | 本常量 |
+///
+/// 具体失效方式见 integrationsProxyExecTimeout 的注释：外层先超时的话，桌面端
+/// 报错而目标机上那条 CLI 仍会把配置写完——「报告失败但实际生效」。
+const REMOTE_COMMAND_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// RemoteAgentCommandRunner 把连接器的进程调用送到远端机器执行。
 ///
@@ -132,7 +143,10 @@ impl CommandRunner for RemoteAgentCommandRunner {
     ///
     /// 返回：
     ///   - Ok(CommandOutput)：进程已结束（含非零退出码）；stdout/stderr 已有界截断
-    ///   - Err：HTTP/代理/白名单拒绝，或目标机报告命令超时（command_timeout）
+    ///   - Err(remote_command_rejected)：4xx，目标机白名单否决，子进程没起来
+    ///   - Err(remote_command_unreachable)：连不上，或 5xx（含代理转发预算耗尽）
+    ///     ——命令**可能已经在目标机上执行完**，调用方不该当成"什么都没发生"
+    ///   - Err(command_timeout)：目标机报告命令自身超时
     ///
     /// 注意：
     ///   - 非零退出码是**正常返回值**，不是错误：连接器方言层（如 openclaw 的
@@ -256,18 +270,36 @@ impl CommandRunner for RemoteAgentCommandRunner {
                     .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
                     .and_then(|value| value["code"].as_str().map(str::to_string))
                     .unwrap_or_else(|| "unknown".to_string());
+                // 4xx 与 5xx 是两个故障域，绝不能混成一句「远端机器拒绝执行」：
+                //   - 4xx：目标机 agent 的白名单**看过并否决了**这次调用，
+                //     子进程一定没起来，重试同样的 argv 一定还是这个结果
+                //   - 5xx：请求没能送达目标机，或目标机自身出错。502
+                //     integration_target_unreachable 尤其要小心——它也可能是本机
+                //     agent 的转发预算耗尽，此刻目标机上那条 CLI 很可能仍在跑
+                //     并且会执行完。说成"被拒绝"是一句会误导排查方向的假话。
+                let (error_code, message) = if status >= 500 {
+                    (
+                        "remote_command_unreachable",
+                        format!(
+                            "远端命令未能送达目标机或目标机异常（HTTP {status}，原因 {code}）；\
+                             该命令在目标机上可能已经执行，请刷新状态确认后再重试"
+                        ),
+                    )
+                } else {
+                    (
+                        "remote_command_rejected",
+                        format!("远端机器拒绝执行该命令（HTTP {status}，原因 {code}）"),
+                    )
+                };
                 tracing::error!(
                     host_id = %self.host_id,
                     program = program.as_str(),
                     status,
                     reject_code = code.as_str(),
-                    error_code = "remote_command_rejected",
-                    "remote connector command rejected"
+                    error_code,
+                    "remote connector command failed with http status"
                 );
-                Err(ConnectorError::new(
-                    "remote_command_rejected",
-                    format!("远端机器拒绝执行该命令（HTTP {status}，原因 {code}）"),
-                ))
+                Err(ConnectorError::new(error_code, message))
             }
             Err(error) => {
                 // 传输层错误对象里不应含 token（token 只在 Authorization 头）；
@@ -434,6 +466,74 @@ mod tests {
         );
         let debug = format!("{error:?}");
         assert!(!debug.contains("tok-secret-xyz"));
+    }
+
+    /// 502/504 这类网关失败不是「远端机器拒绝执行」——尤其 502
+    /// integration_target_unreachable 可能是本机 agent 转发预算耗尽，此刻目标机
+    /// 上那条 CLI 仍在跑并且会把配置写完。把它归进 rejected 会让用户以为
+    /// 「什么都没发生、放心重试」，而真相是那台机器可能已经装好了。
+    #[test]
+    fn run_maps_gateway_failure_to_unreachable_not_rejected() {
+        for (status, body) in [
+            (
+                502,
+                r#"{"code":"integration_target_unreachable","error":"context deadline exceeded"}"#,
+            ),
+            (500, r#"{"code":"exec_failed","error":"exec failed"}"#),
+        ] {
+            let (origin, _rx) = serve_once(status, body);
+            let runner = RemoteAgentCommandRunner::new(origin, "tok".into(), "h1".into());
+
+            let error = runner
+                .run(CommandSpec::new(
+                    std::path::PathBuf::from("openclaw"),
+                    ["mcp", "set", "superdev", "{}"],
+                ))
+                .expect_err("5xx 必须是错误");
+
+            assert_eq!(
+                error.code(),
+                "remote_command_unreachable",
+                "HTTP {status} 是「没送达 / 目标机异常」，不是白名单否决"
+            );
+            assert!(
+                !error.message().contains("拒绝"),
+                "文案不得说成被拒绝：目标机可能正在执行这条命令，message={}",
+                error.message()
+            );
+        }
+    }
+
+    /// 4xx 仍是 rejected：白名单看过并否决，子进程一定没起来。
+    #[test]
+    fn run_keeps_client_errors_classified_as_rejected() {
+        for status in [400, 403, 404] {
+            let (origin, _rx) = serve_once(status, r#"{"code":"program_not_allowed"}"#);
+            let runner = RemoteAgentCommandRunner::new(origin, "tok".into(), "h1".into());
+
+            let error = runner
+                .run(CommandSpec::new(
+                    std::path::PathBuf::from("openclaw"),
+                    ["mcp"],
+                ))
+                .expect_err("4xx 必须是错误");
+
+            assert_eq!(error.code(), "remote_command_rejected", "HTTP {status}");
+        }
+    }
+
+    /// 三层时限必须严格递增，本层是最外层。内层两层由 Go 侧
+    /// TestIntegrationsProxyExecBudgetExceedsTargetCommandCeiling 钉住。
+    #[test]
+    fn remote_command_http_timeout_outlasts_the_agent_proxy_budget() {
+        // 本机 agent 的 exec 转发预算（handler_agent_integrations_proxy.go
+        // integrationsProxyExecTimeout）。跨语言常量只能这样对齐，两侧注释互指。
+        const AGENT_PROXY_EXEC_BUDGET: Duration = Duration::from_secs(90);
+        assert!(
+            REMOTE_COMMAND_HTTP_TIMEOUT > AGENT_PROXY_EXEC_BUDGET,
+            "HTTP 超时必须晚于代理预算，否则桌面端先断、拿不到 agent 已经算好的\
+             timed_out/exit_code，等于把「命令超时」和「网络断了」重新混在一起"
+        );
     }
 
     #[test]

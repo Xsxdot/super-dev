@@ -145,6 +145,31 @@ func TestIntegrationsProxyTargetUnreachableIs502(t *testing.T) {
 	assert.Contains(t, resp.Body.String(), `"code":"integration_target_unreachable"`)
 }
 
+// TestIntegrationsProxyExecBudgetExceedsTargetCommandCeiling 钉死三层超时的
+// 严格递增关系。
+//
+// 为什么这条必须存在：exec 是本代理转发的唯一**有副作用**的端点，而副作用发生在
+// 目标机上、由目标机自己的时限管着。代理预算一旦小于命令时限上限，失败方式是
+// 「桌面端报错、目标机照样把配置写完」——用户看到装失败、机器其实装好了，
+// 而且 exec 端点 timed_out=true 那条契约在生产里永远触发不到（代理先超时）。
+// 这个关系跨三个文件三种语言，只能靠测试钉，注释钉不住。
+func TestIntegrationsProxyExecBudgetExceedsTargetCommandCeiling(t *testing.T) {
+	assert.Greater(t, integrationsProxyExecTimeout, integrationsExecMaxTimeout,
+		"exec 转发预算必须大于目标机命令时限上限，否则内层 timed_out 语义整个失效")
+	// 桌面端 remote_command.rs 的 REMOTE_COMMAND_HTTP_TIMEOUT 必须再大于本值，
+	// 那一层由 Rust 侧 remote_command_http_timeout_outlasts_the_agent_proxy_budget 钉。
+
+	assert.Equal(t, integrationsProxyExecTimeout, integrationsProxyBudget("/api/integrations/exec"),
+		"exec 走加宽预算")
+	assert.Equal(t, integrationsProxyTimeout, integrationsProxyBudget("/api/integrations/fs/write-batch"),
+		"文件类端点保持原预算——它们的耗时由本跳决定，目标机侧没有自己的等待时限")
+	assert.Equal(t, integrationsProxyTimeout, integrationsProxyBudget("/api/integrations/detect"),
+		"detect 保持原预算")
+	// 前缀相同但不是 exec 的路径不得蹭到加宽预算。
+	assert.Equal(t, integrationsProxyTimeout, integrationsProxyBudget("/api/integrations/exec-something"),
+		"只有精确路径命中，前缀相近的端点不得蹭预算")
+}
+
 // TestIntegrationsProxyUnknownHost404 覆盖未配置 agent 的 host_id。
 func TestIntegrationsProxyUnknownHost404(t *testing.T) {
 	tr := &integrationsProxyFakeTransport{status: http.StatusOK, body: `{}`}

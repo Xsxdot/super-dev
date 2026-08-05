@@ -3,8 +3,10 @@
 //
 // 职责：
 //   - ANY /api/agents/{host_id}/integrations/{rest...} → 目标机同前缀端点
-//     ANY /api/integrations/{rest}：detect（Task 3）与受限文件读写七端点
-//     （Task 4）统一走这一条通用转发，不为每个端点各写一个 handler
+//     ANY /api/integrations/{rest}：detect、受限文件读写七端点与受限命令执行
+//     端点 exec 统一走这一条通用转发，不为每个端点各写一个 handler
+//   - 按目标路径给出转发预算（integrationsProxyBudget）：exec 的预算必须大于
+//     目标机命令自身的时限上限，否则内层超时语义整个失效——详见该常量注释
 //   - RawQuery 原样透传：stat/read/list/delete 四个端点全靠 ?path= 查询参数
 //     寻址目标文件，代理层对查询字符串不做任何解析或重新编码
 //   - 响应原样透传（状态码 + body）：目标机的白名单拒绝（403 path_not_allowed）、
@@ -49,12 +51,53 @@ import (
 // integrationsProxyBasePath 是本代理允许转发到的目标机路径前缀。
 const integrationsProxyBasePath = "/api/integrations"
 
-// integrationsProxyTimeout 是单次 integrations 代理转发的总预算。
+// integrationsProxyTimeout 是【文件类】单次 integrations 代理转发的总预算。
 //
 // 取 15 秒：write-batch 端点单批次内容上限 4MB（见 handler_integrations_fs.go
 // integrationsFsWriteBatchMaxBytes），经 tunnel 链路的冷启动握手 + 传输耗时可能
 // 明显长于纳管代理的小 JSON 请求（10 秒），故预算比纳管代理更宽。
+//
+// 文件类端点的耗时由**本代理这一跳**决定（读写多大内容、链路多慢），目标机
+// handler 侧没有自己的等待时限，因此一个统一预算就够。exec 不是这样，见下。
 const integrationsProxyTimeout = 15 * time.Second
+
+// integrationsProxyExecPath 是 exec 端点在目标机上的收敛后路径。
+const integrationsProxyExecPath = integrationsProxyBasePath + "/exec"
+
+// integrationsProxyExecTimeout 是 exec 端点的转发预算。
+//
+// **必须严格大于目标机命令自身的时限上限**（integrations_exec_allowlist.go 的
+// integrationsExecMaxTimeout = 60s）。exec 与文件类端点的根本差别是：目标机
+// handler 自己有一套超时语义——它会杀掉超时的子进程并以 timed_out=true 正常
+// 返回，桌面端据此把「命令跑太久」与「网络断了」区分开。
+//
+// 如果代理预算比命令时限小，这套语义整个失效，而且失效方式是最坏的那种：
+// 代理先超时 → 本机 agent 回 502 integration_target_unreachable → 桌面端报错，
+// **而目标机上那条 CLI 仍在跑，并且会把配置写完**。用户看到「装失败」，机器
+// 其实已经装好了；下次刷新状态又变成已装。exec 是有副作用的调用，这种
+// 「报告失败但实际生效」比单纯的慢要坏得多。
+//
+// 90s = 60s 命令上限 + 30s 转发余量（tunnel 冷启动握手、杀进程回收、响应回程）。
+// 桌面端 remote_command.rs 的 HTTP 超时必须再大于本值，三层严格递增。
+const integrationsProxyExecTimeout = 90 * time.Second
+
+// integrationsProxyBudget 按收敛后的目标路径给出这次转发的总预算。
+//
+// 参数：
+//   - targetPath: path.Clean 收敛后、**尚未拼接 RawQuery** 的目标机路径
+//
+// 返回：
+//   - 该端点的转发时限
+//
+// 注意：
+//   - 只按路径分档，不看 method 或请求体：预算是「这条链路要等多久」的属性，
+//     与调用方下发什么无关，也不能让调用方影响它
+func integrationsProxyBudget(targetPath string) time.Duration {
+	if targetPath == integrationsProxyExecPath {
+		return integrationsProxyExecTimeout
+	}
+	return integrationsProxyTimeout
+}
 
 // maxIntegrationsProxyRequestBytes 限制读取调用方请求体的上限。
 //
@@ -114,6 +157,9 @@ func (a *App) proxyAgentIntegrations(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "not found")
 		return
 	}
+	// 预算必须在拼 RawQuery **之前**按纯路径判定：拼上查询串后
+	// "/api/integrations/exec" 与 "/api/integrations/exec?x=1" 不再字面相等。
+	budget := integrationsProxyBudget(targetPath)
 	if q := r.URL.RawQuery; q != "" {
 		targetPath += "?" + q
 	}
@@ -131,7 +177,7 @@ func (a *App) proxyAgentIntegrations(w http.ResponseWriter, r *http.Request) {
 		forwardBody = body
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), integrationsProxyTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
 	// 从空白重新构造请求头：绝不拷贝调用方（桌面端）的 Authorization 等头部，
 	// 见文件头注释「转发头纪律」。目标机的全部 integrations 端点都以 JSON
