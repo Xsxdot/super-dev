@@ -10,6 +10,7 @@
 //   - 不注册 Tauri command，也不初始化 tracing subscriber
 //   - 不读取真实用户配置或执行文件系统变更
 
+use crate::mcp_install::command_port::CommandRunner;
 use crate::mcp_install::contracts::{
     validate_descriptor, AgentConnectorDescriptor, AgentConnectorState, AgentConnectorSummary,
     ConnectorManualInstructions, ConnectorOperation, ConnectorOperationOutcome, ConnectorResult,
@@ -337,19 +338,18 @@ pub trait AgentConnector: Send + Sync {
         Vec::new()
     }
 
-    /// port_ops 返回该连接器「文件操作全程经 [`ConnectorFs`] 端口」的那套实现。
+    /// port_ops 返回该连接器「文件与进程调用全程经 [`ConnectorPorts`]」的那套实现。
     ///
-    /// 返回 None（默认）表示这家连接器的读写没有全程端口化——要么它靠在目标机
-    /// 上运行自身 CLI 写配置（openclaw / grok），要么它还直连 `std::fs`。这类
-    /// 连接器**不能**在只有受限文件端点的远端机器上接入：那样的"安装"会在桌面机
-    /// 自己的磁盘上按目标机的路径写文件，然后报告成功。
+    /// 返回 None（默认）表示这家连接器的副作用没有全程端口化——它还直连
+    /// `std::fs` 或本机进程 API。这类连接器**不能**在只有受限端点的远端机器上
+    /// 接入：那样的"安装"会在桌面机自己的磁盘上按目标机的路径写文件，然后报告成功。
     ///
     /// 之所以做成「实现方主动返回 Some(self)」而不是在编排侧维护一份 ID 清单：
     /// 清单会与代码事实漂移（清单说支持、代码却没端口化，或反过来），而这个
     /// 方法的返回值本身就是那套实现的引用，指不到别处去。
     ///
     /// **但返回 Some(self) 不是通行证，它只证明签名收了端口，不证明函数体用了
-    /// 端口**——一家连接器完全可以在 `install_with_fs` 里继续 `std::fs::write`，
+    /// 端口**——一家连接器完全可以在 `install_with_ports` 里继续 `std::fs::write`，
     /// 编译器不会有意见。真正提供保证的是另外两道，新增端口化连接器时必须
     /// 一起做到：
     ///   1. 该文件顶部的 `use std::fs` 标成 `#[cfg(test)]`（生产代码里再出现
@@ -363,36 +363,64 @@ pub trait AgentConnector: Send + Sync {
     }
 }
 
-/// PortedConnectorOps 是「文件操作全程经端口」的连接器操作三件套。
+/// ConnectorPorts 打包连接器的全部副作用出口。
+///
+/// 为什么是一个结构体而不是三个方法各加一个参数：连接器的副作用种类会增长
+/// （今天是文件 + 进程），每加一种就改一遍 `PortedConnectorOps` 的全部签名与
+/// 全部实现，是可预见的返工。把出口收在一个值里，新增一种副作用只改这里。
+///
+/// 边界：只持有借用，不拥有任何资源，也不做任何 I/O——它是「往哪儿写」的
+/// 声明，不是执行者。
+pub struct ConnectorPorts<'a> {
+    /// fs 是文件读写端口：本机 `LocalFs`，远端 `RemoteAgentFs`。
+    pub fs: &'a dyn ConnectorFs,
+    /// runner 是进程调用端口：本机 `SystemCommandRunner`，远端
+    /// `RemoteAgentCommandRunner`。
+    pub runner: &'a dyn CommandRunner,
+}
+
+impl<'a> ConnectorPorts<'a> {
+    /// new 构造端口集合。
+    ///
+    /// 参数：
+    ///   - fs: 文件端口
+    ///   - runner: 进程端口
+    pub fn new(fs: &'a dyn ConnectorFs, runner: &'a dyn CommandRunner) -> Self {
+        Self { fs, runner }
+    }
+}
+
+/// PortedConnectorOps 是「**所有副作用**（文件 + 进程调用）全程经端口」的连接器操作三件套。
 ///
 /// 与 [`AgentConnector`] 上同名的 status / install / uninstall 是同一份实现的
-/// 两种绑定：`AgentConnector` 那三个方法恒绑定本机（`LocalFs`），本 trait 让
-/// 调用方显式指定端口，从而把同一套方言逻辑跑到远端机器上。
+/// 两种绑定：`AgentConnector` 那三个方法恒绑定本机（`LocalFs` + `SystemCommandRunner`），
+/// 本 trait 让调用方显式指定 [`ConnectorPorts`]，从而把同一套方言逻辑跑到远端机器上。
 ///
 /// **不要**在实现里另写一份逻辑：那正是本次端口化要消灭的东西——方言必须是
-/// Rust 单源，`AgentConnector::install` 应当是 `install_with_fs(ctx, req, &LocalFs)`
-/// 这样的一行委托。
+/// Rust 单源，`AgentConnector::install` 应当是
+/// `install_with_ports(ctx, req, &ConnectorPorts::new(&LocalFs, &runner))`
+/// 这样的委托。
 pub trait PortedConnectorOps {
-    /// status_with_fs 是 [`AgentConnector::status`] 的显式端口版本。
-    fn status_with_fs(
+    /// status_with_ports 是 [`AgentConnector::status`] 的显式端口版本。
+    fn status_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
-        fs_port: &dyn ConnectorFs,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorStatus, ConnectorError>;
 
-    /// install_with_fs 是 [`AgentConnector::install`] 的显式端口版本。
-    fn install_with_fs(
+    /// install_with_ports 是 [`AgentConnector::install`] 的显式端口版本。
+    fn install_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
-        fs_port: &dyn ConnectorFs,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError>;
 
-    /// uninstall_with_fs 是 [`AgentConnector::uninstall`] 的显式端口版本。
-    fn uninstall_with_fs(
+    /// uninstall_with_ports 是 [`AgentConnector::uninstall`] 的显式端口版本。
+    fn uninstall_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
-        fs_port: &dyn ConnectorFs,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError>;
 }
 
@@ -2291,5 +2319,21 @@ mod tests {
         assert_eq!(automatic.manual_instruction_calls(), 0);
         assert_eq!(manual.status_calls(), 0);
         assert_eq!(manual.manual_instruction_calls(), 0);
+    }
+
+    #[test]
+    fn connector_ports_carries_both_side_effect_ports() {
+        // 端口打包成一个结构体而不是三个方法各加一个参数：每加一种副作用就改一遍
+        // 所有签名是可预见的返工。这条测试钉住「两个端口从同一个入口取」。
+        use crate::mcp_install::command_port::{CommandRunner, SystemCommandRunner};
+        use crate::mcp_install::fs_port::LocalFs;
+
+        let fs = LocalFs;
+        let runner = SystemCommandRunner;
+        let ports = ConnectorPorts::new(&fs, &runner);
+
+        // 借用能取出来即可——本测试证明的是形状，不触发任何 I/O。
+        let _: &dyn ConnectorFs = ports.fs;
+        let _: &dyn CommandRunner = ports.runner;
     }
 }

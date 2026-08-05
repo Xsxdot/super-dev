@@ -11,6 +11,7 @@
 //   - 日志不记录路径、配置正文或密钥
 
 use super::common;
+use crate::mcp_install::command_port::SystemCommandRunner;
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::fs_port::{ConnectorFs, LocalFs};
 use crate::mcp_install::registry::*;
@@ -190,14 +191,15 @@ impl AgentConnector for KimiCodeConnector {
         Ok(result)
     }
 
-    /// status 是 `status_with_fs(ctx, &LocalFs)` —— **恒绑定本机**。
+    /// status 是 `status_with_ports(ctx, &ConnectorPorts::new(&LocalFs, &runner))` —— **恒绑定本机**。
     ///
     /// 拿一个远端 ctx（home 指向目标机）调它，会去读**桌面机自己**磁盘上那些
     /// 路径，把读到的内容当成目标机状态返回，且不会有任何报错。远端场景一律走
-    /// `PortedConnectorOps::status_with_fs` 并显式传 `RemoteAgentFs`
+    /// `PortedConnectorOps::status_with_ports` 并显式传远端 [`ConnectorPorts`]
     /// （`remote_install::ported_remote_status` 是唯一入口）。
     fn status(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorStatus, ConnectorError> {
-        self.status_with_fs(ctx, &LocalFs)
+        let runner = SystemCommandRunner;
+        self.status_with_ports(ctx, &ConnectorPorts::new(&LocalFs, &runner))
     }
 
     fn install(
@@ -205,14 +207,16 @@ impl AgentConnector for KimiCodeConnector {
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
-        self.install_with_fs(ctx, request, &LocalFs)
+        let runner = SystemCommandRunner;
+        self.install_with_ports(ctx, request, &ConnectorPorts::new(&LocalFs, &runner))
     }
 
     fn uninstall(
         &self,
         ctx: &ConnectorRuntimeContext,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
-        self.uninstall_with_fs(ctx, &LocalFs)
+        let runner = SystemCommandRunner;
+        self.uninstall_with_ports(ctx, &ConnectorPorts::new(&LocalFs, &runner))
     }
 
     fn port_ops(&self) -> Option<&dyn PortedConnectorOps> {
@@ -246,10 +250,10 @@ impl AgentConnector for KimiCodeConnector {
 }
 
 impl PortedConnectorOps for KimiCodeConnector {
-    fn status_with_fs(
+    fn status_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
-        fs_port: &dyn ConnectorFs,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorStatus, ConnectorError> {
         let started = Instant::now();
         tracing::debug!(
@@ -259,7 +263,7 @@ impl PortedConnectorOps for KimiCodeConnector {
         );
         let config = config_path(ctx);
         let skill = skill_path(ctx);
-        let (mcp_status, mcp_message) = match fs_port.read_optional(&config) {
+        let (mcp_status, mcp_message) = match ports.fs.read_optional(&config) {
             Ok(Some(content)) => match mcp_configured(ctx, &content) {
                 Ok(true) => (
                     IntegrationStateStatus::Configured,
@@ -317,7 +321,7 @@ impl PortedConnectorOps for KimiCodeConnector {
                 ));
             }
         };
-        let skill_state = common::skill_status(fs_port, ctx, &skill);
+        let skill_state = common::skill_status(ports.fs, ctx, &skill);
         // Hook 始终手动：状态侧标记 Missing，操作侧返回 NeedsAction。
         let hook_state = IntegrationState {
             capability: IntegrationCapability::SessionHook,
@@ -326,7 +330,7 @@ impl PortedConnectorOps for KimiCodeConnector {
             message: Some("Session Hook 需手动配置".into()),
         };
         // 仅在可读 JSON 时回填运行时字段；不在成功路径塞全局 message，避免设置页误显示告警。
-        let (mcp_command, agent_url) = fs_port
+        let (mcp_command, agent_url) = ports.fs
             .read_optional(&config)
             .ok()
             .flatten()
@@ -359,11 +363,11 @@ impl PortedConnectorOps for KimiCodeConnector {
         Ok(result)
     }
 
-    fn install_with_fs(
+    fn install_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
-        fs_port: &dyn ConnectorFs,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         let capability_count = request.capabilities.len();
@@ -378,7 +382,7 @@ impl PortedConnectorOps for KimiCodeConnector {
         let skill = skill_path(ctx);
         let (mcp_result, mcp_backup, mcp_message) =
             if request.capabilities.contains(&IntegrationCapability::Mcp) {
-                match install_mcp(fs_port, ctx) {
+                match install_mcp(ports.fs, ctx) {
                     Ok(outcome) => (
                         if outcome.changed {
                             IntegrationResult::Installed
@@ -428,7 +432,7 @@ impl PortedConnectorOps for KimiCodeConnector {
                 }
             } else {
                 // 未请求 MCP 时只读状态，避免重试其它能力时改写用户配置。
-                let status = self.status_with_fs(ctx, fs_port)?;
+                let status = self.status_with_ports(ctx, ports)?;
                 let mcp = status
                     .integrations
                     .iter()
@@ -449,7 +453,7 @@ impl PortedConnectorOps for KimiCodeConnector {
 
         // Skill 安装门控：必须先用 post-write status 证明 MCP 已配置。
         // 否则会在半配置状态下写入 Skill，造成「Skill 在但 MCP 不可用」的假成功。
-        let status_after = self.status_with_fs(ctx, fs_port)?;
+        let status_after = self.status_with_ports(ctx, ports)?;
         let mcp_ready = status_after.integrations.iter().any(|item| {
             item.capability == IntegrationCapability::Mcp
                 && item.status == IntegrationStateStatus::Configured
@@ -464,7 +468,7 @@ impl PortedConnectorOps for KimiCodeConnector {
                 Some("MCP 未就绪，已跳过 Skill".into()),
             )
         } else if request.capabilities.contains(&IntegrationCapability::Skill) {
-            let result = common::install_skill(fs_port, ctx, &skill);
+            let result = common::install_skill(ports.fs, ctx, &skill);
             tracing::info!(
                 connector_id = CONNECTOR_ID,
                 capability = "skill",
@@ -473,7 +477,7 @@ impl PortedConnectorOps for KimiCodeConnector {
             );
             result
         } else {
-            let skill_state = common::skill_status(fs_port, ctx, &skill);
+            let skill_state = common::skill_status(ports.fs, ctx, &skill);
             common::integration_result(
                 IntegrationCapability::Skill,
                 match skill_state.status {
@@ -519,10 +523,10 @@ impl PortedConnectorOps for KimiCodeConnector {
         Ok(outcome)
     }
 
-    fn uninstall_with_fs(
+    fn uninstall_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
-        fs_port: &dyn ConnectorFs,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         tracing::info!(
@@ -533,7 +537,7 @@ impl PortedConnectorOps for KimiCodeConnector {
         let config = config_path(ctx);
         let skill = skill_path(ctx);
 
-        let mcp_outcome = match remove_mcp(fs_port, ctx) {
+        let mcp_outcome = match remove_mcp(ports.fs, ctx) {
             Ok(outcome) => outcome,
             Err(error) if error.code() == "unsafe_config_target" => {
                 tracing::error!(
@@ -546,7 +550,7 @@ impl PortedConnectorOps for KimiCodeConnector {
             }
             Err(error) if error.code() == "invalid_config" => {
                 // 畸形配置不覆盖、不备份；MCP 卸载标记 Failed。
-                let skill_result = common::uninstall_skill(fs_port, &skill);
+                let skill_result = common::uninstall_skill(ports.fs, &skill);
                 let changed = matches!(skill_result.result, IntegrationResult::Installed);
                 return Ok(ConnectorOperationOutcome {
                     connector_id: CONNECTOR_ID.into(),
@@ -586,7 +590,7 @@ impl PortedConnectorOps for KimiCodeConnector {
             }
         };
 
-        let skill_result = common::uninstall_skill(fs_port, &skill);
+        let skill_result = common::uninstall_skill(ports.fs, &skill);
         let mcp_changed = mcp_outcome.changed;
         let skill_changed = matches!(skill_result.result, IntegrationResult::Installed);
         let changed = mcp_changed || skill_changed;

@@ -11,6 +11,7 @@
 //   - 日志不记录路径、命令或配置正文
 
 use super::common;
+use crate::mcp_install::command_port::SystemCommandRunner;
 use crate::mcp_install::contracts::*;
 use crate::mcp_install::fs_port::{ConnectorFs, LocalFs};
 use crate::mcp_install::registry::*;
@@ -905,14 +906,15 @@ impl AgentConnector for HermesConnector {
         Ok(result)
     }
 
-    /// status 是 `status_with_fs(ctx, &LocalFs)` —— **恒绑定本机**。
+    /// status 是 `status_with_ports(ctx, &ConnectorPorts::new(&LocalFs, &runner))` —— **恒绑定本机**。
     ///
     /// 拿一个远端 ctx（home 指向目标机）调它，会去读**桌面机自己**磁盘上那些
     /// 路径，把读到的内容当成目标机状态返回，且不会有任何报错。远端场景一律走
-    /// `PortedConnectorOps::status_with_fs` 并显式传 `RemoteAgentFs`
+    /// `PortedConnectorOps::status_with_ports` 并显式传远端 [`ConnectorPorts`]
     /// （`remote_install::ported_remote_status` 是唯一入口）。
     fn status(&self, ctx: &ConnectorRuntimeContext) -> Result<ConnectorStatus, ConnectorError> {
-        self.status_with_fs(ctx, &LocalFs)
+        let runner = SystemCommandRunner;
+        self.status_with_ports(ctx, &ConnectorPorts::new(&LocalFs, &runner))
     }
 
     fn install(
@@ -920,14 +922,16 @@ impl AgentConnector for HermesConnector {
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
-        self.install_with_fs(ctx, request, &LocalFs)
+        let runner = SystemCommandRunner;
+        self.install_with_ports(ctx, request, &ConnectorPorts::new(&LocalFs, &runner))
     }
 
     fn uninstall(
         &self,
         ctx: &ConnectorRuntimeContext,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
-        self.uninstall_with_fs(ctx, &LocalFs)
+        let runner = SystemCommandRunner;
+        self.uninstall_with_ports(ctx, &ConnectorPorts::new(&LocalFs, &runner))
     }
 
     fn port_ops(&self) -> Option<&dyn PortedConnectorOps> {
@@ -962,10 +966,10 @@ impl AgentConnector for HermesConnector {
 }
 
 impl PortedConnectorOps for HermesConnector {
-    fn status_with_fs(
+    fn status_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
-        fs_port: &dyn ConnectorFs,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorStatus, ConnectorError> {
         let started = Instant::now();
         tracing::debug!(
@@ -975,10 +979,10 @@ impl PortedConnectorOps for HermesConnector {
         );
         let config = config_path(ctx);
         let skill = skill_path(ctx);
-        let doc = read_doc(fs_port, &config)?;
+        let doc = read_doc(ports.fs, &config)?;
         let (mcp_status, mcp_message) = mcp_status_from_doc(ctx, doc.as_ref());
-        let (hook_status, hook_message) = hook_status_from_doc(fs_port, ctx, doc.as_ref());
-        let skill_state = common::skill_status(fs_port, ctx, &skill);
+        let (hook_status, hook_message) = hook_status_from_doc(ports.fs, ctx, doc.as_ref());
+        let skill_state = common::skill_status(ports.fs, ctx, &skill);
         let (mcp_command, agent_url) = if mcp_status == IntegrationStateStatus::Configured
             || mcp_status == IntegrationStateStatus::NeedsAction
         {
@@ -1019,11 +1023,11 @@ impl PortedConnectorOps for HermesConnector {
         Ok(result)
     }
 
-    fn install_with_fs(
+    fn install_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
         request: ConnectorInstallRequest,
-        fs_port: &dyn ConnectorFs,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         let capability_count = request.capabilities.len();
@@ -1043,7 +1047,7 @@ impl PortedConnectorOps for HermesConnector {
             .contains(&IntegrationCapability::SessionHook);
 
         let (mcp_result, mcp_backup, mcp_message) = if want_mcp {
-            match common::mutate_config_with_fs(fs_port, CONNECTOR_ID, &config, |existing| {
+            match common::mutate_config_with_fs(ports.fs, CONNECTOR_ID, &config, |existing| {
                 merge_hermes_mcp(existing, ctx)
             }) {
                 Ok(outcome) => {
@@ -1105,7 +1109,7 @@ impl PortedConnectorOps for HermesConnector {
                 }
             }
         } else {
-            let status = self.status_with_fs(ctx, fs_port)?;
+            let status = self.status_with_ports(ctx, ports)?;
             let mcp = status
                 .integrations
                 .iter()
@@ -1121,7 +1125,7 @@ impl PortedConnectorOps for HermesConnector {
             )
         };
 
-        let status_after = self.status_with_fs(ctx, fs_port)?;
+        let status_after = self.status_with_ports(ctx, ports)?;
         let mcp_ready = status_after.integrations.iter().any(|item| {
             item.capability == IntegrationCapability::Mcp
                 && item.status == IntegrationStateStatus::Configured
@@ -1136,9 +1140,9 @@ impl PortedConnectorOps for HermesConnector {
                 Some("MCP 未就绪，已跳过 Skill".into()),
             )
         } else if want_skill {
-            common::install_skill(fs_port, ctx, &skill)
+            common::install_skill(ports.fs, ctx, &skill)
         } else {
-            let skill_state = common::skill_status(fs_port, ctx, &skill);
+            let skill_state = common::skill_status(ports.fs, ctx, &skill);
             common::integration_result(
                 IntegrationCapability::Skill,
                 match skill_state.status {
@@ -1173,12 +1177,12 @@ impl PortedConnectorOps for HermesConnector {
                 Some("Skill 未就绪，已跳过 Hook".into()),
             )
         } else if want_hook {
-            match common::mutate_config_with_fs(fs_port, CONNECTOR_ID, &config, |existing| {
+            match common::mutate_config_with_fs(ports.fs, CONNECTOR_ID, &config, |existing| {
                 merge_hermes_hook(existing, ctx)
             }) {
                 Ok(mutation) => {
                     let (status, message) =
-                        hook_status_from_doc(fs_port, ctx, read_doc(fs_port, &config)?.as_ref());
+                        hook_status_from_doc(ports.fs, ctx, read_doc(ports.fs, &config)?.as_ref());
                     let result = match status {
                         IntegrationStateStatus::Configured if mutation.changed => {
                             IntegrationResult::Installed
@@ -1207,7 +1211,7 @@ impl PortedConnectorOps for HermesConnector {
             }
         } else {
             let (status, message) =
-                hook_status_from_doc(fs_port, ctx, read_doc(fs_port, &config)?.as_ref());
+                hook_status_from_doc(ports.fs, ctx, read_doc(ports.fs, &config)?.as_ref());
             common::integration_result(
                 IntegrationCapability::SessionHook,
                 match status {
@@ -1252,10 +1256,10 @@ impl PortedConnectorOps for HermesConnector {
         Ok(outcome)
     }
 
-    fn uninstall_with_fs(
+    fn uninstall_with_ports(
         &self,
         ctx: &ConnectorRuntimeContext,
-        fs_port: &dyn ConnectorFs,
+        ports: &ConnectorPorts<'_>,
     ) -> Result<ConnectorOperationOutcome, ConnectorError> {
         let started = Instant::now();
         tracing::info!(
@@ -1266,7 +1270,7 @@ impl PortedConnectorOps for HermesConnector {
         let config = config_path(ctx);
         let skill = skill_path(ctx);
         let mcp_outcome = match common::remove_config_with_fs(
-            fs_port,
+            ports.fs,
             CONNECTOR_ID,
             &config,
             remove_hermes_owned,
@@ -1285,7 +1289,7 @@ impl PortedConnectorOps for HermesConnector {
                             None,
                             Some(error.message().into()),
                         ),
-                        common::uninstall_skill(fs_port, &skill),
+                        common::uninstall_skill(ports.fs, &skill),
                         common::integration_result(
                             IntegrationCapability::SessionHook,
                             IntegrationResult::Failed,
@@ -1310,7 +1314,7 @@ impl PortedConnectorOps for HermesConnector {
                 return Err(error);
             }
         };
-        let skill_result = common::uninstall_skill(fs_port, &skill);
+        let skill_result = common::uninstall_skill(ports.fs, &skill);
         let changed =
             mcp_outcome.changed || matches!(skill_result.result, IntegrationResult::Installed);
         let outcome = ConnectorOperationOutcome {

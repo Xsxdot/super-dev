@@ -282,9 +282,12 @@ fn install_remote_agent_connector(
     run_remote_connector_command(&connector_id, "remote_install", &host_id, || {
         let (detector, fs_port, (skill_source, skill_source_error)) =
             remote_install_inputs(&app, agent_state, &host_id)?;
+        // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+        let runner = mcp_install::command_port::SystemCommandRunner;
+        let ports = mcp_install::registry::ConnectorPorts::new(&fs_port, &runner);
         mcp_install::remote_install::install_remote_connector(
             &detector,
-            &fs_port,
+            &ports,
             &mcp_install::remote_install::remote_connectors(),
             &host_id,
             &connector_id,
@@ -307,9 +310,12 @@ fn uninstall_remote_agent_connector(
     run_remote_connector_command(&connector_id, "remote_uninstall", &host_id, || {
         let (detector, fs_port, (skill_source, skill_source_error)) =
             remote_install_inputs(&app, agent_state, &host_id)?;
+        // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+        let runner = mcp_install::command_port::SystemCommandRunner;
+        let ports = mcp_install::registry::ConnectorPorts::new(&fs_port, &runner);
         mcp_install::remote_install::uninstall_remote_connector(
             &detector,
-            &fs_port,
+            &ports,
             &mcp_install::remote_install::remote_connectors(),
             &host_id,
             &connector_id,

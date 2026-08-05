@@ -19,13 +19,15 @@
 //     端点返回的存在性表为准
 //   - 不做 UI：返回值形状由前端契约固定，展示逻辑在 Vue 侧
 
+use super::command_port::SystemCommandRunner;
 use super::connectors;
 use super::contracts::{
     ConnectorOperation, ConnectorOperationOutcome, IntegrationCapability, IntegrationStateStatus,
 };
 use super::fs_port::ConnectorFs;
 use super::registry::{
-    AgentConnector, ConnectorInstallRequest, ConnectorRuntimeContext, ConnectorStatus,
+    AgentConnector, ConnectorInstallRequest, ConnectorPorts, ConnectorRuntimeContext,
+    ConnectorStatus,
 };
 use super::remote_fs::RemoteAgentFs;
 use super::{AgentKind, McpLaunchSpec};
@@ -488,7 +490,14 @@ pub fn remote_status_for(
     let kind = match plan {
         RemoteInstallPlan::BuiltInKind(kind) => kind,
         RemoteInstallPlan::Ported => {
-            return ported_remote_status(connector, ctx, fs_port, base);
+            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+            let runner = SystemCommandRunner;
+            return ported_remote_status(
+                connector,
+                ctx,
+                &ConnectorPorts::new(fs_port, &runner),
+                base,
+            );
         }
     };
     let home = ctx.home_dir();
@@ -544,7 +553,7 @@ pub fn remote_status_for(
 /// 参数：
 ///   - connector: 已确认 `port_ops()` 为 Some 的连接器
 ///   - ctx: 远端运行上下文（home / mcp_launch 都取自 detect）
-///   - fs_port: 目标机文件操作端口
+///   - ports: 目标机副作用端口集合（文件 + 进程）
 ///   - base: 已填好 id/display_name/cli_present/remote_supported 的基线值
 ///
 /// 返回：
@@ -558,14 +567,14 @@ pub fn remote_status_for(
 fn ported_remote_status(
     connector: &dyn AgentConnector,
     ctx: &ConnectorRuntimeContext,
-    fs_port: &dyn ConnectorFs,
+    ports: &ConnectorPorts<'_>,
     base: RemoteAgentStatus,
 ) -> RemoteAgentStatus {
     let ops = match connector.port_ops() {
         Some(ops) => ops,
         None => return base,
     };
-    let status = match ops.status_with_fs(ctx, fs_port) {
+    let status = match ops.status_with_ports(ctx, ports) {
         Ok(status) => status,
         Err(error) => {
             // 与内置方言分支同一纪律：读不出来时记 warn 留痕，三个状态位保持
@@ -660,7 +669,7 @@ fn unsupported_remote_error(host_id: &str, connector_id: &str) -> String {
 ///
 /// 参数：
 ///   - detector: detect 端点客户端（用于取目标机 HOME 与 agent 启动规格）
-///   - fs_port: 目标机文件操作端口
+///   - ports: 目标机副作用端口集合（文件 + 进程）
 ///   - connectors: 连接器列表（用于校验 connector_id 合法）
 ///   - host_id: 目标机器 ID，仅用于错误文案
 ///   - connector_id: 待安装的连接器 ID
@@ -670,11 +679,11 @@ fn unsupported_remote_error(host_id: &str, connector_id: &str) -> String {
 ///   - 与本机同构的连接器操作结果
 ///
 /// 注意：
-///   - 方言与编排完全复用 `install_mcp_for_paths_with_fs`，差别只有 fs_port 与
+///   - 方言与编排完全复用 `install_mcp_for_paths_with_fs`，差别只有 ports.fs 与
 ///     launch 两个入参；结果映射复用 `built_in_install_outcome`
 pub fn install_remote_connector(
     detector: &dyn RemoteIntegrationDetector,
-    fs_port: &dyn ConnectorFs,
+    ports: &ConnectorPorts<'_>,
     connectors: &[Arc<dyn AgentConnector>],
     host_id: &str,
     connector_id: &str,
@@ -687,7 +696,7 @@ pub fn install_remote_connector(
     let kind = match plan {
         RemoteInstallPlan::BuiltInKind(kind) => kind,
         RemoteInstallPlan::Ported => {
-            // 方言与编排完全复用连接器自身的实现，差别只有 fs_port 与 ctx 两个入参；
+            // 方言与编排完全复用连接器自身的实现，差别只有 ports 与 ctx 两个入参；
             // 能力集合给全三项，与本机「安装」按钮的语义一致（不支持的能力由连接器
             // 自己降级成 NeedsAction/Skipped，不是编排在这里挑）。
             let ops = connector
@@ -702,12 +711,12 @@ pub fn install_remote_connector(
                 ],
             };
             return ops
-                .install_with_fs(&ctx, request, fs_port)
+                .install_with_ports(&ctx, request, ports)
                 .map_err(|error| format!("远端机器 {host_id} 安装 {connector_id} 失败: {error}"));
         }
     };
     let outcome = super::install_mcp_for_paths_with_fs(
-        fs_port,
+        ports.fs,
         kind.label(),
         ctx.home_dir(),
         ctx.mcp_launch(),
@@ -725,7 +734,7 @@ pub fn install_remote_connector(
 /// 参数与返回语义同 [`install_remote_connector`]；只删除 SuperDev 自己写入的那部分。
 pub fn uninstall_remote_connector(
     detector: &dyn RemoteIntegrationDetector,
-    fs_port: &dyn ConnectorFs,
+    ports: &ConnectorPorts<'_>,
     connectors: &[Arc<dyn AgentConnector>],
     host_id: &str,
     connector_id: &str,
@@ -742,11 +751,11 @@ pub fn uninstall_remote_connector(
                 .port_ops()
                 .ok_or_else(|| unsupported_remote_error(host_id, connector_id))?;
             return ops
-                .uninstall_with_fs(&ctx, fs_port)
+                .uninstall_with_ports(&ctx, ports)
                 .map_err(|error| format!("远端机器 {host_id} 卸载 {connector_id} 失败: {error}"));
         }
     };
-    let outcome = super::uninstall_mcp_for_paths_with_fs(fs_port, kind.label(), ctx.home_dir())
+    let outcome = super::uninstall_mcp_for_paths_with_fs(ports.fs, kind.label(), ctx.home_dir())
         .map_err(|error| format!("远端机器 {host_id} 卸载 {connector_id} 失败: {error}"))?;
     Ok(connectors::built_in_uninstall_outcome(
         connector_id,
@@ -1409,7 +1418,8 @@ mod tests {
         for id in ["openclaw", "grok"] {
             let error = install_remote_connector(
                 &detector,
-                &fs_port,
+                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
                 &connectors,
                 "host-42",
                 id,
@@ -1494,7 +1504,8 @@ mod tests {
         .expect_err("detect 入口必须挡住空字段");
         let install_error = install_remote_connector(
             &BlankFieldDetector,
-            &fs_port,
+            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
             &connectors,
             "host-42",
             "claude-code",
@@ -1504,7 +1515,8 @@ mod tests {
         .expect_err("install 入口必须挡住空字段");
         let uninstall_error = uninstall_remote_connector(
             &BlankFieldDetector,
-            &fs_port,
+            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
             &connectors,
             "host-42",
             "claude-code",
@@ -1584,7 +1596,8 @@ mod tests {
 
         let outcome = install_remote_connector(
             &detector,
-            &fs_port,
+            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
             &connectors,
             "host-42",
             "claude-code",
@@ -1781,7 +1794,8 @@ mod tests {
             }
             install_remote_connector(
                 &detector,
-                &fs_port,
+                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
                 &connectors,
                 "fixture-host",
                 id,
@@ -1791,7 +1805,8 @@ mod tests {
             .unwrap_or_else(|error| panic!("{id} fixture install: {error}"));
             uninstall_remote_connector(
                 &detector,
-                &fs_port,
+                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
                 &connectors,
                 "fixture-host",
                 id,
@@ -1823,7 +1838,8 @@ mod tests {
             }
             let _ = install_remote_connector(
                 &detector,
-                &failing,
+                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+                &ConnectorPorts::new(&failing, &SystemCommandRunner),
                 &connectors,
                 "fixture-host",
                 id,
@@ -2062,7 +2078,8 @@ mod tests {
 
             let outcome = install_remote_connector(
                 &detector,
-                &fs_port,
+                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
                 &connectors,
                 "host-42",
                 connector_id,
@@ -2109,7 +2126,8 @@ mod tests {
             // 只摘掉 superdev 条目、配置文件本身保留、skill 目录被删。
             let removed = uninstall_remote_connector(
                 &detector,
-                &fs_port,
+                // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+                &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
                 &connectors,
                 "host-42",
                 connector_id,
@@ -2188,7 +2206,8 @@ mod tests {
 
         install_remote_connector(
             &detector,
-            &fs_port,
+            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
             &connectors,
             "host-42",
             "claude-code",
@@ -2218,7 +2237,8 @@ mod tests {
         let connectors = connectors::builtin();
         install_remote_connector(
             &detector,
-            &fs_port,
+            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
             &connectors,
             "host-42",
             "claude-code",
@@ -2229,7 +2249,8 @@ mod tests {
 
         let outcome = uninstall_remote_connector(
             &detector,
-            &fs_port,
+            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
             &connectors,
             "host-42",
             "claude-code",
@@ -2264,7 +2285,8 @@ mod tests {
 
         let error = install_remote_connector(
             &detector,
-            &fs_port,
+            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
             &connectors,
             "host-42",
             "grok",
@@ -2287,7 +2309,8 @@ mod tests {
 
         let error = install_remote_connector(
             &detector,
-            &fs_port,
+            // TODO(Task 9): 换成 RemoteAgentCommandRunner；当前调用路径不碰 runner，故行为不变
+            &ConnectorPorts::new(&fs_port, &SystemCommandRunner),
             &connectors,
             "host-42",
             "not-a-connector",
