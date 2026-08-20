@@ -31,8 +31,9 @@ import (
 )
 
 type operationApprovalDetailResponse struct {
-	Approval      operation.Approval `json:"approval"`
-	ApprovalToken string             `json:"approval_token,omitempty"`
+	Approval               operation.Approval `json:"approval"`
+	ApprovalToken          string             `json:"approval_token,omitempty"`
+	ApprovalTokenExpiresAt *time.Time         `json:"approval_token_expires_at,omitempty"`
 }
 
 // operationApprovalDecisionResponse 是 approve 接口的响应。
@@ -117,6 +118,15 @@ func (a *App) listOperationApprovals(w http.ResponseWriter, r *http.Request) {
 // getOperationApproval 处理 GET /api/operation-approvals/{id}。
 func (a *App) getOperationApproval(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// 外来审批（由某台归属机签发）不在本机 store 里，必须路由回源节点处理。
+	// 判据取自聚合器当前的来源表，而不是「本机 Get 不到就当外来」——后者会把
+	// 一个真实的 404（id 打错、已过期清理）误当成跨机请求发出去。
+	if origin := a.approvalOriginOf(id); origin != "" {
+		a.forwardToHostWithObserver(w, r, origin, func(body []byte) {
+			a.rememberForwardedApprovalToken(origin, body)
+		})
+		return
+	}
 	token, approval, err := a.operationApprovals.IssueToken(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, operation.ErrApprovalTokenInvalid) {
@@ -129,11 +139,24 @@ func (a *App) getOperationApproval(w http.ResponseWriter, r *http.Request) {
 		writeOperationStoreError(w, err, "")
 		return
 	}
-	jsonOK(w, operationApprovalDetailResponse{Approval: sanitizeOperationApproval(approval), ApprovalToken: token})
+	jsonOK(w, operationApprovalDetailResponse{
+		Approval:               sanitizeOperationApproval(approval),
+		ApprovalToken:          token,
+		ApprovalTokenExpiresAt: approval.TokenExpiresAt,
+	})
 }
 
 // approveOperationApproval 处理 POST /api/operation-approvals/{id}/approve。
 func (a *App) approveOperationApproval(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	// 外来审批的裁决必须回到签发它的归属机；转发失败时公共路由逻辑返回
+	// home_unreachable，不能回落本机 store（本机根本没有这条审批）。
+	if origin := a.approvalOriginOf(id); origin != "" {
+		if a.forwardToHost(w, r, origin) {
+			a.appendApprovalProxyAudit(r.Context(), id, origin, "approve")
+		}
+		return
+	}
 	var req operationDecisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
@@ -142,7 +165,6 @@ func (a *App) approveOperationApproval(w http.ResponseWriter, r *http.Request) {
 	// 裁决方身份只认服务器侧已验证凭据推导，绝不信任请求体自报的 decided_by
 	// （req.DecidedBy 解析后直接丢弃）——见 operationDecisionRequest 的字段注释。
 	decidedByName, principalType, principalID := principalFromRequest(r)
-	id := r.PathValue("id")
 	approval, err := a.operationApprovals.Approve(r.Context(), id, decidedByName, req.Note)
 	if err != nil {
 		writeOperationStoreError(w, err, a.decisionConflictWinner(r.Context(), id, err, "approve"))
@@ -196,6 +218,15 @@ func (a *App) approveOperationApproval(w http.ResponseWriter, r *http.Request) {
 
 // rejectOperationApproval 处理 POST /api/operation-approvals/{id}/reject。
 func (a *App) rejectOperationApproval(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	// 外来审批的裁决必须回到签发它的归属机；转发失败时公共路由逻辑返回
+	// home_unreachable，不能回落本机 store（本机根本没有这条审批）。
+	if origin := a.approvalOriginOf(id); origin != "" {
+		if a.forwardToHost(w, r, origin) {
+			a.appendApprovalProxyAudit(r.Context(), id, origin, "reject")
+		}
+		return
+	}
 	var req operationDecisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid request body")
@@ -204,7 +235,6 @@ func (a *App) rejectOperationApproval(w http.ResponseWriter, r *http.Request) {
 	// 裁决方身份只认服务器侧已验证凭据推导，绝不信任请求体自报的 decided_by
 	// （req.DecidedBy 解析后直接丢弃）——见 operationDecisionRequest 的字段注释。
 	decidedByName, principalType, principalID := principalFromRequest(r)
-	id := r.PathValue("id")
 	approval, err := a.operationApprovals.Reject(r.Context(), id, decidedByName, req.Note)
 	if err != nil {
 		writeOperationStoreError(w, err, a.decisionConflictWinner(r.Context(), id, err, "reject"))
@@ -224,6 +254,89 @@ func (a *App) rejectOperationApproval(w http.ResponseWriter, r *http.Request) {
 		Data:       map[string]any{"decided_by": approval.DecidedBy, "principal_type": principalType, "principal_id": principalID},
 	})
 	jsonOK(w, sanitizeOperationApproval(approval))
+}
+
+// approvalOriginOf 查聚合器当前合并快照里的审批来源。
+//
+// 为什么不用「本机 Get 不到就当外来」：一个真实的本机 404（id 写错或记录已被
+// 清理）不应被误发到远端；只有聚合器明确持有、且项目属于本控制面管辖范围的
+// 外来审批才允许回源节点裁决。
+func (a *App) approvalOriginOf(id string) string {
+	_, hostID, ok := a.remoteApprovalForID(id)
+	if !ok {
+		return ""
+	}
+	return hostID
+}
+
+func (a *App) remoteApprovalForID(id string) (operation.Approval, string, bool) {
+	if id == "" || a.approvalAggregator == nil {
+		return operation.Approval{}, "", false
+	}
+	managed := a.managedProjectIDsByHome()
+	for hostID, remote := range a.approvalAggregator.All() {
+		allowed := managed[hostID]
+		for _, approval := range remote.Snapshot.Pending {
+			if approval.ID == id {
+				if _, ok := allowed[approval.Plan.Target.ProjectID]; ok {
+					return approval, hostID, true
+				}
+			}
+		}
+		for _, approval := range remote.Snapshot.Decided {
+			if approval.ID == id {
+				if _, ok := allowed[approval.Plan.Target.ProjectID]; ok {
+					return approval, hostID, true
+				}
+			}
+		}
+	}
+	return operation.Approval{}, "", false
+}
+
+// appendApprovalProxyAudit 在本机记录跨机裁决的发起事实；源节点仍负责记录
+// 实际执行的裁决结果，本机这条记录补上「操作员从哪里发起」这一侧的审计链。
+func (a *App) appendApprovalProxyAudit(ctx context.Context, id, origin, decision string) {
+	approval, _, _ := a.remoteApprovalForID(id)
+	event := operation.AuditEvent{
+		Kind:       approval.Plan.Kind,
+		Action:     operation.AuditApprovalProxied,
+		ApprovalID: id,
+		Plan:       approval.Plan,
+		Summary:    "operation approval decision proxied to origin host",
+		Data: map[string]any{
+			"origin_host_id": origin,
+			"decision":       decision,
+		},
+	}
+	if a.operationAudit == nil {
+		log.Printf("[SuperDev] approval 代理审计写入失败 approval_id=%s origin=%s err=operation audit store 未装配", id, origin)
+		return
+	}
+	if _, err := a.operationAudit.Append(ctx, event); err != nil {
+		log.Printf("[SuperDev] approval 代理审计写入失败 approval_id=%s origin=%s err=%v", id, origin, err)
+	}
+}
+
+func (a *App) rememberForwardedApprovalToken(hostID string, body []byte) {
+	var detail operationApprovalDetailResponse
+	if err := json.Unmarshal(body, &detail); err != nil {
+		log.Printf("[SuperDev] approval token 来源登记失败 host=%s err=%v", hostID, err)
+		return
+	}
+	token := strings.TrimSpace(detail.ApprovalToken)
+	if token == "" || a.approvalTokenOrigin == nil {
+		return
+	}
+	expiresAt := time.Time{}
+	if detail.ApprovalTokenExpiresAt != nil {
+		expiresAt = *detail.ApprovalTokenExpiresAt
+	} else if detail.Approval.TokenExpiresAt != nil {
+		// 兼容尚未提供顶层过期时间的旧 agent；有些旧响应仍会把它放在
+		// approval 对象里，最终仍由登记表的 fallback TTL 兜底。
+		expiresAt = *detail.Approval.TokenExpiresAt
+	}
+	a.approvalTokenOrigin.Remember(token, hostID, expiresAt)
 }
 
 // hookAgentAdoptDecision 在 KindAgentAdopt 的 approval 被裁决时驱动

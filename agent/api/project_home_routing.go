@@ -42,25 +42,27 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/xsxdot/super-dev/agent/configchange"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
 
-// homeRouteForwardedHeaders 是转发到归属机时逐个放行的请求头白名单：
+// homeRouteForwardedHeaders 是转发到归属机时逐个放行的静态请求头白名单：
 // Content-Type 是请求体正常解析所需，两个 X-SuperDev-Requester* 头供归属机
 // 的操作审计记录真实发起者。不整体透传 r.Header——避免把本机专属的头意外
 // 泄漏给归属机，也让转发的头面保持可枚举。
 //
-// 刻意排除的两个头（红线，勿加回）：
-//   - Authorization：调用方带的是「本机 agent」的凭据（local-access-token 或
-//     本控制面 token），归属机既不认它（必 401），把它发过去也等于在机器间
-//     搬运本机凭据。归属机的正确凭据由 nodetransport 按 host 配置注入
-//     （applyAgentHeaders 先 Set 正确 token）；若这里透传 Authorization，
-//     override 语义（逐 key Del 再 Add）会把正确凭据覆盖掉。
-//   - X-SuperDev-Approval-Token：审批 token 是签发 agent 本机语义（对
-//     approval store 一对一），跨机透传毫无意义且徒增凭据外流面。
+// 刻意排除的 Authorization 头（红线，勿加回）：调用方带的是「本机 agent」的
+// 凭据（local-access-token 或本控制面 token），归属机既不认它（必 401），把它
+// 发过去也等于在机器间搬运本机凭据。归属机的正确凭据由 nodetransport 按 host
+// 配置注入（applyAgentHeaders 先 Set 正确 token）；若这里透传 Authorization，
+// override 语义（逐 key Del 再 Add）会把正确凭据覆盖掉。
+//
+// X-SuperDev-Approval-Token 不放进静态白名单：它在公共转发实现中按「签发来源
+// 正好等于本次目标 host」的条件单独放行。这样既保留凭据外流红线，又允许聚合后
+// 桌面端把归属机签发的 token 送回唯一正确的签发者。
 var homeRouteForwardedHeaders = []string{
 	"Content-Type",
 	"X-SuperDev-Requester",
@@ -153,13 +155,32 @@ func (a *App) projectHomeOf(projectID string) string {
 //   - 成功转发后原样回写归属 agent 的状态码与响应体；调用方在调用本函数
 //     之后必须立即 return，不得再向 w 写入任何内容。
 func (a *App) forwardToHome(w http.ResponseWriter, r *http.Request, homeHostID string) {
+	// 归属路由按项目归属选择目标；具体转发、回写和失败语义由公共 host 路由实现。
+	a.forwardToHost(w, r, homeHostID)
+}
+
+// forwardToHost 把当前请求转发到指定 host，并将其响应原样回写给调用方。
+//
+// 它同时服务两种语义不同的路径：forwardToHome 按项目归属路由，审批 handler
+// 按审批签发来源路由。两者必须共用这一实现，才能保持「转发失败绝不回落本机」
+// 和响应回写口径一致。
+//
+// 返回值表示请求是否拿到了 2xx 响应；调用方可据此追加本机侧代理审计。
+func (a *App) forwardToHost(w http.ResponseWriter, r *http.Request, targetHostID string) bool {
+	return a.forwardToHostWithObserver(w, r, targetHostID, nil)
+}
+
+// forwardToHostWithObserver 是 forwardToHost 的响应观察变体。观察器只接收已经
+// 读完的响应体，供审批代理旁路登记 token 来源；响应体仍按原字节回写，不改变对
+// 调用方的协议内容。普通归属路由继续使用流式回写，避免为大响应额外缓冲。
+func (a *App) forwardToHostWithObserver(w http.ResponseWriter, r *http.Request, targetHostID string, observe func([]byte)) bool {
 	var body []byte
 	if r.Body != nil {
 		read, err := io.ReadAll(r.Body)
 		if err != nil {
-			log.Printf("[SuperDev] homeroute: 读取请求体失败 %s %s → %s err=%v", r.Method, r.URL.Path, homeHostID, err)
+			log.Printf("[SuperDev] hostroute: 读取请求体失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
 			jsonErrorCode(w, http.StatusBadGateway, "home_unreachable", "failed to read request body: "+err.Error(), nil)
-			return
+			return false
 		}
 		body = read
 	}
@@ -170,23 +191,34 @@ func (a *App) forwardToHome(w http.ResponseWriter, r *http.Request, homeHostID s
 			headers.Set(key, v)
 		}
 	}
+	if token := strings.TrimSpace(r.Header.Get("X-SuperDev-Approval-Token")); token != "" {
+		origin := ""
+		if a.approvalTokenOrigin != nil {
+			origin = a.approvalTokenOrigin.OriginOf(token)
+		}
+		if origin == targetHostID {
+			headers.Set("X-SuperDev-Approval-Token", token)
+		} else {
+			log.Printf("[SuperDev] homeroute: WARN 请求携带的审批 token 非本次转发目标（%s）签发，已剥离不转发", targetHostID)
+		}
+	}
 
-	resp, err := a.nodeTransportDo()(r.Context(), homeHostID, nodetransport.NodeRequest{
+	resp, err := a.nodeTransportDo()(r.Context(), targetHostID, nodetransport.NodeRequest{
 		Method:  r.Method,
 		Path:    r.URL.Path,
 		Headers: headers,
 		Body:    bytes.NewReader(body),
 	})
 	if err != nil {
-		log.Printf("[SuperDev] homeroute: 转发失败 %s %s → %s err=%v", r.Method, r.URL.Path, homeHostID, err)
-		jsonErrorCode(w, http.StatusBadGateway, "home_unreachable", "home host unreachable: "+err.Error(), map[string]string{"host_id": homeHostID})
-		return
+		log.Printf("[SuperDev] hostroute: 转发失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
+		jsonErrorCode(w, http.StatusBadGateway, "home_unreachable", "home host unreachable: "+err.Error(), map[string]string{"host_id": targetHostID})
+		return false
 	}
 	if resp.Body != nil {
 		defer resp.Body.Close()
 	}
 
-	log.Printf("[SuperDev] homeroute: %s %s → %s", r.Method, r.URL.Path, homeHostID)
+	log.Printf("[SuperDev] hostroute: %s %s → %s", r.Method, r.URL.Path, targetHostID)
 
 	if resp.Headers != nil {
 		if ct := resp.Headers.Get("Content-Type"); ct != "" {
@@ -199,10 +231,22 @@ func (a *App) forwardToHome(w http.ResponseWriter, r *http.Request, homeHostID s
 	}
 	w.WriteHeader(status)
 	if resp.Body != nil {
-		if _, err := io.Copy(w, resp.Body); err != nil {
-			log.Printf("[SuperDev] homeroute: 回写响应体失败 %s %s → %s err=%v", r.Method, r.URL.Path, homeHostID, err)
+		if observe == nil {
+			if _, err := io.Copy(w, resp.Body); err != nil {
+				log.Printf("[SuperDev] hostroute: 回写响应体失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
+			}
+		} else if responseBody, err := io.ReadAll(resp.Body); err != nil {
+			log.Printf("[SuperDev] hostroute: 读取响应体供观察失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
+		} else {
+			observe(responseBody)
+			if _, err := w.Write(responseBody); err != nil {
+				log.Printf("[SuperDev] hostroute: 回写响应体失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
+			}
 		}
+	} else if observe != nil {
+		observe(nil)
 	}
+	return status/100 == 2
 }
 
 // nodeTransportDo 返回本次转发使用的 nodetransport Do。a.nodeTransport 正常
