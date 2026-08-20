@@ -1,6 +1,6 @@
 [package]
 name = "superdev"
-version = "0.2.3"
+version = "0.2.4"
 description = "SuperDev desktop application"
 authors = ["SuperDev contributors"]
 license = "Apache-2.0"

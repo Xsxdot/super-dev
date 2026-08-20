@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-20
+
+### Fixed
+
+- Repaired the runtime status of a project whose dev environment has been transferred to a dev machine: it reported `stopped` while the service was in fact running on the home machine. The snapshot dispatcher only asked whether a deployment was `location: remote`, never which machine currently owns the dev environment, so a homed `location: local` deployment was sampled against the local process manager and could only ever come back stopped — even though the home node's status frame carried the correct `running`. Home resolution now reuses the same rule as start/stop forwarding, so the two can no longer drift into "it starts but shows as stopped".
+- Made `deployment.ports` settable through the config-change path. Validation for it had always been there, but `DeploymentPatch` carried no `Ports` field and the merge step ignored it, so ports sent to preview/apply were silently dropped on decode and the request still returned `200`. Declaring the ports that drive port mirroring was therefore impossible from MCP; the only remaining route was the desktop's whole-project setup call, whose semantics delete any service missing from the payload.
+- Gave every pre-flight rejection in the transfer execute endpoint a log line. Twelve rejection branches — request body, missing `host_id`, unknown project, not a git repository, no `origin`, detached `HEAD`, uncommitted changes, unpushed commits, no upstream, target is the local machine, unknown host, host not in dev machine mode — returned an error to the caller and recorded nothing server-side, leaving a user-visible failure with no evidence to diagnose it from.
+- Separated "cannot reach the home host" from "reached it but got no reply in time"; both previously surfaced as `home_unreachable`. A slow remote build was reported as an unreachable host, pointing diagnosis at the network instead of at the work still running on that machine. The two also differ in consequence: unreachable means the operation never started, whereas a timeout means it very likely arrived and is still executing, so a retry would trigger the side effect twice. Timeout detection covers both `context.DeadlineExceeded` and `net.Error` timeouts, the latter being what an HTTP client's awaiting-headers timeout actually produces. A failure to read the caller's own request body no longer masquerades as an unreachable host either; it is now a `400`.
+
+### Added
+
+- Extended the transfer asset audit to cover git-ignored top-level files. The audit followed only `env_file` declarations, so an ignored service config such as `config.yaml` — which `git clone` structurally cannot carry to the target — went missing in silence while the report claimed nothing needed attention. Ignored directories are folded into a single entry rather than expanded, and the scan is capped at twenty files with an explicit report item when it truncates, so a partial scan never reads as a complete one. As with suspected secrets, entries carry file names only, never contents.
+
+### Changed
+
+- Updated repository, agent runtime, desktop package, Tauri, Cargo metadata, and Cargo lock metadata to version `0.2.4`.
+
 ## [0.2.3] - 2026-07-28
 
 ### Added
