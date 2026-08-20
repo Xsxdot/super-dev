@@ -112,7 +112,47 @@ func validateDeployment(projectRoot, serviceName string, language model.ServiceL
 	errs = append(errs, validateDeploymentWebConfig(dep)...)
 	errs = append(errs, validateDeploymentCodeDebugConfig(serviceName, dep)...)
 	errs = append(errs, validateDeploymentPorts(dep)...)
+	errs = append(errs, validateRemoteRuntimeType(serviceName, dep)...)
 	return errs
+}
+
+// validateRemoteRuntimeType 拒绝「远端 deployment 用 SuperDev 自己拉起进程的
+// runtime」这一必然不工作的组合。
+//
+// 参数：
+//   - serviceName: 用于错误文案定位
+//   - dep: 待校验的 deployment
+//
+// 返回：
+//   - 错误文案切片；组合合法时为空
+//
+// 为什么这个组合必然不工作（不是「暂不支持」，是结构上做不到）：
+// location=remote 的运行态来自目标机上报的节点帧，而目标机上这个 deployment
+// 是由控制面下发的 ManagedDeployment 合成的——该载荷只带采样所需字段，
+// 不带 Language 也不带 Command，目标机的 agent 因此永远无法拉起这个进程。
+// 而 command / language 两种 runtime 的状态采样恰恰是「向自己的进程管理器
+// 要 PID」，PID 永不存在 ⇒ 状态恒为 stopped ⇒ 端口镜像永不建立。
+// systemd / docker / launchd 是问基座要状态，不依赖 agent 持有 PID，不受影响。
+//
+// 为什么必须在这里拦：这条链路上没有任何一步会报错——下发成功、合成成功、
+// 启动接口返回 200，只是状态永远不对。不拦住，用户唯一能得到的信息就是
+// 「配好了但它不动」。
+func validateRemoteRuntimeType(serviceName string, dep model.Deployment) []string {
+	if dep.Location != model.LocationRemote || dep.Runtime == nil {
+		return nil
+	}
+	switch dep.Runtime.Type {
+	case model.RuntimeTypeCommand, model.RuntimeTypeLanguage:
+		return []string{fmt.Sprintf(
+			"service %s deployment %s: 远端 deployment 不能使用 runtime.type=%s——"+
+				"该类型要求 SuperDev 自己拉起并持有进程，而下发到目标机的配置不含启动信息，"+
+				"结果是状态恒为未运行、端口镜像不会建立。"+
+				"若这台机器是你的开发机、希望由 SuperDev 直接运行该服务，请改用「归属转移」把项目归属到这台机器；"+
+				"若该服务由 systemd/docker/launchd 接管，请把 runtime.type 改成对应的基座类型。",
+			serviceName, dep.EnvName, dep.Runtime.Type)}
+	default:
+		return nil
+	}
 }
 
 // validateDeploymentPorts 校验 deployment.ports：每个端口须落在 1-65535，
