@@ -177,6 +177,9 @@ func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error
 // 注意：
 //   - Agent API 已将监听/TLS 配置从 Host 拆出，因此直推安装需通过该入口显式传参
 func (i *Installer) InstallWithOptions(ctx context.Context, host model.Host, serviceOpts ServiceOptions) (Result, error) {
+	if strings.TrimSpace(serviceOpts.User) == "" {
+		serviceOpts.User = host.SSHUser
+	}
 	remote, err := i.factory(host)
 	if err != nil {
 		return Result{}, stageErr("connect", err)
@@ -367,6 +370,7 @@ func serviceOptionsForHost(host model.Host, bootstrapToken string) ServiceOption
 		Port:           model.DefaultAgentListenPort,
 		RequireAuth:    strings.TrimSpace(bootstrapToken) != "",
 		BootstrapToken: bootstrapToken,
+		User:           host.SSHUser,
 	}
 	return opts
 }

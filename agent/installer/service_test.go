@@ -21,11 +21,24 @@ func TestLinuxSystemdUnit(t *testing.T) {
 		Port:           57019,
 		RequireAuth:    true,
 		BootstrapToken: "bootstrap",
+		User:           "alice",
 	})
 	assert.Contains(t, unit, "Description=SuperDev Agent")
 	assert.Contains(t, unit, "ExecStart=/usr/local/bin/superdev-agent --addr 0.0.0.0:57019 --require-auth --bootstrap-token bootstrap --data /var/lib/superdev-agent")
 	assert.Contains(t, unit, "Restart=always")
 	assert.Contains(t, unit, "WantedBy=multi-user.target")
+	assert.Contains(t, unit, "Environment=HOME=/home/alice")
+}
+
+func TestLinuxSystemdUnitHomeFromRootUser(t *testing.T) {
+	unit := LinuxSystemdUnit(ServiceOptions{User: "root"})
+	assert.Contains(t, unit, "Environment=HOME=/root")
+}
+
+func TestLinuxSystemdUnitPrefersExplicitHomeDir(t *testing.T) {
+	unit := LinuxSystemdUnit(ServiceOptions{User: "alice", HomeDir: "/srv/alice"})
+	assert.Contains(t, unit, "Environment=HOME=/srv/alice")
+	assert.NotContains(t, unit, "Environment=HOME=/home/alice")
 }
 
 func TestMacOSLaunchDaemonPlist(t *testing.T) {
@@ -34,6 +47,7 @@ func TestMacOSLaunchDaemonPlist(t *testing.T) {
 		Port:           57020,
 		RequireAuth:    true,
 		BootstrapToken: "bootstrap",
+		User:           "alice",
 	})
 	assert.Contains(t, plist, "<string>dev.superdev.agent</string>")
 	assert.Contains(t, plist, "<string>/usr/local/bin/superdev-agent</string>")
@@ -43,6 +57,15 @@ func TestMacOSLaunchDaemonPlist(t *testing.T) {
 	assert.Contains(t, plist, "<string>bootstrap</string>")
 	assert.Contains(t, plist, "<string>/Library/Application Support/SuperDev/Agent</string>")
 	assert.Contains(t, plist, "<key>KeepAlive</key>")
+	assert.Contains(t, plist, "<key>EnvironmentVariables</key>")
+	assert.Contains(t, plist, "<key>HOME</key>")
+	assert.Contains(t, plist, "<string>/Users/alice</string>")
+}
+
+func TestMacOSLaunchDaemonPlistHomeFromRootUser(t *testing.T) {
+	plist := MacOSLaunchDaemonPlist(ServiceOptions{User: "root"})
+	assert.Contains(t, plist, "<key>HOME</key>")
+	assert.Contains(t, plist, "<string>/var/root</string>")
 }
 
 func TestMacOSUserLaunchAgentPlist(t *testing.T) {

@@ -225,7 +225,7 @@ func (a *App) installAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	session := newAgentInstallSession(host.ID, sessionReq, time.Now().UTC())
 	a.rememberAgentInstallToken(session.Token)
-	opts := agentServiceOptionsFromSession(session)
+	opts := agentServiceOptionsFromSession(session, host)
 	result, err := a.hostAgentInstaller.Install(r.Context(), host, opts)
 	if err != nil {
 		var installErr *installer.InstallError
@@ -364,12 +364,13 @@ func (a *App) updateAgentBinary(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func agentServiceOptionsFromSession(session agentInstallSession) installer.ServiceOptions {
+func agentServiceOptionsFromSession(session agentInstallSession, host model.Host) installer.ServiceOptions {
 	return installer.ServiceOptions{
 		BindAddress:    session.Token.BindAddress,
 		Port:           session.Token.RemoteAgentPort,
 		RequireAuth:    session.Token.BootstrapToken != "",
 		BootstrapToken: session.Token.BootstrapToken,
+		User:           host.SSHUser,
 	}
 }
 
