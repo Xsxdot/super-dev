@@ -37,19 +37,20 @@ type fakeRunner struct {
 type fakeResponse struct {
 	prefix  string
 	stdout  string
+	stderr  string
 	exitVal int
 	err     error
 }
 
-func (f *fakeRunner) run(ctx context.Context, cmd, workDir string) (string, int, error) {
+func (f *fakeRunner) run(ctx context.Context, cmd, workDir string) (CommandResult, error) {
 	f.calls = append(f.calls, fakeCall{cmd: cmd, workDir: workDir})
 	for _, r := range f.responses {
 		if strings.HasPrefix(cmd, r.prefix) {
-			return r.stdout, r.exitVal, r.err
+			return CommandResult{Stdout: r.stdout, Stderr: r.stderr, ExitCode: r.exitVal}, r.err
 		}
 	}
 	f.t.Fatalf("fakeRunner 未配置响应的命令: %q", cmd)
-	return "", 0, nil
+	return CommandResult{}, nil
 }
 
 // ---- InspectRemote 三分支 ----
@@ -288,6 +289,51 @@ func TestEnsureCheckout_CloneFailureIncludesExitCodeAndTail(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "fatal: Authentication failed") {
 		t.Errorf("错误信息应包含最后一行输出, got %v", err)
+	}
+}
+
+// TestRunCheckoutStepIncludesStderr 钉死「命令失败时 stderr 必须进入错误信息」。
+//
+// 为什么：git 把失败原因（Host key verification failed、Permission denied、
+// 分支不存在）全写在 stderr 上。丢掉 stderr 之后错误信息里只剩一个
+// exitCode=128，使用者与排障者都无法判断该去修什么。
+func TestRunCheckoutStepIncludesStderr(t *testing.T) {
+	fr := &fakeRunner{t: t, responses: []fakeResponse{
+		{prefix: "test -d", stdout: "no"},
+		{prefix: "git clone", stderr: "fatal: Host key verification failed.", exitVal: 128},
+	}}
+
+	err := EnsureCheckout(context.Background(), fr.run, "/opt/demo", "git@example.com:x/y.git", "main", nil)
+
+	if err == nil {
+		t.Fatal("clone 失败应返回 error")
+	}
+	if !strings.Contains(err.Error(), "Host key verification failed") {
+		t.Fatalf("错误信息应包含 stderr 原因, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "exitCode=128") {
+		t.Fatalf("错误信息应包含 exitCode=128, got %v", err)
+	}
+}
+
+// TestRunCheckoutStepStderrRedacted 钉死 stderr 也要过凭据脱敏。
+//
+// 为什么单独一条：补回 stderr 的动作本身有反向风险——git 的失败输出常常
+// 原样回显带内嵌凭据的 remote URL。修「诊断信息缺失」不能顺手制造
+// 「凭据写进日志与数据库」。
+func TestRunCheckoutStepStderrRedacted(t *testing.T) {
+	fr := &fakeRunner{t: t, responses: []fakeResponse{
+		{prefix: "test -d", stdout: "no"},
+		{prefix: "git clone", stderr: "fatal: could not read from https://user:s3cr3t@example.com/x/y.git", exitVal: 128},
+	}}
+
+	err := EnsureCheckout(context.Background(), fr.run, "/opt/demo", "https://example.com/x/y.git", "main", nil)
+
+	if err == nil {
+		t.Fatal("clone 失败应返回 error")
+	}
+	if strings.Contains(err.Error(), "s3cr3t") {
+		t.Fatalf("stderr 中的凭据不应出现在错误信息: %v", err)
 	}
 }
 

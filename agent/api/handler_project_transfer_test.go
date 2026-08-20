@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/gitinfo"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 )
@@ -66,8 +67,9 @@ func runTransferGit(t *testing.T, dir string, args ...string) string {
 // 这个包级变量（transferRemoteRunner 是唯一的远端探测测试 seam）。
 func setTransferRemoteRunner(t *testing.T, fn func(cmd string) (string, int, error)) {
 	t.Helper()
-	transferRemoteRunner = func(_ context.Context, cmd, _ string) (string, int, error) {
-		return fn(cmd)
+	transferRemoteRunner = func(_ context.Context, cmd, _ string) (gitinfo.CommandResult, error) {
+		stdout, exitCode, err := fn(cmd)
+		return gitinfo.CommandResult{Stdout: stdout, ExitCode: exitCode}, err
 	}
 	t.Cleanup(func() { transferRemoteRunner = nil })
 }

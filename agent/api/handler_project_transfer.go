@@ -564,7 +564,7 @@ func (a *App) resolveTransferRunner(target pipeline.Target) gitinfo.Runner {
 }
 
 // buildTransferRemoteRunner 把 pipeline.RoutingRunner.RunRemote 适配成
-// gitinfo.Runner 的三态契约（stdout/exitCode/err）。
+// gitinfo.Runner 的完整命令结果契约（stdout/stderr/exitCode/error）。
 //
 // 参数：
 //   - target: 已解析好的目标 host（HostID/HostName），由 transferPreflight
@@ -576,10 +576,12 @@ func (a *App) resolveTransferRunner(target pipeline.Target) gitinfo.Runner {
 //     跑完但非零退出时，err 的动态类型会实现 ExitCode() int（如
 //     pipeline.CommandExitError），必须用 errors.As 从错误链上取出这个退出码
 //     并把 err 归零——这是"探测到的确凿事实"（如目录非仓库），不是传输层故障。
+//   - stdout 与 stderr 分开收集：探测类命令的判定只认 stdout，stderr 只进入
+//     失败诊断，避免 shell 的提示噪音把 test -d / pwd 的精确结果带偏。
 //   - 其余非 nil err（SSH/隧道连不通等）原样透传，交给 InspectRemote 整体
 //     上抛，不能被误判成"目录不存在/不是仓库"这类确凿的探测事实。
 func (a *App) buildTransferRemoteRunner(target pipeline.Target) gitinfo.Runner {
-	return func(ctx context.Context, cmd, _ string) (string, int, error) {
+	return func(ctx context.Context, cmd, _ string) (gitinfo.CommandResult, error) {
 		sshExecutor := pipeline.NewSSHExecutor(func(hostID string) (model.Host, bool) {
 			host, found, err := hostByID(a.remoteStore, hostID)
 			if err != nil {
@@ -593,19 +595,31 @@ func (a *App) buildTransferRemoteRunner(target pipeline.Target) gitinfo.Runner {
 		}
 		runner := pipeline.NewRoutingRunner(a.agentHealth, agentRunner, sshExecutor)
 
-		var lines []string
+		var outLines, errLines []string
 		runErr := runner.RunRemote(ctx, target, cmd, "", func(line, stream string) {
-			if stream == "stdout" {
-				lines = append(lines, line)
+			// 两股分开收：诊断要 stderr，而探测类命令的判定只认 stdout，
+			// 合并会让 shell 的任何一行 stderr 把 test -d / pwd 的判断带偏。
+			if stream == "stderr" {
+				errLines = append(errLines, line)
+				return
 			}
+			outLines = append(outLines, line)
 		})
-		stdout := strings.Join(lines, "\n")
+		res := gitinfo.CommandResult{
+			Stdout: strings.Join(outLines, "\n"),
+			Stderr: strings.Join(errLines, "\n"),
+		}
 
 		var exitErr interface{ ExitCode() int }
 		if errors.As(runErr, &exitErr) {
-			return stdout, exitErr.ExitCode(), nil
+			res.ExitCode = exitErr.ExitCode()
+			runErr = nil
 		}
-		return stdout, 0, runErr
+		if res.ExitCode != 0 || runErr != nil {
+			log.Printf("[SuperDev] 转移远端命令非正常结束 cmd=%q exitCode=%d stderr=%s",
+				cmd, res.ExitCode, redactCreds(strings.Join(tailLines(errLines, 3), " ⏎ ")))
+		}
+		return res, runErr
 	}
 }
 

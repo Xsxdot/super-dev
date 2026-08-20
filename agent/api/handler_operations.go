@@ -80,10 +80,6 @@ type operationDecisionRequest struct {
 	GrantGrace bool   `json:"grant_grace"`
 }
 
-type operationApprovalTokenBody struct {
-	ApprovalToken string `json:"approval_token"`
-}
-
 // preflightOperation 处理 POST /api/operations/preflight。
 func (a *App) preflightOperation(w http.ResponseWriter, r *http.Request) {
 	var req operationTargetRequest
@@ -654,26 +650,24 @@ func writeApprovalTokenError(w http.ResponseWriter, err error, plan operation.Pl
 	jsonCodeError(w, http.StatusForbidden, code, msg, map[string]any{"plan": plan})
 }
 
+// approvalTokenFromRequest 从请求里取一次性审批 token。
+//
+// 参数：
+//   - r: 当前请求
+//
+// 返回：
+//   - 去掉首尾空白的 token；不存在时返回空串
+//
+// 注意：
+//   - 唯一通道是 X-SuperDev-Approval-Token 头。这里曾经有一条读 body
+//     approval_token 字段的兜底，但它只在 handler 尚未消费 body 或 handler
+//     用 decodeJSONPreserveBody 回填过 body 时才生效——用 json.NewDecoder(r.Body)
+//     解码的几个 handler 会把 body 读空，兜底静默失效，调用方看到的是「明明
+//     批准了却还是 403」。同一个字段在不同端点上行为不同，比没有这个字段更糟，
+//     因此整条删除而不是逐个 handler 打补丁。
+//   - 本函数不读也不消费 r.Body：任何 handler 都可以在它之后正常解码请求体。
 func approvalTokenFromRequest(r *http.Request) string {
-	if token := strings.TrimSpace(r.Header.Get("X-SuperDev-Approval-Token")); token != "" {
-		return token
-	}
-	if r.Body == nil {
-		return ""
-	}
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		return ""
-	}
-	r.Body = io.NopCloser(bytes.NewReader(raw))
-	if len(raw) == 0 {
-		return ""
-	}
-	var body operationApprovalTokenBody
-	if err := json.Unmarshal(raw, &body); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(body.ApprovalToken)
+	return strings.TrimSpace(r.Header.Get("X-SuperDev-Approval-Token"))
 }
 
 func decodeJSONPreserveBody(r *http.Request, out any) error {

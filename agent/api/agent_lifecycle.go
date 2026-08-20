@@ -106,6 +106,10 @@ func (a *App) uninstallAgent(ctx context.Context, hostID string, removeData bool
 		log.WithErr(err).WithFields(fields).Error("远端 Agent 已卸载但 Controller 配置移除失败")
 		return installer.UninstallResult{}, &agentUninstallError{Stage: agentUninstallStageConfig, Err: err}
 	}
+	// 配置移除成功才摘除快照：失败时必须保留可管理入口，不能让用户先失去这台机器的可见性。
+	if a.nodeRegistry != nil {
+		a.nodeRegistry.Forget(hostID)
+	}
 	log.WithFields(fields).Info("Controller Agent 配置已移除")
 	log.WithFields(fields).Info("远端 Agent 卸载及 Controller 配置移除完成")
 	return result, nil
@@ -161,6 +165,10 @@ func (a *App) detachAgent(ctx context.Context, hostID string, reason agentDetach
 	if err := a.detachAgentConfig(ctx, hostID); err != nil {
 		log.WithErr(err).WithFields(fields).Error("Agent Detach 移除 Controller 配置失败")
 		return &agentDetachError{Err: err}
+	}
+	// 配置移除成功才摘除快照：Detach 失败时仍需保留可重试、可见的 Agent 入口。
+	if a.nodeRegistry != nil {
+		a.nodeRegistry.Forget(hostID)
 	}
 	log.WithFields(fields).Info("Agent Detach 完成；仅已移除 Controller 配置")
 	return nil

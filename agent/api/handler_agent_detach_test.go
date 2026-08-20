@@ -21,6 +21,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/noderegistry"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/operation"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
@@ -28,7 +31,8 @@ import (
 // TestDetachAgentRemovesOnlyControllerConfigAndPreservesHost 验证受信 Desktop Origin 的 Detach 只删除 Controller 配置。
 func TestDetachAgentRemovesOnlyControllerConfigAndPreservesHost(t *testing.T) {
 	fake := &fakeAgentInstaller{}
-	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake})
+	registry := noderegistry.New(nil, noderegistry.Options{})
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), InstallerOverride: fake, NodeRegistryOverride: registry})
 	require.NoError(t, err)
 	defer app.Close()
 	hostID := createInstallTestHost(t, app)
@@ -37,6 +41,9 @@ func TestDetachAgentRemovesOnlyControllerConfigAndPreservesHost(t *testing.T) {
 	  "config":{"listen_port":57019},
 	  "security":{"tls":{"mode":"auto"}}
 	`)
+	registry.ApplyForTest([]nodetransport.NodeStatus{
+		{HostID: hostID, Agent: model.AgentRuntime{Installed: true, Version: "0.2.3", Reachable: true}},
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/agents/"+hostID+"/detach", bytes.NewBufferString(`{"reason":"manual_uninstall_failed"}`))
 	req.Header.Set("Origin", "tauri://localhost")
@@ -55,6 +62,8 @@ func TestDetachAgentRemovesOnlyControllerConfigAndPreservesHost(t *testing.T) {
 	_, hostFound, err := app.remoteHostByID(hostID)
 	require.NoError(t, err)
 	assert.True(t, hostFound)
+	_, snapshotFound := registry.SnapshotOf(hostID)
+	assert.False(t, snapshotFound, "Detach 成功后 registry 不应保留该 host 的陈旧快照")
 }
 
 // TestDetachAgentRetainsConfigWhenControllerRemovalFails 验证 Controller 配置写失败时保持可重试状态。

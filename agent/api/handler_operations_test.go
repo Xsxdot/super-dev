@@ -13,8 +13,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +26,32 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
 )
+
+// TestApprovalTokenFromRequestOnlyReadsHeader 钉死审批 token 的唯一通道是 HTTP 头。
+//
+// 为什么要有这条：body 通道曾经存在但只在部分端点生效（handler 先用
+// json.NewDecoder 读空了 body），是一条会让调用方拿到「批准了却仍 403」的
+// 静默不一致。删掉之后必须有测试挡住它被「顺手加回来」。
+func TestApprovalTokenFromRequestOnlyReadsHeader(t *testing.T) {
+	t.Run("头存在时返回头的值", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"approval_token":"from_body"}`))
+		r.Header.Set("X-SuperDev-Approval-Token", "  from_header  ")
+		require.Equal(t, "from_header", approvalTokenFromRequest(r))
+	})
+
+	t.Run("只有 body 携带 token 时不认", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"approval_token":"from_body"}`))
+		require.Equal(t, "", approvalTokenFromRequest(r))
+	})
+
+	t.Run("body 不被消费——后续 handler 仍能读到完整请求体", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{"intent":"start_dev"}`))
+		_ = approvalTokenFromRequest(r)
+		raw, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"intent":"start_dev"}`, string(raw))
+	})
+}
 
 func TestOperationAPI_PreflightApproveRejectAndAudit(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
