@@ -35,6 +35,15 @@ func (a *App) applyManagedDeployments(list []model.ManagedDeployment) model.Mana
 	normalized := normalizeManagedDeployments(list)
 	projects := managedProjectsFromDeployments(normalized)
 	desiredCollectors := managedCollectorsFromDeployments(normalized)
+	// 端口声明是否随清单到达，是排查「端口镜像建立不起来」的第一个分叉点：
+	// 这里为 0 说明断在控制面下发侧，非 0 而镜像仍未建立说明断在控制面过滤或转发侧。
+	withPorts := 0
+	for _, item := range normalized {
+		if len(item.Ports) > 0 {
+			withPorts++
+		}
+	}
+	log.WithField("deployments_with_ports", withPorts).Info("远程 managed deployment 端口声明统计")
 	log.WithFields(map[string]any{
 		"normalized_deployment_count": len(normalized), "desired_collector_count": len(desiredCollectors),
 	}).Info("开始 reconcile managed collector")
@@ -185,6 +194,7 @@ func managedProjectsFromDeployments(list []model.ManagedDeployment) []model.Proj
 			ID:       item.DeploymentID,
 			EnvName:  item.EnvName,
 			Location: model.LocationLocal,
+			Ports:    item.Ports,
 			Runtime:  item.Runtime,
 			Logs:     item.Logs,
 		}

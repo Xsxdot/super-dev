@@ -67,6 +67,28 @@ func managedDeploymentFixture() []model.ManagedDeployment {
 	}}
 }
 
+// TestManagedProjectsFromDeploymentsRestoresPorts 钉死下发链路的第二段：
+// 载荷带过来了，合成 model.Deployment 时也必须写回去，否则
+// runtime_status_service 的 Ports: dep.Ports 依然读到 nil。
+func TestManagedProjectsFromDeploymentsRestoresPorts(t *testing.T) {
+	list := []model.ManagedDeployment{{
+		DeploymentID: "dep-1",
+		ServiceID:    "svc-1",
+		ServiceName:  "web",
+		ProjectID:    "proj-1",
+		EnvName:      "dev",
+		Location:     model.LocationLocal,
+		Ports:        []int{8899},
+	}}
+
+	projects := managedProjectsFromDeployments(list)
+
+	require.Len(t, projects, 1)
+	require.Len(t, projects[0].Services, 1)
+	require.Len(t, projects[0].Services[0].Deployments, 1)
+	assert.Equal(t, []int{8899}, projects[0].Services[0].Deployments[0].Ports)
+}
+
 func TestPutManagedDeploymentsPersistsRegistersProjectAndRuntimeStatus(t *testing.T) {
 	dataDir := t.TempDir()
 	app := newManagedDeploymentTestApp(t, dataDir)

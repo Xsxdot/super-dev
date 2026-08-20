@@ -86,6 +86,10 @@ type Deps struct {
 	Tunnels  TunnelController
 	Occupier func(port int, resolve ManagedResolver) (*Occupier, error)
 	Resolve  ManagedResolver
+	// KnownDeployments 返回本控制面已知的 deployment id 集合；nil 表示不过滤。
+	// 每轮 reconcile 现取而非装配期快照——装配期快照会漏掉装配之后新增的项目，
+	// nodeRegistry.Start 一次性算 coverage 就踩过这个坑（新增主机后必须重启控制面）。
+	KnownDeployments func() map[string]struct{}
 }
 
 // mirrorKey 是内部状态条目的身份：host + deployment + port。
@@ -156,6 +160,10 @@ type Manager struct {
 	// entries 由 loop 独占，仅 reconcile goroutine 访问 → 无锁。
 	entries       map[mirrorKey]*mirrorEntry
 	lastBroadcast []MirrorStatus // loop 独占：上轮广播过的快照，用于变更检测
+	// filteredOnce 记住已就「被管辖过滤掉」打过日志的 deployment id，
+	// 避免每轮 reconcile（5s 一次）重复刷同一条。只增不减：这些 id 通常
+	// 长期属于别的控制面，反复提醒没有价值。
+	filteredOnce map[string]struct{}
 
 	// outMu 保护对外快照与订阅集合。
 	outMu     sync.Mutex
@@ -185,7 +193,11 @@ func NewManager(deps Deps) *Manager {
 		loopDone:      make(chan struct{}),
 		entries:       map[mirrorKey]*mirrorEntry{},
 		lastBroadcast: []MirrorStatus{},
+		filteredOnce:  map[string]struct{}{},
 		subs:          map[int]chan []MirrorStatus{},
+	}
+	if deps.KnownDeployments == nil {
+		log.Printf("[SuperDev] portmirror: KnownDeployments 未配置，不做管辖过滤——生产环境不应出现")
 	}
 	go m.loop()
 	return m
@@ -355,7 +367,11 @@ func (m *Manager) reconcile() {
 		hosts[h.ID] = h
 	}
 
-	expected := computeExpected(frame, hosts)
+	var known map[string]struct{}
+	if m.deps.KnownDeployments != nil {
+		known = m.deps.KnownDeployments()
+	}
+	expected := computeExpected(frame, hosts, known, m.filteredOnce)
 
 	m.teardownUnexpected(expected, frame, hosts)
 	m.converge(expected, now)
@@ -635,17 +651,21 @@ func (m *Manager) buildSnapshot() []MirrorStatus {
 	return out
 }
 
-// computeExpected 计算期望态。
+// computeExpected 计算期望镜像态。
 //
-// 期望态定义：对每台 DevMachineMode==true 的主机，帧内 Health ∈ {running,healthy,
-// restarting} 的实例，其每个声明端口 → 一条应存在的转发。restarting 保留转发是刻意的：
-// 避免重启抖动把浏览器标签的转发断掉。同 host 多 deployment 声明同端口时，按 deploymentID
-// 升序，第一个获得转发，其余标 duplicate（落败者）。
+// 参数：
+//   - frame: 最新节点状态帧
+//   - hosts: 全部主机（本函数内按 DevMachineMode 过滤）
+//   - known: 本控制面已知的 deployment id 集合；**nil 表示不过滤**
+//   - filteredOnce: 「已就该 id 打过日志」的记忆，由调用方持有并跨轮复用；
+//     nil 表示不打过滤日志（测试直接调用时传 nil）
 //
-// 返回：
-//   - expected: 全部期望条目（含落败者，落败者 duplicate=true；每个 host+port
-//     恰有一个 duplicate=false 的赢家获得转发）
-func computeExpected(frame []nodetransport.NodeStatus, hosts map[string]model.Host) map[mirrorKey]expInfo {
+// 注意：known 为 nil 时不过滤，是为了兼容大量省略字段构造 Deps 的既有测试；
+// 生产装配必须提供它，否则会为本控制面不管理的服务擅自占用本机端口。
+//
+// 本函数除了写入 filteredOnce 之外无副作用——保持它可被测试直接调用，
+// 这也是「记忆」由调用方传入而不是挂在 Manager 上的原因。
+func computeExpected(frame []nodetransport.NodeStatus, hosts map[string]model.Host, known map[string]struct{}, filteredOnce map[string]struct{}) map[mirrorKey]expInfo {
 	expected := map[mirrorKey]expInfo{}
 	claimedPorts := map[fwdKey]struct{}{}
 
@@ -663,6 +683,21 @@ func computeExpected(frame []nodetransport.NodeStatus, hosts map[string]model.Ho
 			continue
 		}
 		for _, inst := range n.Deployments {
+			// 只镜像本控制面自己管理的 deployment：帧口径放宽后会带来本控制面
+			// 不认识的实例，为它们建立转发等于擅自占用用户本机端口。
+			if known != nil {
+				if _, ok := known[inst.DeploymentID]; !ok {
+					// 「为什么这个服务没被镜像」是本设计最可能引发的疑问，
+					// 必须留下可 grep 的证据；每个 id 只打一次，避免逐轮刷屏。
+					if filteredOnce != nil {
+						if _, seen := filteredOnce[inst.DeploymentID]; !seen {
+							filteredOnce[inst.DeploymentID] = struct{}{}
+							log.Printf("[SuperDev] portmirror: 跳过本控制面未管理的 deployment id=%s host=%s ports=%v", inst.DeploymentID, n.HostID, inst.Ports)
+						}
+					}
+					continue
+				}
+			}
 			if !isRunningHealth(inst.Metrics.Health) {
 				continue
 			}

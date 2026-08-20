@@ -58,6 +58,32 @@ func TestHostDeploymentReconcilerDesiredForHostRewritesLocationAndFilters(t *tes
 	assert.Equal(t, model.LogKindJournalctl, got[0].Logs.Type)
 }
 
+// TestDesiredDeploymentsForHostCarriesPorts 钉死「端口声明必须随下发清单过去」。
+//
+// 这是 F2 的根因之一：ManagedDeployment 此前没有 Ports 字段，远端因此永远
+// 拿不到端口，端口镜像的期望态恒为空。没有这条测试，同样的字段遗漏可以再发生一次。
+func TestDesiredDeploymentsForHostCarriesPorts(t *testing.T) {
+	projects := []model.Project{{
+		ID: "proj-1",
+		Services: []model.Service{{
+			ID:   "svc-1",
+			Name: "web",
+			Deployments: []model.Deployment{{
+				ID:       "dep-1",
+				EnvName:  "dev",
+				Location: model.LocationRemote,
+				HostIDs:  []string{"host-A"},
+				Ports:    []int{8899, 9000},
+			}},
+		}},
+	}}
+
+	got := desiredDeploymentsForHost(projects, "host-A")
+
+	require.Len(t, got, 1)
+	assert.Equal(t, []int{8899, 9000}, got[0].Ports)
+}
+
 func TestHostDeploymentReconcilerReconcileSkipsDisconnectedTunnel(t *testing.T) {
 	app := newTestAppForPackage(t)
 	reconciler := NewHostDeploymentReconciler(app, testNodeTransport{table: map[string]string{}}, time.Second)
