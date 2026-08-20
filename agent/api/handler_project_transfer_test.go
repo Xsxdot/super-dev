@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -655,4 +656,62 @@ func TestTransferRemoteRunnerKeepsSystemLinesOutOfStdout(t *testing.T) {
 	// 取证面：system 与 stderr 都留着，失败时看得见。
 	assert.Contains(t, res.Stderr, "remote route host h1 -> agent")
 	assert.Contains(t, res.Stderr, "warning: something")
+}
+
+// TestTransferExecute_RejectionsAreLogged 钉死「转移执行的前置拒绝必须留痕」。
+//
+// 为什么这条值得一个专门的测试：这些分支此前逐个直接 jsonError 返回，一行
+// 日志都不打。用户看到的是弹窗里一条红色错误条，服务端则完全没有证据——
+// 真机上「点了推送并转移，界面没反应」为此排查了一整轮，最后只能靠复现才
+// 确认请求到底有没有到达 handler。错误面对用户是红条，对运维必须是日志。
+//
+// 用未推送的脏仓库触发「本机存在未提交的变更」这一条作代表：它是真机上最
+// 常撞的一条，也是唯一一条与 preflight 结论可能不一致的（TOCTOU）。
+func TestTransferExecute_RejectionsAreLogged(t *testing.T) {
+	var logs strings.Builder
+	restore := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(restore) })
+
+	app := newTestAppForPackage(t)
+	srv := newHTTPServerForPackage(t, app)
+
+	dir := initTransferTestRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("uncommitted"), 0o644))
+	project := addTransferTestProject(t, srv, dir)
+
+	_, err := app.remoteStore.AddHost(model.Host{ID: "host-dev", Name: "linux-01", DevMachineMode: true})
+	require.NoError(t, err)
+
+	resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer", "application/json",
+		strings.NewReader(`{"host_id":"host-dev"}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	assert.Contains(t, logs.String(), "前置校验拒绝", "拒绝必须打日志，否则服务端对这次失败零证据")
+	assert.Contains(t, logs.String(), project.ID, "日志必须带项目 ID，否则多项目并发时无法定位")
+}
+
+// TestTransferExecute_MissingHostIDIsLogged 覆盖参数级拒绝：它比 git 类拒绝
+// 更早短路，走的是另一条出口，漏掉同样会留下日志断档。
+func TestTransferExecute_MissingHostIDIsLogged(t *testing.T) {
+	var logs strings.Builder
+	restore := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(restore) })
+
+	app := newTestAppForPackage(t)
+	srv := newHTTPServerForPackage(t, app)
+	dir := initTransferTestRepo(t)
+	project := addTransferTestProject(t, srv, dir)
+	_ = app
+
+	resp, err := http.Post(srv.URL+"/api/projects/"+project.ID+"/transfer", "application/json",
+		strings.NewReader(`{}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	assert.Contains(t, logs.String(), "host_id is required")
 }

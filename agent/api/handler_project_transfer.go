@@ -229,6 +229,23 @@ const transferExecTimeout = 30 * time.Minute
 // 宁可多等几秒也要给出完整结论。
 const transferPreflightTimeout = 30 * time.Second
 
+// rejectTransfer 是转移执行前置校验的统一拒绝出口：打一条带上下文的日志，
+// 再返回 400。
+//
+// 参数：
+//   - w: 响应写入器
+//   - projectID: 被拒绝的项目 ID（日志定位用）
+//   - reason: 面向用户的中文原因，同时作为日志正文
+//
+// 为什么必须存在：这些前置校验此前逐个直接 jsonError 返回，一行日志都不打。
+// 一次用户可见的失败因此在服务端不留任何证据——真机上「点了推送并转移，
+// 界面没反应」排查了一整轮，最后只能靠复现才知道请求到底有没有到达。
+// 错误面对用户是红条，对运维必须是日志，两者缺一不可。
+func rejectTransfer(w http.ResponseWriter, projectID, reason string) {
+	log.Printf("[SuperDev] transfer execute: 前置校验拒绝 project=%s reason=%s", projectID, reason)
+	jsonError(w, http.StatusBadRequest, reason)
+}
+
 // startProjectTransfer 处理 POST /api/projects/{id}/transfer：校验后异步启动
 // 一次正向转移，立即 202 返回初始状态；同项目已有进行中的转移则 409。
 //
@@ -239,11 +256,11 @@ func (a *App) startProjectTransfer(w http.ResponseWriter, r *http.Request) {
 
 	var req transferPreflightRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, http.StatusBadRequest, "invalid request body")
+		rejectTransfer(w, projectID, "invalid request body")
 		return
 	}
 	if strings.TrimSpace(req.HostID) == "" {
-		jsonError(w, http.StatusBadRequest, "host_id is required")
+		rejectTransfer(w, projectID, "host_id is required")
 		return
 	}
 
@@ -251,6 +268,7 @@ func (a *App) startProjectTransfer(w http.ResponseWriter, r *http.Request) {
 	project, ok := a.findProject(projectID)
 	a.mu.RUnlock()
 	if !ok {
+		log.Printf("[SuperDev] transfer execute: 前置校验拒绝 project=%s reason=项目不存在", projectID)
 		jsonError(w, http.StatusNotFound, "project not found")
 		return
 	}
@@ -279,27 +297,27 @@ func (a *App) startProjectTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !local.IsRepo {
-		jsonError(w, http.StatusBadRequest, "项目根目录不是 git 仓库，无法转移")
+		rejectTransfer(w, projectID, "项目根目录不是 git 仓库，无法转移")
 		return
 	}
 	if local.RemoteURL == "" {
-		jsonError(w, http.StatusBadRequest, "本机未配置 origin，目标机无法从远端 clone，无法转移")
+		rejectTransfer(w, projectID, "本机未配置 origin，目标机无法从远端 clone，无法转移")
 		return
 	}
 	if local.Branch == "" {
-		jsonError(w, http.StatusBadRequest, "本机处于 detached HEAD，无法确定要检出的分支")
+		rejectTransfer(w, projectID, "本机处于 detached HEAD，无法确定要检出的分支")
 		return
 	}
 	if local.Dirty {
-		jsonError(w, http.StatusBadRequest, "本机存在未提交的变更，请先提交并推送后再转移")
+		rejectTransfer(w, projectID, "本机存在未提交的变更，请先提交并推送后再转移")
 		return
 	}
 	if local.Ahead > 0 {
-		jsonError(w, http.StatusBadRequest, fmt.Sprintf("本机有 %d 个提交尚未推送到远端，请先推送后再转移", local.Ahead))
+		rejectTransfer(w, projectID, fmt.Sprintf("本机有 %d 个提交尚未推送到远端，请先推送后再转移", local.Ahead))
 		return
 	}
 	if local.Ahead == -1 {
-		jsonError(w, http.StatusBadRequest, "当前分支未配置上游分支，请先 git push -u 后再转移")
+		rejectTransfer(w, projectID, "当前分支未配置上游分支，请先 git push -u 后再转移")
 		return
 	}
 
@@ -313,6 +331,7 @@ func (a *App) startProjectTransfer(w http.ResponseWriter, r *http.Request) {
 
 	run := newTransferRun(projectID, host.ID, host.Name, targetDir, local.Branch, cleanRepoURL)
 	if !a.beginTransfer(projectID, run) {
+		log.Printf("[SuperDev] transfer execute: 前置校验拒绝 project=%s reason=该项目已有进行中的转移", projectID)
 		jsonError(w, http.StatusConflict, "该项目已有进行中的转移")
 		return
 	}
@@ -423,20 +442,26 @@ func (a *App) beginTransfer(projectID string, run *transferRun) bool {
 //   - 已开启 DevMachineMode——转移后项目由目标机作为"开发机"消费，未开启
 //     该开关的主机不参与端口镜像等下游链路，转过去也无法正常工作
 func (a *App) resolveTransferTargetHost(w http.ResponseWriter, hostID string) (model.Host, bool) {
+	// 这三条拒绝同样必须留痕：它们与 startProjectTransfer 的前置校验共同构成
+	// 「点了没反应」的完整失败面，缺任何一条排查时都会出现日志断档。
 	if hostID == a.identity.NodeID {
+		log.Printf("[SuperDev] transfer: 目标 host 拒绝 host=%s reason=转移目标不能是本机", hostID)
 		jsonError(w, http.StatusBadRequest, "转移目标不能是本机")
 		return model.Host{}, false
 	}
 	host, found, err := hostByID(a.remoteStore, hostID)
 	if err != nil {
+		log.Printf("[SuperDev] transfer: 读取 host 列表失败 host=%s err=%v", hostID, err)
 		jsonError(w, http.StatusInternalServerError, "读取 host 列表失败: "+err.Error())
 		return model.Host{}, false
 	}
 	if !found {
+		log.Printf("[SuperDev] transfer: 目标 host 拒绝 host=%s reason=host 不存在", hostID)
 		jsonError(w, http.StatusNotFound, "host not found")
 		return model.Host{}, false
 	}
 	if !host.DevMachineMode {
+		log.Printf("[SuperDev] transfer: 目标 host 拒绝 host=%s reason=未开启 DevMachineMode", hostID)
 		jsonError(w, http.StatusBadRequest, "目标 host 未开启 DevMachineMode，不能作为转移目标")
 		return model.Host{}, false
 	}
