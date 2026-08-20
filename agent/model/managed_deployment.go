@@ -14,7 +14,8 @@ package model
 // 参数语义：
 //   - DeploymentID: 原始 deployment.ID，runtime-status 按它匹配
 //   - ServiceID/ServiceName/ProjectID/EnvName: 远端重建本地 project 视图所需字段
-//   - Runtime: 远端本机视角的运行态采样配置
+//   - Runtime: 远端本机视角的运行态采样配置；本载荷不承载 Deployment 的
+//     Language 或 StartCommand 启动信息，因此下发式 deployment 不能由目标机 agent 拉起
 //   - Logs: 远端本机视角的日志采集配置
 //   - Location: 必须是 LocationLocal，避免远端 runtime-status 二次转发
 //
