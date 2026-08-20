@@ -99,3 +99,36 @@ func TestValidateRemoteRuntimeTypeIgnoresNonRemoteAndRuntimeless(t *testing.T) {
 	}
 	require.Empty(t, validateRemoteRuntimeType("web", remoteNoRuntime))
 }
+
+// TestDeploymentPatchCarriesPorts 钉死「ports 能经 patch 写进来」。
+//
+// 为什么单列一条：validate.go 一直在校验 deployment.ports，DeploymentPatch
+// 却没有对应字段——这条路径长期「校验得了、设置不了」，而缺失是静默的：
+// 请求里带 ports 会被 JSON 解码直接丢弃，HTTP 200，改动凭空消失。
+// 新建与更新两条路各走一遍，缺一条就会留下「新建能设、更新设不了」的半残。
+func TestDeploymentPatchCarriesPorts(t *testing.T) {
+	t.Run("新建", func(t *testing.T) {
+		dep := deploymentFromPatch(DeploymentPatch{
+			ID: "dep-1", EnvName: "dev", Location: model.LocationLocal, Ports: []int{8080},
+		})
+		require.Equal(t, []int{8080}, dep.Ports)
+	})
+
+	t.Run("更新", func(t *testing.T) {
+		existing := model.Deployment{ID: "dep-1", EnvName: "dev", Ports: []int{3000}}
+		got := mergeDeployment(existing, DeploymentPatch{Ports: []int{8080, 9090}})
+		require.Equal(t, []int{8080, 9090}, got.Ports)
+	})
+
+	t.Run("未声明时不动既有值", func(t *testing.T) {
+		existing := model.Deployment{ID: "dep-1", EnvName: "dev", Ports: []int{3000}}
+		got := mergeDeployment(existing, DeploymentPatch{Command: "echo hi"})
+		require.Equal(t, []int{3000}, got.Ports, "patch 没提 ports 就不该动它")
+	})
+
+	t.Run("显式空切片清空", func(t *testing.T) {
+		existing := model.Deployment{ID: "dep-1", EnvName: "dev", Ports: []int{3000}}
+		got := mergeDeployment(existing, DeploymentPatch{Ports: []int{}})
+		require.Empty(t, got.Ports, "[] 是「清空」，与 HostIDs/ExtraArgs 同一套约定")
+	})
+}

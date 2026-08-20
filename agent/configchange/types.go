@@ -67,25 +67,32 @@ type ServicePatch struct {
 
 // DeploymentPatch 描述 deployment 的局部 upsert。
 type DeploymentPatch struct {
-	ID           string                     `json:"id,omitempty"`
-	EnvName      string                     `json:"env_name,omitempty"`
-	Location     model.DeployLocation       `json:"location,omitempty"`
-	ControlMode  model.ControlMode          `json:"control_mode,omitempty"`
-	Runtime      *model.RuntimeConfig       `json:"runtime,omitempty"`
-	Logs         *model.LogConfig           `json:"logs,omitempty"`
-	Web          *model.WebEntrypointConfig `json:"web,omitempty"`
-	CodeDebug    *model.CodeDebugConfig     `json:"code_debug,omitempty"`
-	Command      string                     `json:"command,omitempty"`
-	WorkDir      string                     `json:"work_dir,omitempty"`
-	EnvFile      string                     `json:"env_file,omitempty"`
-	Env          map[string]string          `json:"env,omitempty"`
-	HostIDs      []string                   `json:"host_ids,omitempty"`
-	LogType      model.LogSourceType        `json:"log_type,omitempty"`
-	LogTarget    string                     `json:"log_target,omitempty"`
-	ExtraArgs    []string                   `json:"extra_args,omitempty"`
-	ReadOnly     *bool                      `json:"read_only,omitempty"`
-	StartCommand string                     `json:"start_command,omitempty"`
-	StopCommand  string                     `json:"stop_command,omitempty"`
+	ID          string                     `json:"id,omitempty"`
+	EnvName     string                     `json:"env_name,omitempty"`
+	Location    model.DeployLocation       `json:"location,omitempty"`
+	ControlMode model.ControlMode          `json:"control_mode,omitempty"`
+	Runtime     *model.RuntimeConfig       `json:"runtime,omitempty"`
+	Logs        *model.LogConfig           `json:"logs,omitempty"`
+	Web         *model.WebEntrypointConfig `json:"web,omitempty"`
+	CodeDebug   *model.CodeDebugConfig     `json:"code_debug,omitempty"`
+	Command     string                     `json:"command,omitempty"`
+	WorkDir     string                     `json:"work_dir,omitempty"`
+	EnvFile     string                     `json:"env_file,omitempty"`
+	Env         map[string]string          `json:"env,omitempty"`
+	HostIDs     []string                   `json:"host_ids,omitempty"`
+	// Ports 是端口镜像的声明端口。必须可经 patch 设置：validate.go 一直在
+	// 校验它（validateDeploymentPorts），却没有任何 patch 字段能写进来——
+	// 结果是这条路径「校验得了、设置不了」，MCP 侧结构性配不了端口镜像，
+	// 只能绕到全量 setup（那条路的语义是「不在列表里的 service 会被删除」，
+	// 把补一个字段变成一次全量覆写）。
+	// nil 表示不改动，[] 表示显式清空——与 HostIDs/ExtraArgs 同一套约定。
+	Ports        []int               `json:"ports,omitempty"`
+	LogType      model.LogSourceType `json:"log_type,omitempty"`
+	LogTarget    string              `json:"log_target,omitempty"`
+	ExtraArgs    []string            `json:"extra_args,omitempty"`
+	ReadOnly     *bool               `json:"read_only,omitempty"`
+	StartCommand string              `json:"start_command,omitempty"`
+	StopCommand  string              `json:"stop_command,omitempty"`
 }
 
 // ProjectPipelinePatch 描述项目级流水线的 upsert。

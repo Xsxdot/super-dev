@@ -154,6 +154,7 @@ func deploymentFromPatch(patch DeploymentPatch) model.Deployment {
 		EnvFile:      patch.EnvFile,
 		Env:          patch.Env,
 		HostIDs:      patch.HostIDs,
+		Ports:        patch.Ports,
 		LogType:      patch.LogType,
 		LogTarget:    patch.LogTarget,
 		ExtraArgs:    patch.ExtraArgs,
@@ -215,6 +216,9 @@ func mergeDeployment(existing model.Deployment, patch DeploymentPatch) model.Dep
 	}
 	if patch.HostIDs != nil {
 		dep.HostIDs = patch.HostIDs
+	}
+	if patch.Ports != nil {
+		dep.Ports = patch.Ports
 	}
 	if patch.LogType != "" {
 		dep.LogType = patch.LogType
