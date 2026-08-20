@@ -186,10 +186,8 @@ func TestNodeStatusSnapshotCarriesPortsAndStoppedInstances(t *testing.T) {
 			Deployments: []model.Deployment{dep},
 		}},
 	}
-	// 直接注入 app.projects/managedProjectIDs：走 /api/managed-deployments 的
-	// PUT 流程会经 managedProjectsFromDeployments 转换，而该转换目前不透传 Ports
-	// （model.ManagedDeployment 本身也没有 Ports 字段），不是本任务改动范围。
-	// 这里用常规 Project 配置 + 直接标记 managed，绕开该无关流程。
+	// 直接注入 app.projects/managedProjectIDs：本测试只验证节点快照的运行态组装，
+	// 不把 PUT /api/managed-deployments 的持久化与清单应用流程混进来。
 	app.mu.Lock()
 	app.projects = append(app.projects, project)
 	app.managedProjectIDs[projectID] = struct{}{}
@@ -224,6 +222,45 @@ func TestNodeStatusSnapshotCarriesPortsAndStoppedInstances(t *testing.T) {
 	require.NotNil(t, afterInst)
 	assert.Equal(t, model.HealthRunning, afterInst.Metrics.Health)
 	assert.Equal(t, []int{9100}, afterInst.Ports)
+}
+
+// TestManagedRuntimeInstancesIncludesLocallyRegisteredProjects 钉死帧口径。
+//
+// 这是 F2 的根因之二：归属转移把项目在目标机注册为普通本地项目，它不在
+// managedProjectIDs 里，旧口径下连帧都进不去，端口镜像因此对「归属式开发机」
+// 完全失效。帧的语义应当是「我本机在跑什么」，与「我替谁跑」无关。
+func TestManagedRuntimeInstancesIncludesLocallyRegisteredProjects(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	// 一个普通注册项目（模拟归属转移在目标机注册的那个），刻意不放进 managedProjectIDs。
+	app.projects = []model.Project{{
+		ID:           "homed-proj",
+		Name:         "homed",
+		Environments: []model.Environment{{Name: "dev", IsDev: true}},
+		Services: []model.Service{{
+			ID:   "svc-1",
+			Name: "web",
+			Deployments: []model.Deployment{{
+				ID:       "dep-homed",
+				EnvName:  "dev",
+				Location: model.LocationLocal,
+				Ports:    []int{8899},
+			}},
+		}},
+	}}
+	app.managedProjectIDs = map[string]struct{}{}
+
+	got := app.managedRuntimeInstances(context.Background(), "host-A", "host-A-name")
+
+	var found *model.InstanceStatus
+	for i := range got {
+		if got[i].DeploymentID == "dep-homed" {
+			found = &got[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "本机注册项目的 deployment 必须出现在节点帧里")
+	assert.Equal(t, []int{8899}, found.Ports)
 }
 
 // TestNodeStatusSnapshotDesktopOnlineTracksWsNodesConnections 验证「桌面端在线」信号链：

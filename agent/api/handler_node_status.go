@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xsxdot/gokit/logger"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/remoteobservation"
@@ -193,14 +194,22 @@ func (a *App) nodeStatusSnapshot(ctx context.Context, hostID, hostName string) n
 	}
 }
 
+// managedRuntimeInstances 组装本 agent 本机全部已注册项目的实例事实。
+//
+// 边界：本函数只报告本机观察到的实例和端口，不做 deployment 的归属或管辖判断；
+// 关系判断由持有关系的控制面在 portmirror.computeExpected 中完成。
 func (a *App) managedRuntimeInstances(ctx context.Context, hostID, hostName string) []model.InstanceStatus {
-	projects := a.managedProjectsSnapshot()
+	projects := a.localProjectsSnapshot()
 	out := []model.InstanceStatus{}
 	service := a.runtimeStatusService()
+	withPorts := 0
 	for _, project := range projects {
 		resp := service.Snapshot(ctx, project)
 		for _, env := range resp.Environments {
 			for _, inst := range env.Instances {
+				if len(inst.Ports) > 0 {
+					withPorts++
+				}
 				inst.NodeID = hostID
 				inst.NodeName = hostName
 				inst.IsLocal = false
@@ -208,20 +217,31 @@ func (a *App) managedRuntimeInstances(ctx context.Context, hostID, hostName stri
 			}
 		}
 	}
+	// 高频路径（随节点状态帧每 5s 一次），故降到 Debug：
+	// 排查「端口镜像建立不起来」时，这一条区分「帧里没有这个实例」与
+	// 「帧里有但端口为空」——两者的修复方向完全不同。
+	logger.GetLogger().WithEntryName("NodeStatus").WithFields(map[string]any{
+		"instance_count": len(out),
+		"with_ports":     withPorts,
+	}).Debug("节点帧实例组装完成")
 	return out
 }
 
-func (a *App) managedProjectsSnapshot() []model.Project {
+// localProjectsSnapshot 返回本 agent 已注册的全部项目快照。
+//
+// 为什么不再只返回 managedProjectIDs（控制面下发合成的那批）：节点帧的语义是
+// 「我本机在跑什么、监听哪些端口」，而不是「我替某个控制面跑什么」。归属转移
+// 把项目在目标机注册为普通本地项目，旧口径下它连帧都进不去，端口镜像对
+// 「归属式开发机」因此完全失效（F2 根因之二）。
+//
+// 「这条实例归谁管」是关系判断，由持有关系的一侧（控制面）在
+// portmirror.computeExpected 里过滤，不在这里做。
+func (a *App) localProjectsSnapshot() []model.Project {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	out := []model.Project{}
-	for _, project := range a.projects {
-		if _, ok := a.managedProjectIDs[project.ID]; !ok {
-			continue
-		}
-		out = append(out, project)
-	}
+	out := make([]model.Project, 0, len(a.projects))
+	out = append(out, a.projects...)
 	return out
 }
 
