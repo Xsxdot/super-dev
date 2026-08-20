@@ -14,8 +14,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,6 +101,41 @@ func (t *recordingNodeTransport) callCount() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.calls)
+}
+
+// TestForwardToHomeAllowsOnlyTokensIssuedByThatHost 是**闸门一**，不能省。
+//
+// 为什么判据必须钉在「谁签的」而不是「要发给谁」：有一种看着更省事的写法是
+// 「转发目标是归属机就放行 token」——正常路径上它恰好成立，但一个本机签发的
+// token 若被误带到归属路由请求上就会被原样发出去，那是实打实的凭据外流，
+// 而且从判据本身完全看不出问题。
+func TestForwardToHomeAllowsOnlyTokensIssuedByThatHost(t *testing.T) {
+	forwardedToken := func(t *testing.T, registerHost, targetHost string) string {
+		t.Helper()
+		tr := &fakeApprovalTransport{respCode: http.StatusOK, respBody: `{}`}
+		app, err := NewApp(AppConfig{DataDir: t.TempDir(), NodeTransportOverride: tr})
+		require.NoError(t, err)
+		t.Cleanup(app.Close)
+
+		if registerHost != "" {
+			app.approvalTokenOrigin.Remember("tok_x", registerHost, time.Now().Add(time.Minute))
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/deployments/d1/start", strings.NewReader(`{}`))
+		req.Header.Set("X-SuperDev-Approval-Token", "tok_x")
+		app.forwardToHome(httptest.NewRecorder(), req, targetHost)
+		return tr.header("X-SuperDev-Approval-Token")
+	}
+
+	t.Run("归属机签发的 token → 放行", func(t *testing.T) {
+		require.Equal(t, "tok_x", forwardedToken(t, "h1", "h1"))
+	})
+	t.Run("本机签发的 token（未登记）→ 不放行", func(t *testing.T) {
+		require.Empty(t, forwardedToken(t, "", "h1"),
+			"本机签发的 token 绝不能因为转发目标恰好是归属机而被发出去")
+	})
+	t.Run("由 h2 签发的 token 转发去 h1 → 不放行", func(t *testing.T) {
+		require.Empty(t, forwardedToken(t, "h2", "h1"))
+	})
 }
 
 // homeRouteTestProject 构造一个同时带 dev/prod 两个环境、各一个本地部署的

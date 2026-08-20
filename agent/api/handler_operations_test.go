@@ -120,6 +120,7 @@ func TestForeignApprovalDetailRoutesToOrigin(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "tok_remote", "源节点签发的 token 必须原样回写")
+	require.Equal(t, "h1", app.approvalTokenOrigin.OriginOf("tok_remote"), "代理取回的 token 必须登记源节点")
 	require.Equal(t, []string{"h1"}, tr.hosts())
 	require.Equal(t, []string{"/api/operation-approvals/opa_x"}, tr.paths())
 }

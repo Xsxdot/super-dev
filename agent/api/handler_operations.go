@@ -31,8 +31,9 @@ import (
 )
 
 type operationApprovalDetailResponse struct {
-	Approval      operation.Approval `json:"approval"`
-	ApprovalToken string             `json:"approval_token,omitempty"`
+	Approval               operation.Approval `json:"approval"`
+	ApprovalToken          string             `json:"approval_token,omitempty"`
+	ApprovalTokenExpiresAt *time.Time         `json:"approval_token_expires_at,omitempty"`
 }
 
 // operationApprovalDecisionResponse 是 approve 接口的响应。
@@ -125,7 +126,9 @@ func (a *App) getOperationApproval(w http.ResponseWriter, r *http.Request) {
 	// 判据取自聚合器当前的来源表，而不是「本机 Get 不到就当外来」——后者会把
 	// 一个真实的 404（id 打错、已过期清理）误当成跨机请求发出去。
 	if origin := a.approvalOriginOf(id); origin != "" {
-		a.forwardToHost(w, r, origin)
+		a.forwardToHostWithObserver(w, r, origin, func(body []byte) {
+			a.rememberForwardedApprovalToken(origin, body)
+		})
 		return
 	}
 	token, approval, err := a.operationApprovals.IssueToken(r.Context(), id)
@@ -140,7 +143,11 @@ func (a *App) getOperationApproval(w http.ResponseWriter, r *http.Request) {
 		writeOperationStoreError(w, err, "")
 		return
 	}
-	jsonOK(w, operationApprovalDetailResponse{Approval: sanitizeOperationApproval(approval), ApprovalToken: token})
+	jsonOK(w, operationApprovalDetailResponse{
+		Approval:               sanitizeOperationApproval(approval),
+		ApprovalToken:          token,
+		ApprovalTokenExpiresAt: approval.TokenExpiresAt,
+	})
 }
 
 // approveOperationApproval 处理 POST /api/operation-approvals/{id}/approve。
@@ -313,6 +320,27 @@ func (a *App) appendApprovalProxyAudit(ctx context.Context, id, origin, decision
 	if _, err := a.operationAudit.Append(ctx, event); err != nil {
 		log.Printf("[SuperDev] approval 代理审计写入失败 approval_id=%s origin=%s err=%v", id, origin, err)
 	}
+}
+
+func (a *App) rememberForwardedApprovalToken(hostID string, body []byte) {
+	var detail operationApprovalDetailResponse
+	if err := json.Unmarshal(body, &detail); err != nil {
+		log.Printf("[SuperDev] approval token 来源登记失败 host=%s err=%v", hostID, err)
+		return
+	}
+	token := strings.TrimSpace(detail.ApprovalToken)
+	if token == "" || a.approvalTokenOrigin == nil {
+		return
+	}
+	expiresAt := time.Time{}
+	if detail.ApprovalTokenExpiresAt != nil {
+		expiresAt = *detail.ApprovalTokenExpiresAt
+	} else if detail.Approval.TokenExpiresAt != nil {
+		// 兼容尚未提供顶层过期时间的旧 agent；有些旧响应仍会把它放在
+		// approval 对象里，最终仍由登记表的 fallback TTL 兜底。
+		expiresAt = *detail.Approval.TokenExpiresAt
+	}
+	a.approvalTokenOrigin.Remember(token, hostID, expiresAt)
 }
 
 // hookAgentAdoptDecision 在 KindAgentAdopt 的 approval 被裁决时驱动

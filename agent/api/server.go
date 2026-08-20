@@ -202,7 +202,9 @@ type App struct {
 	// approvalAggregator 只读订阅归属机审批流；外来审批不写入本机 store。
 	approvalAggregator       *approvalAggregator
 	approvalAggregatorCancel context.CancelFunc
-	remoteStore              *remote.Store
+	// approvalTokenOrigin 只登记本机代理取回的外来 token 来源，不落盘 token。
+	approvalTokenOrigin *approvalTokenOrigin
+	remoteStore         *remote.Store
 	// projectHomeStore 持久化「项目 → 归属主机」本地路由标记，供 listProjects
 	// DTO 组装、后续归属路由/转移任务复用。归属是控制面本地设置，不下发节点。
 	projectHomeStore *projecthome.Store
@@ -571,6 +573,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		logCleanupDone:              logCleanupDone,
 		nodeStatusPublishers:        map[*nodeStatusPublisher]struct{}{},
 		approvalsPublishers:         map[*approvalsPublisher]struct{}{},
+		approvalTokenOrigin:         &approvalTokenOrigin{entries: make(map[string]approvalTokenOriginEntry)},
 		remoteStore:                 remoteStore,
 		projectHomeStore:            projectHomeStore,
 		hostAssembler:               apiassembler.NewHostAssembler(),
