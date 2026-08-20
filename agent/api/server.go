@@ -199,7 +199,10 @@ type App struct {
 	// approvalsPublishers 保存当前 /ws/operation-approvals 连接，供审批创建/裁决即时推送。
 	approvalsPublisherMu sync.Mutex
 	approvalsPublishers  map[*approvalsPublisher]struct{}
-	remoteStore          *remote.Store
+	// approvalAggregator 只读订阅归属机审批流；外来审批不写入本机 store。
+	approvalAggregator       *approvalAggregator
+	approvalAggregatorCancel context.CancelFunc
+	remoteStore              *remote.Store
 	// projectHomeStore 持久化「项目 → 归属主机」本地路由标记，供 listProjects
 	// DTO 组装、后续归属路由/转移任务复用。归属是控制面本地设置，不下发节点。
 	projectHomeStore *projecthome.Store
@@ -617,6 +620,20 @@ func NewApp(cfg AppConfig) (*App, error) {
 			return app.operationAudit
 		},
 	))
+	app.approvalAggregator = newApprovalAggregator(approvalAggregatorDeps{
+		HomeHosts: func() []string {
+			managed := app.managedProjectIDsByHome()
+			hosts := make([]string, 0, len(managed))
+			for hostID := range managed {
+				hosts = append(hosts, hostID)
+			}
+			return hosts
+		},
+		Stream: func(ctx context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+			return app.nodeTransport.Stream(ctx, hostID, req)
+		},
+		OnChange: app.signalApprovalsPublishers,
+	})
 	app.removeAgentConfig = app.remoteNodeMutations.RemoveAgent
 	app.detachAgentConfig = app.remoteNodeMutations.DetachAgentConfig
 	cleaner := newLogCleaner(s, cleanupConfig{
@@ -745,6 +762,12 @@ func (a *App) doClose() {
 	}
 	if a.nodeRegistryCancel != nil {
 		a.nodeRegistryCancel()
+	}
+	if a.approvalAggregatorCancel != nil {
+		a.approvalAggregatorCancel()
+	}
+	if a.approvalAggregator != nil {
+		a.approvalAggregator.Close()
 	}
 	if a.agentHealthCancel != nil {
 		a.agentHealthCancel()
@@ -1123,6 +1146,7 @@ func (a *App) Start(addr string) error {
 	a.startProcessReconcileLoop()
 	a.startAutostartOnce()
 	a.startManagedDeploymentReconciler()
+	a.startApprovalAggregator()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -1212,6 +1236,33 @@ func (a *App) startManagedDeploymentReconciler() {
 	go func() {
 		if err := a.managedReconciler.ReconcileAll(ctx); err != nil {
 			log.Printf("[SuperDev] initial managed deployment reconcile failed: %v", err)
+		}
+	}()
+}
+
+// startApprovalAggregator 启动审批聚合器的周期对账；归属机集合必须随着项目
+// 转移现取，因此不能只在 App 创建时计算一次。
+func (a *App) startApprovalAggregator() {
+	if a.approvalAggregator == nil || a.approvalAggregatorCancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.approvalAggregatorCancel = cancel
+	a.approvalAggregator.Reconcile(ctx)
+	interval := defaultManagedDeploymentReconcileInterval
+	if a.managedReconciler != nil {
+		interval = a.managedReconciler.interval
+	}
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.approvalAggregator.Reconcile(ctx)
+			}
 		}
 	}()
 }

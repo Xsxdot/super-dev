@@ -255,6 +255,11 @@ type Approval struct {
 	TokenHash      string     `json:"token_hash,omitempty"`
 	TokenIssuedAt  *time.Time `json:"token_issued_at,omitempty"`
 	TokenExpiresAt *time.Time `json:"token_expires_at,omitempty"`
+	// OriginHostID 是签发该审批的主机 ID；空串表示本机签发。
+	//
+	// 只在合并快照时于内存副本上赋值，**从不落盘**：外来审批不写进本机 store，
+	// 本机自己的审批该字段恒为空，因此持久化文件的内容不会因这个字段而改变。
+	OriginHostID string `json:"origin_host_id,omitempty"`
 }
 
 // AuditEvent 记录 operation 安全链路中的事实事件。

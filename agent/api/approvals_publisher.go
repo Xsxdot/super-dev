@@ -26,8 +26,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
+	"sync"
 	"time"
 
+	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/operation"
 )
 
@@ -163,8 +166,78 @@ func (a *App) approvalsSnapshotNow(ctx context.Context) (approvalsSnapshot, erro
 	if err != nil {
 		return approvalsSnapshot{}, fmt.Errorf("list decided approvals: %w", err)
 	}
-	return approvalsSnapshot{
+	local := approvalsSnapshot{
 		Pending: sanitizeOperationApprovals(pending),
 		Decided: sanitizeOperationApprovals(decided),
-	}, nil
+	}
+	if a.approvalAggregator == nil {
+		return local, nil
+	}
+
+	managed := a.managedProjectIDsByHome()
+	remoteByHost := a.approvalAggregator.All()
+	hostIDs := make([]string, 0, len(remoteByHost))
+	for hostID := range remoteByHost {
+		hostIDs = append(hostIDs, hostID)
+	}
+	sort.Strings(hostIDs)
+	for _, hostID := range hostIDs {
+		remote := remoteByHost[hostID]
+		allowed := managed[hostID]
+		local.Pending = append(local.Pending, tagForeign(filterManaged(hostID, remote.Snapshot.Pending, allowed), hostID)...)
+		local.Decided = append(local.Decided, tagForeign(filterManaged(hostID, remote.Snapshot.Decided, allowed), hostID)...)
+	}
+	return local, nil
+}
+
+// managedProjectIDsByHome 现取项目与归属机关系，而不是在 App 装配时缓存。
+//
+// 为什么：项目转移会即时改变审批应归谁管辖；缓存会让订阅集合和过滤集合在
+// 转移后继续沿用旧状态，既可能漏订阅，也可能把不该显示的审批放进快照。
+func (a *App) managedProjectIDsByHome() map[string]map[string]struct{} {
+	a.mu.RLock()
+	projects := make([]model.Project, len(a.projects))
+	copy(projects, a.projects)
+	a.mu.RUnlock()
+
+	byHost := make(map[string]map[string]struct{})
+	for _, project := range projects {
+		hostID := a.projectHomeOf(project.ID)
+		if hostID == "" {
+			continue
+		}
+		if byHost[hostID] == nil {
+			byHost[hostID] = make(map[string]struct{})
+		}
+		byHost[hostID][project.ID] = struct{}{}
+	}
+	return byHost
+}
+
+var unmanagedForeignApprovalLog sync.Map
+
+// filterManaged 是越权闸门，不是界面整洁：归属机推来的是它的全部审批，只有
+// 本控制面明确管辖的 project_id 才能进入本机快照，避免用户在这里裁决别人的操作。
+func filterManaged(hostID string, approvals []operation.Approval, allowed map[string]struct{}) []operation.Approval {
+	filtered := make([]operation.Approval, 0, len(approvals))
+	for _, approval := range approvals {
+		projectID := approval.Plan.Target.ProjectID
+		if _, ok := allowed[projectID]; !ok {
+			key := hostID + "\x00" + projectID
+			if _, loaded := unmanagedForeignApprovalLog.LoadOrStore(key, struct{}{}); !loaded {
+				log.Printf("[SuperDev] approval aggregator: 过滤未管辖外来审批 host=%s project=%s", hostID, projectID)
+			}
+			continue
+		}
+		filtered = append(filtered, approval)
+	}
+	return filtered
+}
+
+func tagForeign(approvals []operation.Approval, hostID string) []operation.Approval {
+	tagged := sanitizeOperationApprovals(approvals)
+	for i := range tagged {
+		tagged[i].OriginHostID = hostID
+	}
+	return tagged
 }
