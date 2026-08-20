@@ -342,14 +342,18 @@ func (a *App) transferCheckout(ctx context.Context, run *transferRun, deps *tran
 // projectID，不等即失败（撞机重分配场景，拒绝静默双身份）。
 func (a *App) transferRegister(ctx context.Context, run *transferRun, deps *transferDeps) (string, error) {
 	absDir := run.getAbsDir()
-	out, code, err := deps.runner(ctx, "cd "+shellQuoteTransfer(absDir)+" && pwd", "")
+	res, err := deps.runner(ctx, "cd "+shellQuoteTransfer(absDir)+" && pwd", "")
 	if err != nil {
 		return "解析规范化路径", err
 	}
-	if code != 0 {
-		return "解析规范化路径", fmt.Errorf("cd&&pwd 非零退出 exitCode=%d（目录可能未成功检出）", code)
+	if res.ExitCode != 0 {
+		stderr := strings.Join(tailLines(strings.Split(strings.TrimRight(res.Stderr, "\n"), "\n"), 3), " ⏎ ")
+		if stderr != "" {
+			stderr = "：" + redactCreds(stderr)
+		}
+		return "解析规范化路径", fmt.Errorf("cd&&pwd 非零退出 exitCode=%d（目录可能未成功检出）%s", res.ExitCode, stderr)
 	}
-	rootPath := strings.TrimSpace(out)
+	rootPath := strings.TrimSpace(res.Stdout)
 	if rootPath == "" {
 		rootPath = absDir
 	}
@@ -427,11 +431,11 @@ func (a *App) transferAssetAudit(ctx context.Context, run *transferRun, deps *tr
 				continue
 			}
 			remotePath := path.Join(rootPath, dep.EnvFile)
-			out, _, err := deps.runner(ctx, "test -f "+shellQuoteTransfer(remotePath)+" && echo yes || echo no", "")
+			res, err := deps.runner(ctx, "test -f "+shellQuoteTransfer(remotePath)+" && echo yes || echo no", "")
 			if err != nil {
 				return "体检 env 文件", err
 			}
-			if strings.TrimSpace(out) != "yes" {
+			if strings.TrimSpace(res.Stdout) != "yes" {
 				missing++
 				run.addAsset(transferCheckItem{
 					Code:   "env_file_missing",
@@ -456,11 +460,11 @@ func (a *App) transferAssetAudit(ctx context.Context, run *transferRun, deps *tr
 	}
 
 	// superdev-mcp 存在性
-	_, code, err := deps.runner(ctx, "command -v superdev-mcp", "")
+	res, err := deps.runner(ctx, "command -v superdev-mcp", "")
 	if err != nil {
 		return "体检 superdev-mcp", err
 	}
-	mcpMissing := code != 0
+	mcpMissing := res.ExitCode != 0
 	if mcpMissing {
 		run.addAsset(transferCheckItem{
 			Code:   "superdev_mcp_missing",
@@ -501,33 +505,37 @@ func (a *App) transferProbeHome(ctx context.Context, run *transferRun, deps *tra
 	}
 	run.setAbsDir(absDir)
 
-	out, code, err := deps.runner(ctx, "cd "+shellQuoteTransfer(absDir)+" && pwd", "")
+	res, err := deps.runner(ctx, "cd "+shellQuoteTransfer(absDir)+" && pwd", "")
 	if err != nil {
 		return "定位归属机项目目录", err
 	}
-	if code != 0 {
-		return "定位归属机项目目录", fmt.Errorf("cd&&pwd 非零退出 exitCode=%d（归属机目录可能不存在）", code)
+	if res.ExitCode != 0 {
+		stderr := strings.Join(tailLines(strings.Split(strings.TrimRight(res.Stderr, "\n"), "\n"), 3), " ⏎ ")
+		if stderr != "" {
+			stderr = "：" + redactCreds(stderr)
+		}
+		return "定位归属机项目目录", fmt.Errorf("cd&&pwd 非零退出 exitCode=%d（归属机目录可能不存在）%s", res.ExitCode, stderr)
 	}
-	homeDir := strings.TrimSpace(out)
+	homeDir := strings.TrimSpace(res.Stdout)
 	if homeDir == "" {
 		homeDir = absDir
 	}
 
-	status, _, err := deps.runner(ctx, "git -C "+shellQuoteTransfer(homeDir)+" status --porcelain", "")
+	statusRes, err := deps.runner(ctx, "git -C "+shellQuoteTransfer(homeDir)+" status --porcelain", "")
 	if err != nil {
 		return "探测归属机未提交变更", err
 	}
-	if strings.TrimSpace(status) != "" {
+	if strings.TrimSpace(statusRes.Stdout) != "" {
 		return "归属机存在未提交变更", fmt.Errorf("归属机有未提交变更，请先在归属机提交或暂存后再迁回")
 	}
 
-	count, code, err := deps.runner(ctx, "git -C "+shellQuoteTransfer(homeDir)+" rev-list --count @{u}..HEAD", "")
+	countRes, err := deps.runner(ctx, "git -C "+shellQuoteTransfer(homeDir)+" rev-list --count @{u}..HEAD", "")
 	if err != nil {
 		return "探测归属机未推送提交", err
 	}
 	// rev-list 非零退出多为「无上游」，v1 简化：无从判定则不阻断。
-	if code == 0 {
-		if n := strings.TrimSpace(count); n != "" && n != "0" {
+	if countRes.ExitCode == 0 {
+		if n := strings.TrimSpace(countRes.Stdout); n != "" && n != "0" {
 			return "归属机存在未推送提交", fmt.Errorf("归属机有 %s 个未推送提交，请先在归属机推送后再迁回", n)
 		}
 	}
@@ -831,14 +839,18 @@ func resolveRemoteAbsDir(ctx context.Context, run gitinfo.Runner, dir string) (s
 	if !strings.HasPrefix(dir, "~") {
 		return dir, nil
 	}
-	out, code, err := run(ctx, "cd && pwd", "")
+	res, err := run(ctx, "cd && pwd", "")
 	if err != nil {
 		return "", fmt.Errorf("解析目标机 $HOME: %w", err)
 	}
-	if code != 0 {
-		return "", fmt.Errorf("解析目标机 $HOME 非零退出 exitCode=%d", code)
+	if res.ExitCode != 0 {
+		stderr := strings.Join(tailLines(strings.Split(strings.TrimRight(res.Stderr, "\n"), "\n"), 3), " ⏎ ")
+		if stderr != "" {
+			stderr = "：" + redactCreds(stderr)
+		}
+		return "", fmt.Errorf("解析目标机 $HOME 非零退出 exitCode=%d%s", res.ExitCode, stderr)
 	}
-	home := strings.TrimSpace(out)
+	home := strings.TrimSpace(res.Stdout)
 	if home == "" {
 		return "", fmt.Errorf("目标机 $HOME 解析为空")
 	}

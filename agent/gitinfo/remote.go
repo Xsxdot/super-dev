@@ -24,15 +24,30 @@ import (
 	"strings"
 )
 
-// Runner 抽象「在目标机执行一条命令并收集输出」，由调用方注入。
-// 生产环境 = pipeline.RoutingRunner.RunRemote 的适配闭包（Task 4/5 负责接线）；
-// 测试 = 按 cmd 前缀返回 canned 输出的假件。
+// CommandResult 是一次远端命令执行的完整结果。
 //
-// 约定：err 非 nil 表示传输层故障（如 SSH 连接失败），命令本身有没有正常跑起来都不知道；
-// exitCode 非 0 表示命令确实在目标机上执行完毕但返回了非零退出码（如目录非仓库）。
-// 这个区分对 InspectRemote/EnsureCheckout 至关重要：前者必须整体失败上抛，
-// 后者是「探测到的确凿事实」，要按字段降级而不是报错。
-type Runner func(ctx context.Context, cmd, workDir string) (stdout string, exitCode int, err error)
+// 为什么要有 Stderr：git 把失败原因（Host key verification failed、
+// Permission denied、branch not found）全部写在 stderr 上。旧签名只返回
+// stdout，导致 checkout 失败时诊断信息里只剩一个 exitCode，排障必须登上
+// 目标机手动复现——这正是 2026-08-20 真机验收踩到的坑。
+//
+// 为什么 Stdout / Stderr 分开而不是合并成一个 Output：探测类命令
+// （test -d ... && echo yes || echo no、cd && pwd）靠精确比对 stdout 判断结果，
+// shell 往 stderr 写任何一行都会把判断带偏。诊断要合并、判定要分开，
+// 所以分开存、由调用方决定怎么用。
+type CommandResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// Runner 在目标机上执行一条 shell 命令。
+//
+// 契约：
+//   - 命令跑完但非零退出不算 error：结果写进 CommandResult.ExitCode，
+//     error 返回 nil。这是「探测到的确凿事实」（目录不存在、不是仓库）。
+//   - error 非 nil 只表示传输层故障（隧道断、SSH 连不上、超时）。
+type Runner func(ctx context.Context, cmd, workDir string) (CommandResult, error)
 
 // RemoteProbe 是目标机 checkout 的探测结果。
 type RemoteProbe struct {
@@ -69,11 +84,11 @@ func InspectRemote(ctx context.Context, run Runner, path string) (RemoteProbe, e
 
 	probe := RemoteProbe{DirExists: true}
 
-	isWorkTree, exitCode, err := runRemoteGit(ctx, run, path, "rev-parse", "--is-inside-work-tree")
+	isWorkTree, err := runRemoteGit(ctx, run, path, "rev-parse", "--is-inside-work-tree")
 	if err != nil {
 		return RemoteProbe{}, err
 	}
-	if exitCode != 0 || strings.TrimSpace(isWorkTree) != "true" {
+	if isWorkTree.ExitCode != 0 || strings.TrimSpace(isWorkTree.Stdout) != "true" {
 		// exitCode != 0：目录存在但不是 git 仓库；输出不是 "true"：bare 仓库
 		// （同 local.go 的 Inspect 契约——bare 仓库该命令 exit 0 但打印 "false"）。
 		// 两种情况都判定 IsRepo=false，其余字段无意义，保持零值。
@@ -81,30 +96,30 @@ func InspectRemote(ctx context.Context, run Runner, path string) (RemoteProbe, e
 	}
 	probe.IsRepo = true
 
-	if branch, code, err := runRemoteGit(ctx, run, path, "symbolic-ref", "--short", "HEAD"); err != nil {
+	if branch, err := runRemoteGit(ctx, run, path, "symbolic-ref", "--short", "HEAD"); err != nil {
 		return RemoteProbe{}, err
-	} else if code == 0 {
-		probe.Branch = strings.TrimSpace(branch)
+	} else if branch.ExitCode == 0 {
+		probe.Branch = strings.TrimSpace(branch.Stdout)
 	}
 	// detached HEAD 时上面的命令 exitCode != 0，按字段级降级为空分支名，不算错误。
 
-	if remoteURL, code, err := runRemoteGit(ctx, run, path, "remote", "get-url", "origin"); err != nil {
+	if remoteURL, err := runRemoteGit(ctx, run, path, "remote", "get-url", "origin"); err != nil {
 		return RemoteProbe{}, err
-	} else if code == 0 {
-		probe.RemoteURL = strings.TrimSpace(remoteURL)
+	} else if remoteURL.ExitCode == 0 {
+		probe.RemoteURL = strings.TrimSpace(remoteURL.Stdout)
 	}
 	// 无 origin 时上面的命令 exitCode != 0，按字段级降级为空 RemoteURL。
 
-	if status, code, err := runRemoteGit(ctx, run, path, "status", "--porcelain"); err != nil {
+	if status, err := runRemoteGit(ctx, run, path, "status", "--porcelain"); err != nil {
 		return RemoteProbe{}, err
-	} else if code == 0 {
-		probe.Dirty = strings.TrimSpace(status) != ""
+	} else if status.ExitCode == 0 {
+		probe.Dirty = strings.TrimSpace(status.Stdout) != ""
 	}
 
-	if aheadOut, code, err := runRemoteGit(ctx, run, path, "rev-list", "--count", "@{upstream}..HEAD"); err != nil {
+	if aheadOut, err := runRemoteGit(ctx, run, path, "rev-list", "--count", "@{upstream}..HEAD"); err != nil {
 		return RemoteProbe{}, err
-	} else if code == 0 {
-		if ahead, parseErr := strconv.Atoi(strings.TrimSpace(aheadOut)); parseErr == nil {
+	} else if aheadOut.ExitCode == 0 {
+		if ahead, parseErr := strconv.Atoi(strings.TrimSpace(aheadOut.Stdout)); parseErr == nil {
 			probe.Ahead = ahead
 		} else {
 			probe.Ahead = -1
@@ -159,18 +174,18 @@ func EnsureCheckout(ctx context.Context, run Runner, path, repoURL, branch strin
 // 只用 test -d 语义：存在且是目录才算 true）。
 func probeDirExists(ctx context.Context, run Runner, path string) (bool, error) {
 	cmd := fmt.Sprintf("test -d %s && echo yes || echo no", shellQuote(path))
-	out, _, err := run(ctx, cmd, "")
+	res, err := run(ctx, cmd, "")
 	if err != nil {
 		return false, err
 	}
-	return strings.TrimSpace(out) == "yes", nil
+	return strings.TrimSpace(res.Stdout) == "yes", nil
 }
 
 // runRemoteGit 在目标机上执行一条 `git -C path ...` 命令。只有 path 经 shellQuote
 // 转义——args 是本包硬编码的子命令/参数字面量（如 "rev-parse"、"--short"），
 // 不是外部输入，转义反而会把字面量的破折号参数拆坏；path 来自项目配置，
 // 可能含空格等特殊字符，必须转义。
-func runRemoteGit(ctx context.Context, run Runner, path string, args ...string) (string, int, error) {
+func runRemoteGit(ctx context.Context, run Runner, path string, args ...string) (CommandResult, error) {
 	cmd := "git -C " + shellQuote(path) + " " + strings.Join(args, " ")
 	return run(ctx, cmd, "")
 }
@@ -181,8 +196,10 @@ func runRemoteGit(ctx context.Context, run Runner, path string, args ...string) 
 func runCheckoutStep(ctx context.Context, run Runner, step, cmd string, onLine func(string)) error {
 	log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤开始: %s", step)
 
-	stdout, exitCode, err := run(ctx, cmd, "")
-	lines := splitLines(stdout)
+	res, err := run(ctx, cmd, "")
+	lines := splitLines(res.Stdout)
+	// onLine 只接收 stdout：上层把它展示为转移进度文案，stderr 的诊断噪音
+	// 应留在失败错误摘要里，避免把 SSH/git 警告伪装成步骤进度。
 	for _, line := range lines {
 		if onLine != nil {
 			onLine(line)
@@ -193,13 +210,16 @@ func runCheckoutStep(ctx context.Context, run Runner, step, cmd string, onLine f
 		log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤 %s 执行异常（传输层故障）: %v", step, err)
 		return fmt.Errorf("步骤 %s 执行异常: %w", step, err)
 	}
-	if exitCode != 0 {
+	if res.ExitCode != 0 {
 		// git 原始输出可能回显仓库自身配置里内嵌的凭据（submodule 里的 token、
 		// url.<base>.insteadOf 改写规则），这类凭据不经 api 层捕获点，必须在
 		// gitinfo 落日志与返回错误前就地脱敏，详见 redactURLCreds。
-		tail := redactLines(lastNLines(lines, 5))
-		log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤 %s 失败, exitCode=%d, 最后输出: %v", step, exitCode, tail)
-		return fmt.Errorf("步骤 %s 失败, exitCode=%d, 最后输出: %s", step, exitCode, strings.Join(tail, "\n"))
+		// stderr 排在 stdout 之后：git 的失败原因几乎总在 stderr，取 last N 行时
+		// 它必须落在保留窗口里，排前面会被 stdout 的进度行挤掉。
+		combined := append(splitLines(res.Stdout), splitLines(res.Stderr)...)
+		tail := redactLines(lastNLines(combined, 5))
+		log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤 %s 失败, exitCode=%d, 最后输出: %v", step, res.ExitCode, tail)
+		return fmt.Errorf("步骤 %s 失败, exitCode=%d, 最后输出: %s", step, res.ExitCode, strings.Join(tail, "\n"))
 	}
 
 	log.Printf("[SuperDev][gitinfo] EnsureCheckout 步骤结束: %s", step)
