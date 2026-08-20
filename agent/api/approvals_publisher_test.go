@@ -1,3 +1,4 @@
+// approvals_publisher_test.go 覆盖外来审批快照的来源标记、管辖过滤和本机审批口径。
 package api
 
 import (

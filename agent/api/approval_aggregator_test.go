@@ -1,3 +1,4 @@
+// approval_aggregator_test.go 覆盖归属机审批订阅集合动态对账与断线保留末次快照。
 package api
 
 import (

@@ -1,3 +1,4 @@
+// approval_token_origin_test.go 覆盖审批 token 来源登记的过期与惰性清理语义。
 package api
 
 import (
