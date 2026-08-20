@@ -124,6 +124,8 @@ const (
 	AuditApprovedByGrace = "approved_by_grace"
 	// AuditGraceGranted 记录一次项目豁免窗口的开启。
 	AuditGraceGranted = "grace_granted"
+	// AuditApprovalProxied 记录本控制面发起的一次跨机审批裁决代理。
+	AuditApprovalProxied = "approval_proxied"
 
 	// DefaultPlanTTL 是 operation plan 的默认有效期。
 	DefaultPlanTTL = 10 * time.Minute

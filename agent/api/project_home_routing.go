@@ -153,13 +153,25 @@ func (a *App) projectHomeOf(projectID string) string {
 //   - 成功转发后原样回写归属 agent 的状态码与响应体；调用方在调用本函数
 //     之后必须立即 return，不得再向 w 写入任何内容。
 func (a *App) forwardToHome(w http.ResponseWriter, r *http.Request, homeHostID string) {
+	// 归属路由按项目归属选择目标；具体转发、回写和失败语义由公共 host 路由实现。
+	a.forwardToHost(w, r, homeHostID)
+}
+
+// forwardToHost 把当前请求转发到指定 host，并将其响应原样回写给调用方。
+//
+// 它同时服务两种语义不同的路径：forwardToHome 按项目归属路由，审批 handler
+// 按审批签发来源路由。两者必须共用这一实现，才能保持「转发失败绝不回落本机」
+// 和响应回写口径一致。
+//
+// 返回值表示请求是否拿到了 2xx 响应；调用方可据此追加本机侧代理审计。
+func (a *App) forwardToHost(w http.ResponseWriter, r *http.Request, targetHostID string) bool {
 	var body []byte
 	if r.Body != nil {
 		read, err := io.ReadAll(r.Body)
 		if err != nil {
-			log.Printf("[SuperDev] homeroute: 读取请求体失败 %s %s → %s err=%v", r.Method, r.URL.Path, homeHostID, err)
+			log.Printf("[SuperDev] hostroute: 读取请求体失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
 			jsonErrorCode(w, http.StatusBadGateway, "home_unreachable", "failed to read request body: "+err.Error(), nil)
-			return
+			return false
 		}
 		body = read
 	}
@@ -171,22 +183,22 @@ func (a *App) forwardToHome(w http.ResponseWriter, r *http.Request, homeHostID s
 		}
 	}
 
-	resp, err := a.nodeTransportDo()(r.Context(), homeHostID, nodetransport.NodeRequest{
+	resp, err := a.nodeTransportDo()(r.Context(), targetHostID, nodetransport.NodeRequest{
 		Method:  r.Method,
 		Path:    r.URL.Path,
 		Headers: headers,
 		Body:    bytes.NewReader(body),
 	})
 	if err != nil {
-		log.Printf("[SuperDev] homeroute: 转发失败 %s %s → %s err=%v", r.Method, r.URL.Path, homeHostID, err)
-		jsonErrorCode(w, http.StatusBadGateway, "home_unreachable", "home host unreachable: "+err.Error(), map[string]string{"host_id": homeHostID})
-		return
+		log.Printf("[SuperDev] hostroute: 转发失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
+		jsonErrorCode(w, http.StatusBadGateway, "home_unreachable", "home host unreachable: "+err.Error(), map[string]string{"host_id": targetHostID})
+		return false
 	}
 	if resp.Body != nil {
 		defer resp.Body.Close()
 	}
 
-	log.Printf("[SuperDev] homeroute: %s %s → %s", r.Method, r.URL.Path, homeHostID)
+	log.Printf("[SuperDev] hostroute: %s %s → %s", r.Method, r.URL.Path, targetHostID)
 
 	if resp.Headers != nil {
 		if ct := resp.Headers.Get("Content-Type"); ct != "" {
@@ -200,9 +212,10 @@ func (a *App) forwardToHome(w http.ResponseWriter, r *http.Request, homeHostID s
 	w.WriteHeader(status)
 	if resp.Body != nil {
 		if _, err := io.Copy(w, resp.Body); err != nil {
-			log.Printf("[SuperDev] homeroute: 回写响应体失败 %s %s → %s err=%v", r.Method, r.URL.Path, homeHostID, err)
+			log.Printf("[SuperDev] hostroute: 回写响应体失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
 		}
 	}
+	return status/100 == 2
 }
 
 // nodeTransportDo 返回本次转发使用的 nodetransport Do。a.nodeTransport 正常

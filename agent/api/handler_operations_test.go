@@ -13,8 +13,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,8 +26,160 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/config"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/operation"
 )
+
+// fakeApprovalTransport 记录审批代理收到的请求，并按预设响应回写。
+type fakeApprovalTransport struct {
+	mu       sync.Mutex
+	gotHost  []string
+	gotPath  []string
+	gotHeads []http.Header
+	respBody string
+	respCode int
+	doErr    error
+}
+
+func (t *fakeApprovalTransport) Do(_ context.Context, hostID string, req nodetransport.NodeRequest) (nodetransport.NodeResponse, error) {
+	t.mu.Lock()
+	t.gotHost = append(t.gotHost, hostID)
+	t.gotPath = append(t.gotPath, req.Path)
+	t.gotHeads = append(t.gotHeads, req.Headers.Clone())
+	t.mu.Unlock()
+	if t.doErr != nil {
+		return nodetransport.NodeResponse{}, t.doErr
+	}
+	status := t.respCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	body := t.respBody
+	if body == "" {
+		body = `{}`
+	}
+	return nodetransport.NodeResponse{
+		StatusCode: status,
+		Headers:    http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}, nil
+}
+
+func (t *fakeApprovalTransport) Stream(context.Context, string, nodetransport.NodeRequest) (nodetransport.NodeStream, error) {
+	return nil, nodetransport.ErrHostUnreachable
+}
+
+func (t *fakeApprovalTransport) SubscribeNodes(context.Context) (<-chan []nodetransport.NodeStatus, func()) {
+	ch := make(chan []nodetransport.NodeStatus)
+	close(ch)
+	return ch, func() {}
+}
+
+func (t *fakeApprovalTransport) Covers() []string { return nil }
+
+func (t *fakeApprovalTransport) hosts() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.gotHost...)
+}
+
+func (t *fakeApprovalTransport) paths() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.gotPath...)
+}
+
+func (t *fakeApprovalTransport) header(name string) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.gotHeads) == 0 {
+		return ""
+	}
+	return t.gotHeads[len(t.gotHeads)-1].Get(name)
+}
+
+// TestForeignApprovalDetailRoutesToOrigin 钉死取详情（含签发 token）路由回源节点。
+func TestForeignApprovalDetailRoutesToOrigin(t *testing.T) {
+	tr := &fakeApprovalTransport{respCode: http.StatusOK,
+		respBody: `{"approval":{"id":"opa_x","status":"approved"},"approval_token":"tok_remote"}`}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), NodeTransportOverride: tr})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	seedHomedProject(t, app, "proj-1", "h1")
+	app.approvalAggregator.ApplyForTest(map[string]remoteApprovals{
+		"h1": {Reachable: true, Snapshot: approvalsSnapshot{
+			Pending: []operation.Approval{foreignPending("opa_x", "proj-1")},
+		}},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/operation-approvals/opa_x", nil)
+	req.SetPathValue("id", "opa_x")
+	app.getOperationApproval(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "tok_remote", "源节点签发的 token 必须原样回写")
+	require.Equal(t, []string{"h1"}, tr.hosts())
+	require.Equal(t, []string{"/api/operation-approvals/opa_x"}, tr.paths())
+}
+
+// TestForeignApprovalApproveRoutesToOrigin 钉死裁决路由回源节点。
+func TestForeignApprovalApproveRoutesToOrigin(t *testing.T) {
+	tr := &fakeApprovalTransport{respCode: http.StatusOK,
+		respBody: `{"approval":{"id":"opa_x","status":"approved"}}`}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), NodeTransportOverride: tr})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	seedHomedProject(t, app, "proj-1", "h1")
+	app.approvalAggregator.ApplyForTest(map[string]remoteApprovals{
+		"h1": {Reachable: true, Snapshot: approvalsSnapshot{
+			Pending: []operation.Approval{foreignPending("opa_x", "proj-1")},
+		}},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/operation-approvals/opa_x/approve", strings.NewReader(`{}`))
+	req.SetPathValue("id", "opa_x")
+	app.approveOperationApproval(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, []string{"h1"}, tr.hosts())
+	require.Equal(t, []string{"/api/operation-approvals/opa_x/approve"}, tr.paths())
+	audits, err := app.operationAudit.List(context.Background(), operation.AuditFilter{ApprovalID: "opa_x"})
+	require.NoError(t, err)
+	require.Len(t, audits, 1)
+	require.Equal(t, operation.AuditApprovalProxied, audits[0].Action)
+	require.Equal(t, "h1", audits[0].Data["origin_host_id"])
+}
+
+// TestForeignApprovalOriginUnreachableFailsLoudly 钉死不静默回落本机。
+//
+// 为什么这条最重要：静默回落等于「在本机批准了一个本机根本没有的审批」——
+// 本机 store 里没有 opa_x，回落处理只会得到 404 或者更糟地新建一条，
+// 而用户以为自己已经批过了。与归属路由既有的「转发失败绝不静默回落本机」同源。
+func TestForeignApprovalOriginUnreachableFailsLoudly(t *testing.T) {
+	tr := &fakeApprovalTransport{doErr: errors.New("dial tcp: connection refused")}
+	app, err := NewApp(AppConfig{DataDir: t.TempDir(), NodeTransportOverride: tr})
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	seedHomedProject(t, app, "proj-1", "h1")
+	app.approvalAggregator.ApplyForTest(map[string]remoteApprovals{
+		"h1": {Reachable: true, Snapshot: approvalsSnapshot{
+			Pending: []operation.Approval{foreignPending("opa_x", "proj-1")},
+		}},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/operation-approvals/opa_x/approve", strings.NewReader(`{}`))
+	req.SetPathValue("id", "opa_x")
+	app.approveOperationApproval(rec, req)
+
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Contains(t, rec.Body.String(), "home_unreachable")
+}
 
 func TestOperationAPI_PreflightApproveRejectAndAudit(t *testing.T) {
 	app, err := NewApp(AppConfig{DataDir: t.TempDir()})
