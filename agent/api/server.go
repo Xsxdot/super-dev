@@ -657,6 +657,19 @@ func NewApp(cfg AppConfig) (*App, error) {
 		Tunnels:  app.tunnels,
 		Occupier: portmirror.LookupOccupier,
 		Resolve:  app.resolveManagedPID,
+		KnownDeployments: func() map[string]struct{} {
+			app.mu.RLock()
+			defer app.mu.RUnlock()
+			out := make(map[string]struct{})
+			for _, project := range app.projects {
+				for _, service := range project.Services {
+					for _, dep := range service.Deployments {
+						out[dep.ID] = struct{}{}
+					}
+				}
+			}
+			return out
+		},
 	})
 	// 桥接 nodeRegistry 快照订阅 → mirrorManager.ApplyNodes：与 wsNodes 消费同一份
 	// Subscribe 语义（慢消费者丢帧），Close 时必须先 mirrorRegistryUnsub 再

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/tunnel"
@@ -542,6 +543,52 @@ func TestActiveForwardReEnsuredEachCycle(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 		// 正常：无新广播
 	}
+}
+
+// TestComputeExpectedFiltersUnknownDeployments 钉死本设计新增的唯一约束。
+//
+// 帧口径放宽后，开发机上会出现本控制面并不管理的 SuperDev 项目（另一个控制面
+// 管的，或用户在那台机器上本地建的）。没有这层过滤，本机会凭空多出转发，
+// 并与本机同端口的进程撞进冲突弹窗——「SuperDev 悄悄占了我一个没让它占的端口」
+// 是最伤信任的失败形态。
+func TestComputeExpectedFiltersUnknownDeployments(t *testing.T) {
+	hosts := map[string]model.Host{}
+	for _, h := range devHosts("A") {
+		hosts[h.ID] = h
+	}
+	frame := frameHost("A", "dep-known", "web", model.HealthRunning, 8899)
+	frame[0].Deployments = append(frame[0].Deployments, model.InstanceStatus{
+		DeploymentID: "dep-foreign",
+		ServiceName:  "someone-else",
+		Metrics:      model.InstanceMetrics{Health: model.HealthRunning},
+		Ports:        []int{9999},
+	})
+
+	known := map[string]struct{}{"dep-known": {}}
+	expected := computeExpected(frame, hosts, known, nil)
+
+	var ports []int
+	for k := range expected {
+		ports = append(ports, k.port)
+	}
+	assert.ElementsMatch(t, []int{8899}, ports,
+		"本控制面不认识的 dep-foreign 不得进入期望态")
+}
+
+// TestComputeExpectedNilKnownDisablesFilter 钉死 nil 的语义。
+//
+// 既有测试大量以省略字段的方式构造 Deps，nil 必须等价于「不过滤」而不是
+// 「全部过滤掉」——后者会让一处漏配把端口镜像整个静默关掉。
+func TestComputeExpectedNilKnownDisablesFilter(t *testing.T) {
+	hosts := map[string]model.Host{}
+	for _, h := range devHosts("A") {
+		hosts[h.ID] = h
+	}
+	frame := frameHost("A", "dep-1", "web", model.HealthRunning, 8899)
+
+	expected := computeExpected(frame, hosts, nil, nil)
+
+	assert.Len(t, expected, 1, "known 为 nil 时不应过滤掉任何实例")
 }
 
 // TestExpectedStatePerHealth 覆盖 isRunningHealth 全部五个健康分支（M2）：
