@@ -489,6 +489,7 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 		}
 		return installModeSystem, nil
 	}
+	fillServiceHomeDir(ctx, remote, platform.OS, &opts)
 	if _, err := remote.Run(ctx, "sudo -n install -m 0755 "+remoteTmp+" /usr/local/bin/superdev-agent"); err != nil {
 		if platform.OS == "darwin" && shouldUseMacOSUserLaunchAgent(err) {
 			if err := installMacOSUserLaunchAgent(ctx, remote, remoteTmp, opts); err != nil {

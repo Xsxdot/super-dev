@@ -22,10 +22,10 @@ type ServiceOptions struct {
 	BootstrapToken string
 	TLSCertFile    string
 	TLSKeyFile     string
-	// User 是安装时的目标用户（通常为 Host.SSHUser），用于推导服务 HOME。
+	// User 是安装时的目标用户（通常为 Host.SSHUser），查询失败时用于惯例兜底。
 	User string
-	// HomeDir 是写入服务环境的 HOME。非空时优先于按 User 推导的惯例路径，
-	// 避免把 /root 写死进模板。
+	// HomeDir 是写入服务环境的 HOME。安装时应在目标机上 getent/~user 查到后填入；
+	// 空时模板才按 User 做惯例推导（并 WARN）。不要在控制面猜 /home/<user>。
 	HomeDir string
 }
 
@@ -55,10 +55,11 @@ func (o ServiceOptions) commandArgs() []string {
 	return args
 }
 
-// resolvedHomeDir 按平台从目标用户推导服务进程 HOME。
+// resolvedHomeDir 决定写入服务模板的 HOME。
 //
-// HomeDir 非空时原样使用；否则 root/空用户在 Linux 为 /root、在 Darwin 为
-// /var/root，其它用户分别为 /home/<user> 与 /Users/<user>。
+// HomeDir 非空时原样使用（生产路径应是远端查到的真值）。空时才按用户名惯例
+// 推导：root/空用户在 Linux 为 /root、在 Darwin 为 /var/root，其它用户分别为
+// /home/<user> 与 /Users/<user>。惯例路径只允许作为查询失败的最后兜底。
 func (o ServiceOptions) resolvedHomeDir(platformOS string) string {
 	if home := strings.TrimSpace(o.HomeDir); home != "" {
 		return home
