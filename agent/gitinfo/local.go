@@ -139,3 +139,36 @@ func runGitCommand(ctx context.Context, rootPath string, args ...string) (string
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// ListIgnoredEntries 返回 rootPath 下被 git 忽略的条目（相对路径）。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - rootPath: 仓库根目录
+//
+// 返回：
+//   - 条目列表：被忽略的整个目录折叠成一条以 "/" 结尾的目录项（--directory），
+//     其余为文件相对路径；仓库不可用或 git 执行失败时返回错误
+//
+// 注意：
+//   - 目录折叠是刻意的：node_modules/、target/ 这类目录动辄上万个文件，
+//     逐条展开对调用方毫无用处，也会让输出规模失控。调用方按结尾的 "/"
+//     区分目录项与文件项。
+//   - 输出不含被 git 跟踪的文件——只回答「git 不会带走哪些东西」。
+func ListIgnoredEntries(ctx context.Context, rootPath string) ([]string, error) {
+	out, err := runGitCommand(ctx, rootPath, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out) == "" {
+		return nil, nil
+	}
+	lines := strings.Split(out, "\n")
+	entries := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			entries = append(entries, trimmed)
+		}
+	}
+	return entries, nil
+}

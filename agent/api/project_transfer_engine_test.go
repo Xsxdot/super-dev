@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -534,4 +536,81 @@ func TestTransferEngineBack_HomeRunningDevBlocks(t *testing.T) {
 	assert.Equal(t, transferStateFailed, resp.State, "归属机有运行中 dev 服务时迁回应失败")
 	assert.Contains(t, resp.Error, "web(dev)", "失败信息应列出仍在运行的服务")
 	assert.Equal(t, homeHost, app.projectHomeStore.HomeOf(projectID), "迁回失败时归属应保持不变")
+}
+
+// TestTransferEngine_AssetAuditFlagsIgnoredFileMissingOnTarget 钉死
+// 「被 git 忽略、目标机又没有的文件必须进资产清单」。
+//
+// 为什么这条必须有：转移靠 git clone 把代码送到目标机，被忽略的文件结构性
+// 地留在原地。真机上 openrouter 的 config.yaml 正是这样静默缺失的——审计
+// 报了 superdev-mcp 缺失，唯独没报它，因为此前只按 dep.EnvFile 一条线索找。
+// 服务因此起不来，而清单上写着「没有需要补齐的资产提示」。
+func TestTransferEngine_AssetAuditFlagsIgnoredFileMissingOnTarget(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	const projectID = "proj-transfer-ignored"
+	const hostID = "host-ignored"
+	const absDir = "/remote/workspace/transfer-demo"
+	dir := initTransferTestRepo(t)
+	runTransferGit(t, dir, "remote", "add", "origin", "https://example.com/x.git")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("config.yaml\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("api_key: x"), 0o644))
+
+	seedTransferProject(t, app, projectID, dir, "", "sleep 30")
+
+	// 目标机上 config.yaml 不存在，其余 test -f 一律通过——把「唯独这一个缺失」
+	// 单独摘出来，避免断言被别的缺失项蒙对。
+	setTransferRemoteRunner(t, func(cmd string) (string, int, error) {
+		if strings.Contains(cmd, "test -f") && strings.Contains(cmd, "config.yaml") {
+			return "no", 0, nil
+		}
+		return transferSuccessRunner(absDir)(context.Background(), cmd, "")
+	})
+	setTransferNodeDo(t, transferDo(projectID, true))
+
+	run := newTransferRun(projectID, hostID, "Ignored Host", absDir, "master", "https://example.com/x.git")
+	app.executeProjectTransfer(context.Background(), run)
+	resp := run.snapshot()
+
+	require.Equal(t, transferStateSucceeded, resp.State, "缺文件是审计的负向结果，不该让转移失败，err=%s", resp.Error)
+
+	var detail string
+	for _, item := range resp.AssetReport {
+		if item.Code == "ignored_file_missing" {
+			detail = item.Detail
+		}
+	}
+	require.NotEmpty(t, detail, "被忽略且目标机缺失的文件必须进清单，实际=%v", resp.AssetReport)
+	assert.Contains(t, detail, "config.yaml")
+	assert.NotContains(t, detail, "api_key: x", "清单只列文件名，绝不携带内容")
+}
+
+// TestTransferEngine_AssetAuditSkipsIgnoredFilePresentOnTarget 钉死不误报：
+// 目标机上已经有那个文件时不该进清单——清单里塞满假缺失，真缺失就没人看了。
+func TestTransferEngine_AssetAuditSkipsIgnoredFilePresentOnTarget(t *testing.T) {
+	app := newTestAppForPackage(t)
+
+	const projectID = "proj-transfer-ignored-ok"
+	const hostID = "host-ignored-ok"
+	const absDir = "/remote/workspace/transfer-demo"
+	dir := initTransferTestRepo(t)
+	runTransferGit(t, dir, "remote", "add", "origin", "https://example.com/x.git")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("config.yaml\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("api_key: x"), 0o644))
+
+	seedTransferProject(t, app, projectID, dir, "", "sleep 30")
+	setTransferRemoteRunner(t, func(cmd string) (string, int, error) {
+		if strings.Contains(cmd, "test -f") {
+			return "yes", 0, nil
+		}
+		return transferSuccessRunner(absDir)(context.Background(), cmd, "")
+	})
+	setTransferNodeDo(t, transferDo(projectID, true))
+
+	run := newTransferRun(projectID, hostID, "OK Host", absDir, "master", "https://example.com/x.git")
+	app.executeProjectTransfer(context.Background(), run)
+
+	for _, item := range run.snapshot().AssetReport {
+		assert.NotEqual(t, "ignored_file_missing", item.Code, "目标机已有该文件，不该报缺失")
+	}
 }

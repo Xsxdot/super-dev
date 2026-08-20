@@ -174,3 +174,53 @@ func TestInspect_ContextCancelled(t *testing.T) {
 		t.Errorf("error 应可用 errors.Is 判定为 context.Canceled, got %v", err)
 	}
 }
+
+// TestListIgnoredEntriesFoldsDirectoriesAndSkipsTracked 钉死
+// ListIgnoredEntries 的三条契约：忽略的文件要列出、忽略的目录折叠成一条、
+// 被跟踪的文件不出现。
+//
+// 为什么这条重要：转移靠 git clone 把代码送到目标机，被忽略的文件结构性
+// 地留在原地——config.yaml、证书、本地覆盖配置正是这一类，而它们往往是
+// 服务能否跑起来的前提。目录折叠则是规模闸门：node_modules 展开会有上万条。
+func TestListIgnoredEntriesFoldsDirectoriesAndSkipsTracked(t *testing.T) {
+	dir := initTestRepo(t)
+	writeIgnoredFixture(t, dir)
+
+	entries, err := ListIgnoredEntries(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("ListIgnoredEntries 失败: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e] = true
+	}
+	if !got["config.yaml"] {
+		t.Errorf("被忽略的文件 config.yaml 未列出，实际=%v", entries)
+	}
+	if !got["node_modules/"] {
+		t.Errorf("被忽略的目录应折叠成一条目录项 node_modules/，实际=%v", entries)
+	}
+	if got["node_modules/pkg/index.js"] {
+		t.Errorf("目录折叠后不该再展开其内容，实际=%v", entries)
+	}
+	if got["tracked.txt"] {
+		t.Errorf("被跟踪的文件不该出现在忽略清单里，实际=%v", entries)
+	}
+}
+
+func writeIgnoredFixture(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("config.yaml\nnode_modules/\n"), 0o644); err != nil {
+		t.Fatalf("写 .gitignore 失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("api_key: x"), 0o644); err != nil {
+		t.Fatalf("写 config.yaml 失败: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatalf("建 node_modules 失败: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "pkg", "index.js"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("写 index.js 失败: %v", err)
+	}
+}

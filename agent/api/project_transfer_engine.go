@@ -459,6 +459,13 @@ func (a *App) transferAssetAudit(ctx context.Context, run *transferRun, deps *tr
 		})
 	}
 
+	// git 忽略的顶层文件：这一类是转移**结构性**搬不走的——目标机靠 git clone
+	// 取代码，被忽略的文件根本不在 clone 里。而它们恰恰常常是服务跑起来的前提
+	// （config.yaml、证书、本地覆盖配置）。真机上 openrouter 的 config.yaml 正是
+	// 这样静默缺失的：审计报了 superdev-mcp 缺失，唯独没报它，因为此前只按
+	// dep.EnvFile 这一条线索找。
+	ignoredMissing := a.auditIgnoredTopLevelFiles(ctx, run, deps, rootPath)
+
 	// superdev-mcp 存在性
 	res, err := deps.runner(ctx, "command -v superdev-mcp", "")
 	if err != nil {
@@ -472,7 +479,77 @@ func (a *App) transferAssetAudit(ctx context.Context, run *transferRun, deps *tr
 		})
 	}
 
-	return fmt.Sprintf("资产体检完成：缺失 env %d 项，疑似密钥 %d 项，superdev-mcp %s", missing, secretCount, ternaryStr(mcpMissing, "缺失", "就位")), nil
+	return fmt.Sprintf("资产体检完成：缺失 env %d 项，git 忽略文件缺失 %d 项，疑似密钥 %d 项，superdev-mcp %s",
+		missing, ignoredMissing, secretCount, ternaryStr(mcpMissing, "缺失", "就位")), nil
+}
+
+// transferIgnoredFileScanLimit 是每次转移最多列举的「git 忽略文件」条数。
+// 上限存在的理由：仓库根目录下可能有大量被忽略的杂项，全部列出会把真正
+// 重要的两三条淹掉。命中上限时必须记日志说明被截断——静默截断会让清单
+// 读起来像「已经查全了」。
+const transferIgnoredFileScanLimit = 20
+
+// auditIgnoredTopLevelFiles 列出本机项目根目录下被 git 忽略的**顶层文件**，
+// 逐个到目标机探是否存在，缺失的记进资产清单。
+//
+// 参数：
+//   - rootPath: 目标机项目根的绝对路径
+//
+// 返回：
+//   - 目标机缺失的条数（只用于摘要文案）
+//
+// 为什么只扫顶层文件（--directory 让被忽略的整个目录折叠成一条目录项，
+// 随后按结尾的 "/" 剔除）：node_modules/、target/、.venv/ 这类目录动辄上万
+// 个文件，逐个探测既没有意义也探不完；而真正「服务跑不起来」的那一类
+// ——config.yaml、*.local.yaml、证书——几乎总在仓库根目录。
+//
+// 为什么探测失败不让整个步骤失败：这是审计的负向结果，与 env 文件缺失同级；
+// 探不通目标机的情况由后面的 superdev-mcp 探测统一暴露。
+func (a *App) auditIgnoredTopLevelFiles(ctx context.Context, run *transferRun, deps *transferDeps, rootPath string) int {
+	out, err := gitinfo.ListIgnoredEntries(ctx, deps.project.RootPath)
+	if err != nil {
+		log.Printf("[SuperDev] 转移 asset_audit 列举 git 忽略文件失败 project=%s err=%v", run.projectID, err)
+		return 0
+	}
+
+	var candidates []string
+	for _, name := range out {
+		name = strings.TrimSpace(name)
+		// 目录项（以 / 结尾）与子目录下的条目一律跳过——见上方注释。
+		if name == "" || strings.HasSuffix(name, "/") || strings.Contains(name, "/") {
+			continue
+		}
+		candidates = append(candidates, name)
+	}
+	if len(candidates) > transferIgnoredFileScanLimit {
+		log.Printf("[SuperDev] 转移 asset_audit: git 忽略文件过多，只体检前 %d 条 project=%s total=%d",
+			transferIgnoredFileScanLimit, run.projectID, len(candidates))
+		run.addAsset(transferCheckItem{
+			Code: "ignored_scan_truncated",
+			Detail: fmt.Sprintf("本机根目录下有 %d 个被 git 忽略的文件，只体检了前 %d 个，其余需自行核对",
+				len(candidates), transferIgnoredFileScanLimit),
+		})
+		candidates = candidates[:transferIgnoredFileScanLimit]
+	}
+
+	missing := 0
+	for _, name := range candidates {
+		remotePath := path.Join(rootPath, name)
+		res, err := deps.runner(ctx, "test -f "+shellQuoteTransfer(remotePath)+" && echo yes || echo no", "")
+		if err != nil {
+			log.Printf("[SuperDev] 转移 asset_audit 探测 git 忽略文件失败 project=%s file=%s err=%v", run.projectID, name, err)
+			return missing
+		}
+		if strings.TrimSpace(res.Stdout) == "yes" {
+			continue
+		}
+		missing++
+		run.addAsset(transferCheckItem{
+			Code:   "ignored_file_missing",
+			Detail: fmt.Sprintf("本机有 %s 但目标机没有——该文件被 git 忽略，clone 不会带过去，需自行放置（SuperDev 不搬运其内容）", name),
+		})
+	}
+	return missing
 }
 
 // transferSwitchHome 切换项目归属到目标机。
