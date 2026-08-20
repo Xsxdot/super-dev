@@ -3,7 +3,7 @@
  *
  * 职责：
  *   - 验证徽标随 project.home_host_id 在「@ 本机」/「@ <host>」间切换
- *   - 验证 compact 模式只渲染徽标一行，标题/描述/操作/底部说明均不渲染
+ *   - 验证 compact 模式仍展示转移操作，仅省略标题/描述/底部说明
  *   - 验证没有开发机主机时转移按钮置灰并展示「去设置页开启」提示
  *   - 验证唯一开发机时按钮文案直接带主机名，点击直接打开转移弹窗
  *   - 验证多台开发机时点击主按钮展开下拉，选择其一才打开转移弹窗（且带对的
@@ -82,14 +82,54 @@ describe('ProjectHomeCard 徽标与 compact 收敛', () => {
     expect(wrapper.find('[data-test="home-badge"]').text()).toBe('@ aliyun-9')
   })
 
-  it('compact 模式只渲染徽标一行，标题/描述/操作/底部说明均不渲染', () => {
+  it('compact 模式仍展示转移操作，仅省略标题/描述/底部说明', () => {
     const wrapper = mountCard({ project: project(), compact: true })
 
     expect(wrapper.find('[data-test="home-badge"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="home-title"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="home-desc"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="home-actions"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="home-actions"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="home-transfer-btn"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="home-footer"]').exists()).toBe(false)
+  })
+
+  it('两种模式下操作区都是头部的兄弟节点，而非嵌在头部内', () => {
+    // 这条钉的是「操作区只有一份」的**可观测形态**。注意 DOM 计数钉不住它：
+    // 曾经的实现是 compact 与完整页各一份、用 v-if 互斥，任何时刻都只渲染
+    // 一个，findAll 照样返回 1。区别只在结构——那份复制品挂在 .home-card-head
+    // 里面，而现在两种模式共用同一个、始终是 head 的兄弟节点，位置差异交给
+    // .home-card.compact 的两列栅格。所以断言父子关系，不断言数量。
+    for (const compact of [true, false]) {
+      const wrapper = mountCard({ project: project(), compact })
+      const actions = wrapper.find('[data-test="home-actions"]')
+      expect(actions.exists()).toBe(true)
+      expect(actions.element.parentElement).toBe(wrapper.find('[data-test="project-home-card"]').element)
+      expect(wrapper.find('.home-card-head [data-test="home-actions"]').exists()).toBe(false)
+    }
+  })
+
+  it('compact 模式单台开发机时可直接打开转移弹窗', async () => {
+    const { api } = await import('@/api/agent')
+    vi.mocked(api.transferPreflight).mockResolvedValue({
+      blockers: [],
+      ready: [],
+      target_dir: '~/workspace/demo',
+      branch: 'main',
+    })
+    const remote = useRemoteStore()
+    remote.hosts = [devHost()]
+    vi.spyOn(remote, 'loadHosts').mockResolvedValue(undefined)
+
+    const wrapper = mountCard({ project: project(), compact: true })
+    await new Promise(resolve => setTimeout(resolve))
+
+    const btn = wrapper.find('[data-test="home-transfer-btn"]')
+    expect((btn.element as HTMLButtonElement).disabled).toBe(false)
+    expect(btn.text()).toContain('aliyun-1')
+    await btn.trigger('click')
+
+    expect(wrapper.find('[data-test="project-transfer-dialog"]').exists()).toBe(true)
+    await vi.waitFor(() => expect(api.transferPreflight).toHaveBeenCalledWith('p1', 'host-1', undefined))
   })
 
   it('非 compact 模式渲染标题、描述、操作区和底部说明', () => {

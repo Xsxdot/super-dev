@@ -4,8 +4,8 @@
 职责：
   - 在 workspace tab 或独立路由中展示项目运行状态、流水线、入口配置和项目配置
   - 复用 RuntimeStatusTab、PipelinesTab、ProjectIngressTab、ProjectConfigSurface
-  - 头部下方嵌入 ProjectHomeCard（开发环境归属卡），compact 时该卡收敛为
-    只有徽标一行，避免挤占 workspace tab 头部空间
+  - 头部下方嵌入 ProjectHomeCard（开发环境归属卡），compact 时仍保留转移
+    入口，仅省略说明文案，保证 workspace 概览主路径可用
 
 边界：
   - 不读取路由参数

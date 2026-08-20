@@ -9,8 +9,10 @@ ProjectHomeCard：项目概览页的「开发环境归属」卡片。
   - 归属在远端时提供「迁回本机…」入口
   - 挂载 ProjectTransferDialog 并在转移成功后刷新项目数据，让徽标/描述
     立刻反映最新归属，不需要用户手动刷新页面
-  - compact 模式（复用于 workspace tab）只渲染徽标一行，不渲染标题/描述/
-    操作按钮/底部说明，避免挤占 workspace tab 头部空间
+  - compact 模式（workspace tab）仍展示转移/迁回按钮，仅省略标题、描述与
+    底部说明，避免主路径入口被藏掉
+  - 操作区在模板里只出现一份：compact 与完整页的差异是**位置**，由
+    .home-card.compact 的两列栅格承担，不靠复制模板实现
 
 边界：
   - 不做转移可行性判定——预检结果（blockers/ready）完全来自后端，本卡片
@@ -67,9 +69,8 @@ const transferButtonLabel = computed(() => {
 })
 
 onMounted(async () => {
-  // compact 模式只渲染徽标，徽标数据来自 project.home_host_name（已随项目一起
-  // 拿到），不依赖 hosts 列表——没必要在挤占空间的 workspace tab 里额外拉一次。
-  if (props.compact) return
+  // workspace compact 与完整页都要展示转移按钮，因此都需要 hosts 列表判断
+  // 开发机候选；徽标本身仍可用 project.home_host_name，不依赖这次加载。
   if (remoteStore.hosts.length === 0) {
     // 加载失败不阻断卡片渲染：最坏情况是按钮短暂显示「暂无开发机」，用户重开
     // 弹窗或刷新页面即可恢复，不值得为此单独维护一条错误态 UI。
@@ -127,50 +128,55 @@ function goSettings() {
       <span class="node-route-badge home-badge" data-test="home-badge">{{ badgeText }}</span>
     </div>
 
-    <template v-if="!compact">
-      <p class="home-card-desc" data-test="home-desc">{{ descriptionText }}</p>
+    <p v-if="!compact" class="home-card-desc" data-test="home-desc">{{ descriptionText }}</p>
 
-      <div class="home-actions" data-test="home-actions">
-        <template v-if="!isRemote">
-          <div class="home-transfer-wrap">
-            <button
-              type="button"
-              class="home-btn-primary"
-              data-test="home-transfer-btn"
-              :disabled="devMachineHosts.length === 0"
-              @click="onTransferClick"
-            >
-              {{ transferButtonLabel }}<span v-if="devMachineHosts.length > 1" aria-hidden="true"> ▾</span>
-            </button>
-            <div v-if="dropdownOpen" class="home-dev-machine-menu" data-test="home-dev-machine-menu">
-              <button
-                v-for="host in devMachineHosts"
-                :key="host.id"
-                type="button"
-                class="home-dev-machine-item"
-                :data-test="`home-dev-machine-item-${host.id}`"
-                @click="selectHost(host)"
-              >
-                {{ host.name }}
-              </button>
-            </div>
-          </div>
-          <span v-if="devMachineHosts.length === 0" class="home-hint" data-test="home-transfer-hint">
-            {{ t('overview.home.noDevMachineHint') }} ·
-            <button type="button" class="home-hint-link" data-test="home-goto-settings" @click="goSettings">
-              {{ t('overview.home.goSettings') }}
-            </button>
-          </span>
-        </template>
-        <template v-else>
-          <button type="button" class="home-btn-primary" data-test="home-transfer-back-btn" @click="openBackDialog">
-            {{ t('overview.home.transferBack') }}
+    <!-- 操作区只渲染一份：compact 与完整页都要它，差别只是位置与文案密度。
+         compact 靠 .home-card.compact 的两列栅格把它并进头部行，不复制模板
+         ——复制过一次，两份连 data-test 都一样，改一处漏一处只是时间问题。 -->
+    <div class="home-actions" data-test="home-actions">
+      <template v-if="!isRemote">
+        <div class="home-transfer-wrap">
+          <button
+            type="button"
+            class="home-btn-primary"
+            data-test="home-transfer-btn"
+            :disabled="devMachineHosts.length === 0"
+            @click="onTransferClick"
+          >
+            {{ transferButtonLabel }}<span v-if="devMachineHosts.length > 1" aria-hidden="true"> ▾</span>
           </button>
-        </template>
-      </div>
+          <div v-if="dropdownOpen" class="home-dev-machine-menu" data-test="home-dev-machine-menu">
+            <button
+              v-for="host in devMachineHosts"
+              :key="host.id"
+              type="button"
+              class="home-dev-machine-item"
+              :data-test="`home-dev-machine-item-${host.id}`"
+              @click="selectHost(host)"
+            >
+              {{ host.name }}
+            </button>
+          </div>
+        </div>
+        <span v-if="devMachineHosts.length === 0" class="home-hint" data-test="home-transfer-hint">
+          {{ t('overview.home.noDevMachineHint') }} ·
+          <button type="button" class="home-hint-link" data-test="home-goto-settings" @click="goSettings">
+            {{ t('overview.home.goSettings') }}
+          </button>
+        </span>
+      </template>
+      <button
+        v-else
+        type="button"
+        class="home-btn-primary"
+        data-test="home-transfer-back-btn"
+        @click="openBackDialog"
+      >
+        {{ t('overview.home.transferBack') }}
+      </button>
+    </div>
 
-      <p class="home-card-footer" data-test="home-footer">{{ t('overview.home.footerNote') }}</p>
-    </template>
+    <p v-if="!compact" class="home-card-footer" data-test="home-footer">{{ t('overview.home.footerNote') }}</p>
 
     <ProjectTransferDialog
       v-if="showDialog"
@@ -196,11 +202,18 @@ function goSettings() {
 .home-card.compact {
   margin: 8px 16px;
   padding: 6px 10px;
+  gap: 0;
+  /* compact 只渲染徽标与操作区两件东西，用两列栅格把它们并成一行：
+     操作区因此不需要第二份模板，位置差异完全由布局承担。 */
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: 8px;
 }
 .home-card-head {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .home-card-title {
   margin: 0;
@@ -224,6 +237,14 @@ function goSettings() {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+}
+.home-card.compact .home-actions {
+  gap: 8px;
+}
+.home-card.compact .home-btn-primary {
+  min-height: 24px;
+  padding: 3px 10px;
+  font-size: 11px;
 }
 .home-transfer-wrap {
   position: relative;
