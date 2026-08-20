@@ -38,10 +38,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/xsxdot/super-dev/agent/configchange"
@@ -159,6 +162,44 @@ func (a *App) forwardToHome(w http.ResponseWriter, r *http.Request, homeHostID s
 	a.forwardToHost(w, r, homeHostID)
 }
 
+// homeForwardFailureFace 把一次转发失败分成「够不着」和「等不到回复」两类，
+// 返回对应的 error code 与文案前缀。
+//
+// 参数：
+//   - err: nodeTransportDo 返回的传输层错误
+//
+// 返回：
+//   - code: home_unreachable（连不上）或 home_timeout（连上了但没等到响应）
+//   - message: 文案前缀，调用方在其后拼接错误原文
+//
+// 为什么必须分开：真机上远端 cargo build 卡了十分钟，转发因客户端超时返回
+// home_unreachable，界面上写着「主机不可达」——而那台机器好得很，还在老老实实
+// 编译。把「远端在忙」说成「主机不可达」会把排查方向整个引偏（去查网络、
+// 查 agent 存活），而真正该做的是去看那台机器上的任务。
+//
+// 更要紧的是二者的**后果**不同：连不上意味着操作根本没开始；超时意味着请求
+// 很可能已经送达并正在执行，重试会重复触发一次副作用。文案必须说出这一点。
+func homeForwardFailureFace(err error) (string, string) {
+	if isTimeoutError(err) {
+		return "home_timeout", "已连上归属机但未在超时内收到响应，该操作可能仍在归属机上继续执行，请先去归属机确认再重试: "
+	}
+	return "home_unreachable", "home host unreachable: "
+}
+
+// isTimeoutError 判断错误链上是否存在超时语义：context 超时，或实现了
+// net.Error 且自称 Timeout 的错误（http.Client 的 awaiting headers 超时
+// 走的是后者）。
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+	return false
+}
+
 // forwardToHost 把当前请求转发到指定 host，并将其响应原样回写给调用方。
 //
 // 它同时服务两种语义不同的路径：forwardToHome 按项目归属路由，审批 handler
@@ -178,8 +219,10 @@ func (a *App) forwardToHostWithObserver(w http.ResponseWriter, r *http.Request, 
 	if r.Body != nil {
 		read, err := io.ReadAll(r.Body)
 		if err != nil {
+			// 读的是**调用方**的请求体，跟归属机可不可达毫无关系。此前这里复用
+			// home_unreachable，会把一个本机侧的坏请求指向一台无辜的机器。
 			log.Printf("[SuperDev] hostroute: 读取请求体失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
-			jsonErrorCode(w, http.StatusBadGateway, "home_unreachable", "failed to read request body: "+err.Error(), nil)
+			jsonErrorCode(w, http.StatusBadRequest, "invalid_request_body", "failed to read request body: "+err.Error(), nil)
 			return false
 		}
 		body = read
@@ -210,8 +253,9 @@ func (a *App) forwardToHostWithObserver(w http.ResponseWriter, r *http.Request, 
 		Body:    bytes.NewReader(body),
 	})
 	if err != nil {
-		log.Printf("[SuperDev] hostroute: 转发失败 %s %s → %s err=%v", r.Method, r.URL.Path, targetHostID, err)
-		jsonErrorCode(w, http.StatusBadGateway, "home_unreachable", "home host unreachable: "+err.Error(), map[string]string{"host_id": targetHostID})
+		code, message := homeForwardFailureFace(err)
+		log.Printf("[SuperDev] hostroute: 转发失败 %s %s → %s code=%s err=%v", r.Method, r.URL.Path, targetHostID, code, err)
+		jsonErrorCode(w, http.StatusBadGateway, code, message+err.Error(), map[string]string{"host_id": targetHostID})
 		return false
 	}
 	if resp.Body != nil {

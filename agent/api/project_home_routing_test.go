@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -503,3 +504,36 @@ func TestForwardToHome_NeverForwardsCredentialHeaders(t *testing.T) {
 	assert.Empty(t, call.header.Get("Authorization"), "本机凭据绝不能被转发到归属机")
 	assert.Empty(t, call.header.Get("X-SuperDev-Approval-Token"), "审批 token 是本机语义，不跨机透传")
 }
+
+// TestControlDeploymentRuntime_HomeTimeoutIsNotReportedAsUnreachable 钉死
+// 「等不到回复」不能被说成「够不着」。
+//
+// 为什么这两者必须分开：真机上远端 cargo build 卡了十分钟，转发因客户端
+// 超时返回 home_unreachable，界面写着「主机不可达」——而那台机器好得很，
+// 还在老老实实编译。更要紧的是后果不同：连不上意味着操作根本没开始，
+// 超时意味着请求很可能已经送达并正在执行，重试会重复触发一次副作用。
+func TestControlDeploymentRuntime_HomeTimeoutIsNotReportedAsUnreachable(t *testing.T) {
+	for name, injected := range map[string]error{
+		"context 超时": context.DeadlineExceeded,
+		// http.Client 的 "awaiting headers" 超时走的是 net.Error 这条路，
+		// 不是 context.DeadlineExceeded——真机上撞到的正是这一种。
+		"net.Error 超时": &net.OpError{Op: "read", Err: timeoutOpErr{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, baseURL, transport := setupHomeRoutedApp(t)
+			transport.err = injected
+
+			resp := postJSONForRawTest(t, baseURL+"/api/deployments/dep-web-dev/start", map[string]any{}, http.StatusBadGateway)
+			assert.Equal(t, "home_timeout", resp["code"])
+			assert.Contains(t, resp["error"], "可能仍在归属机上继续执行",
+				"文案必须说清操作可能已在执行，否则用户会直接重试并重复触发副作用")
+		})
+	}
+}
+
+// timeoutOpErr 是一个自称超时的错误，用于构造 net.Error 形态的超时。
+type timeoutOpErr struct{}
+
+func (timeoutOpErr) Error() string   { return "i/o timeout" }
+func (timeoutOpErr) Timeout() bool   { return true }
+func (timeoutOpErr) Temporary() bool { return true }
