@@ -209,6 +209,7 @@ func desiredDeploymentsForHost(projects []model.Project, hostID string) []model.
 					ServiceName:  service.Name,
 					ProjectID:    project.ID,
 					EnvName:      dep.EnvName,
+					Ports:        dep.Ports,
 					Runtime:      dep.Runtime,
 					Logs:         deploymentLogsForManaged(dep),
 					Location:     model.LocationLocal,

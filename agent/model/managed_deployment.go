@@ -30,6 +30,12 @@ type ManagedDeployment struct {
 	Runtime      *RuntimeConfig `json:"runtime,omitempty"`
 	Logs         *LogConfig     `json:"logs,omitempty"`
 	Location     DeployLocation `json:"location"`
+	// Ports 是该 deployment 声明的监听端口，随下发清单传到目标机。
+	//
+	// 为什么必须在这个载荷里：下发式 deployment 在目标机上没有 project.yaml
+	// （目标机的项目是由本清单合成的内存对象），端口声明没有第二条路可走。
+	// 缺了它，目标机上报的节点帧端口恒空，本机端口镜像永远建立不起来。
+	Ports []int `json:"ports,omitempty"`
 }
 
 // ManagedCollectorFailure 表示某个期望 collector 未能启动。
