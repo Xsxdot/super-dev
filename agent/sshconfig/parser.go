@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 )
 
 // Host 是从 ssh config 中解析出的单条主机记录。
@@ -30,7 +32,7 @@ type Host struct {
 
 // DefaultPath 返回 ~/.ssh/config 的绝对路径。
 func DefaultPath() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := hostpaths.UserHome()
 	if err != nil {
 		return "", err
 	}

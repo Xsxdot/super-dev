@@ -66,7 +66,9 @@ func (a *App) integrationsDetect(w http.ResponseWriter, r *http.Request) {
 	}
 	// home 必须先于命令探测解析：兜底目录清单里有 5 个是 home 相对的，
 	// 拿不到 home 就只剩 PATH 一条路——那正是本端点最初的缺陷形态。
-	home, err := os.UserHomeDir()
+	// 走 integrationsHome 而不是直调，保证与受限文件通道同一入口
+	// （含 $HOME 缺失时的 passwd 回落）。
+	home, err := a.integrationsHome()
 	if err != nil {
 		log.Printf("[SuperDev] integrations: 解析 home 失败：%v", err)
 		jsonError(w, http.StatusInternalServerError, "resolve home failed")

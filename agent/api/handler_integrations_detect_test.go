@@ -214,3 +214,27 @@ func TestIntegrationsDetectIgnoresDirectoriesNamedLikeCommands(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &got))
 	require.False(t, got.Commands["claude"], "同名目录不是 CLI，不能报成已安装")
 }
+
+// TestIntegrationsDetectResolvesHomeWhenHomeEnvEmpty 是 F1 真机 500 的盲区闸门。
+//
+// 现象：systemd 不给 agent 设 HOME，detect 直调 os.UserHomeDir 返回
+// "$HOME is not defined"，端点 500。现有测试要么 HOME 本来就有值，要么走
+// integrationsHomeOverride，真实解析路径结构性地走不到。
+//
+// 本测试清空 HOME、且不设 override，强制走 hostpaths.UserHome 的 passwd 回落。
+func TestIntegrationsDetectResolvesHomeWhenHomeEnvEmpty(t *testing.T) {
+	t.Setenv("HOME", "")
+
+	app := newTestAppForPackage(t)
+	require.Empty(t, app.integrationsHomeOverride, "本测试必须走真实 home 解析，不能用 override 绕开")
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/integrations/detect", bytes.NewBufferString(`{"commands":[]}`))
+	require.Equal(t, http.StatusOK, resp.Code, "HOME 为空时 detect 必须回落到 passwd，不能 500。body=%s", resp.Body.String())
+
+	var got integrationsDetectResponseForTest
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &got))
+	require.NotEmpty(t, got.Home)
+	info, err := os.Stat(got.Home)
+	require.NoError(t, err)
+	require.True(t, info.IsDir(), "detect 返回的 home 必须是已存在的目录，got=%q", got.Home)
+}

@@ -177,6 +177,9 @@ func (i *Installer) Install(ctx context.Context, host model.Host) (Result, error
 // 注意：
 //   - Agent API 已将监听/TLS 配置从 Host 拆出，因此直推安装需通过该入口显式传参
 func (i *Installer) InstallWithOptions(ctx context.Context, host model.Host, serviceOpts ServiceOptions) (Result, error) {
+	if strings.TrimSpace(serviceOpts.User) == "" {
+		serviceOpts.User = host.SSHUser
+	}
 	remote, err := i.factory(host)
 	if err != nil {
 		return Result{}, stageErr("connect", err)
@@ -367,6 +370,7 @@ func serviceOptionsForHost(host model.Host, bootstrapToken string) ServiceOption
 		Port:           model.DefaultAgentListenPort,
 		RequireAuth:    strings.TrimSpace(bootstrapToken) != "",
 		BootstrapToken: bootstrapToken,
+		User:           host.SSHUser,
 	}
 	return opts
 }
@@ -485,6 +489,7 @@ func installCommands(ctx context.Context, remote Remote, platform Platform, remo
 		}
 		return installModeSystem, nil
 	}
+	fillServiceHomeDir(ctx, remote, platform.OS, &opts)
 	if _, err := remote.Run(ctx, "sudo -n install -m 0755 "+remoteTmp+" /usr/local/bin/superdev-agent"); err != nil {
 		if platform.OS == "darwin" && shouldUseMacOSUserLaunchAgent(err) {
 			if err := installMacOSUserLaunchAgent(ctx, remote, remoteTmp, opts); err != nil {

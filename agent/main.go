@@ -22,6 +22,7 @@ import (
 	"syscall"
 
 	"github.com/xsxdot/super-dev/agent/api"
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 	"github.com/xsxdot/super-dev/agent/mcp"
 )
 
@@ -106,7 +107,7 @@ func main() {
 
 // defaultDataDir 返回默认的数据目录路径（~/.superdev）。
 func defaultDataDir() string {
-	home, _ := os.UserHomeDir()
+	home, _ := hostpaths.UserHome()
 	return filepath.Join(home, ".superdev")
 }
 

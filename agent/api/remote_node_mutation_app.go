@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -25,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/xsxdot/gokit/logger"
 	apiassembler "github.com/xsxdot/super-dev/agent/api/internal/assembler"
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/remote"
 	"github.com/xsxdot/super-dev/agent/tunnel"
@@ -831,7 +831,7 @@ func expandHome(path string) string {
 	if !strings.HasPrefix(path, "~/") {
 		return path
 	}
-	home, err := os.UserHomeDir()
+	home, err := hostpaths.UserHome()
 	if err != nil {
 		return path
 	}

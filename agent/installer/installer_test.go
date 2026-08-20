@@ -155,6 +155,74 @@ func TestInstallerInstallsLinuxAgent(t *testing.T) {
 	assert.Contains(t, remote.commands, installerVerifyCommand(57017))
 }
 
+func TestInstallerInjectsLookedUpHomeNotConvention(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{
+		outputs: []string{"Linux\n", "x86_64\n"},
+		commandOutputs: map[string][]string{
+			getentPasswdCommand("alice"): {"alice:x:1000:1000:Alice:/opt/app:/bin/bash\n"},
+		},
+	}
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	_, err := inst.InstallWithOptions(context.Background(), installerTestHost("h1", "10.0.0.1", "alice", 22, 57019), ServiceOptions{
+		Port:           57017,
+		RequireAuth:    true,
+		BootstrapToken: "bootstrap",
+		User:           "alice",
+	})
+	require.NoError(t, err)
+
+	unit := catCommandContaining(t, remote.commands, "/tmp/superdev-agent.service")
+	assert.Contains(t, unit, "Environment=HOME=/opt/app")
+	assert.NotContains(t, unit, "Environment=HOME=/home/alice")
+	assert.Contains(t, remote.commands, getentPasswdCommand("alice"))
+}
+
+func TestInstallerFallsBackToConventionHomeWhenLookupFails(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "superdev-agent-linux-amd64")
+	require.NoError(t, os.WriteFile(binary, []byte("bin"), 0o755))
+	remote := &fakeRemote{
+		outputs: []string{"Linux\n", "x86_64\n"},
+		failCommands: map[string][]error{
+			getentPasswdCommand("alice"):  {errors.New("getent: command not found")},
+			evalTildeHomeCommand("alice"): {errors.New("no such user")},
+		},
+	}
+	inst := NewWithRemoteFactory(Options{BinaryDir: dir}, func(host model.Host) (Remote, error) {
+		return remote, nil
+	})
+
+	_, err := inst.InstallWithOptions(context.Background(), installerTestHost("h1", "10.0.0.1", "alice", 22, 57019), ServiceOptions{
+		Port:           57017,
+		RequireAuth:    true,
+		BootstrapToken: "bootstrap",
+		User:           "alice",
+	})
+	require.NoError(t, err)
+
+	unit := catCommandContaining(t, remote.commands, "/tmp/superdev-agent.service")
+	assert.Contains(t, unit, "Environment=HOME=/home/alice")
+	assert.Contains(t, remote.commands, getentPasswdCommand("alice"))
+	assert.Contains(t, remote.commands, evalTildeHomeCommand("alice"))
+}
+
+func catCommandContaining(t *testing.T, commands []string, needle string) string {
+	t.Helper()
+	for _, cmd := range commands {
+		if strings.Contains(cmd, "cat >") && strings.Contains(cmd, needle) {
+			return cmd
+		}
+	}
+	t.Fatalf("no cat command containing %q in %#v", needle, commands)
+	return ""
+}
+
 func TestInstallerInstallsWindowsAgent(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "superdev-agent-windows-amd64.exe")

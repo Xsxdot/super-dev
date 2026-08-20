@@ -13,13 +13,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -141,15 +141,15 @@ func isAlreadyBootstrapped(err error) bool {
 }
 
 func expandHomePath(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := hostpaths.UserHome()
+	if err != nil {
+		return path
+	}
 	if path == "~" {
-		if home, err := os.UserHomeDir(); err == nil {
-			return home
-		}
+		return home
 	}
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
-		}
-	}
-	return path
+	return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 }

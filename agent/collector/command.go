@@ -15,11 +15,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -86,7 +86,7 @@ func ValidatePath(path string) error {
 func NormalizeFileTailPath(path string) (string, error) {
 	normalized := path
 	if path == "~" || strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
+		home, err := hostpaths.UserHome()
 		if err != nil || home == "" {
 			return "", ErrInvalidPath
 		}

@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 )
 
 // BrowserCandidate 描述一个可探测的浏览器安装候选。
@@ -24,7 +26,7 @@ type BrowserCandidate struct {
 
 // DefaultBrowserCandidates 返回当前系统常见 Chromium 兼容浏览器候选。
 func DefaultBrowserCandidates() []BrowserCandidate {
-	home, _ := os.UserHomeDir()
+	home, _ := hostpaths.UserHome()
 	switch runtime.GOOS {
 	case "darwin":
 		candidates := []BrowserCandidate{

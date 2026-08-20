@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 )
 
 const fallbackSystemPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -283,7 +285,7 @@ func developerToolPaths(workDir string) []string {
 		"/usr/local/sbin",
 		"/usr/local/go/bin",
 	}
-	home, err := os.UserHomeDir()
+	home, err := hostpaths.UserHome()
 	if err != nil || home == "" {
 		return paths
 	}
