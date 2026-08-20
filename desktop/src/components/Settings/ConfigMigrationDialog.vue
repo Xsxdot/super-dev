@@ -46,12 +46,14 @@ async function load() {
   loadError.value = null
   try {
     const result = await getConfigMigrationPreview(props.projectId)
-    if ('status' in result && result.status === 'not_needed') {
+    if (!('suspects' in result)) {
       // 项目在弹窗打开前已是 split 格式（例如横幅渲染后项目被并发迁移）。
       // 这不是失败路径，直接展示已完成态。
       phase.value = 'not_needed'
       return
     }
+    // 用 'suspects' in result 正向收窄：'status' in result 的否定分支在部分
+    // TS 版本下不会把 {status:'not_needed'} 从联合中剔除，导致下方类型错误。
     plan.value = result
     dispositions.value = result.suspects.map(() => 'local')
     phase.value = 'preview'
