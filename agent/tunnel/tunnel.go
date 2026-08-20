@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/xsxdot/gokit/logger"
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 	"github.com/xsxdot/super-dev/agent/model"
 	"golang.org/x/crypto/ssh"
 )
@@ -291,7 +292,7 @@ func BuildClientConfigWithHostKeyEvidence(c Credentials) (*ssh.ClientConfig, *Ho
 // ReadPrivateKey 读取磁盘上的私钥文件，自动展开路径开头的 ~。
 func ReadPrivateKey(path string) ([]byte, error) {
 	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
+		home, err := hostpaths.UserHome()
 		if err != nil {
 			return nil, fmt.Errorf("get home dir: %w", err)
 		}

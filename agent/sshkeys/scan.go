@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/xsxdot/gokit/logger"
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 )
 
 // maxKeyFileSize 是参与判定的文件大小上限。私钥不会达到这个量级，
@@ -54,7 +55,7 @@ type Key struct {
 //   - 绝对路径
 //   - 无法确定 home 目录时返回错误
 func DefaultDir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := hostpaths.UserHome()
 	if err != nil {
 		return "", err
 	}
@@ -156,7 +157,7 @@ func inspect(path, name string) (Key, bool, error) {
 	// 后端 ReadPrivateKey 与 expandHome 均已处理展开，前端展示也更干净。
 	// 保存时前端原样回传 ~/ 形式，链路自洽。
 	displayPath := path
-	home, err := os.UserHomeDir()
+	home, err := hostpaths.UserHome()
 	if err == nil && strings.HasPrefix(path, home+string(filepath.Separator)) {
 		displayPath = "~" + path[len(home):]
 	}

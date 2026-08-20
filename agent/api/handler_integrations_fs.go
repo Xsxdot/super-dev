@@ -35,6 +35,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 )
 
 // integrationsFsMaxReadBytes 是 read 端点允许返回的单文件内容上限。
@@ -57,14 +59,14 @@ const integrationsFsWriteBatchMaxBytes = 4 << 20 // 4MB
 
 // integrationsHome 返回受限文件端点用于白名单校验的 home 根目录。
 //
-// 默认取 os.UserHomeDir()；测试经 App.integrationsHomeOverride 覆盖为
-// t.TempDir()，避免测试真的读写运行测试的开发机的真实 home 目录。生产环境
-// 该字段恒为空串，回退到真实 home。
+// 默认取 hostpaths.UserHome()（$HOME 缺失时回落 passwd）；测试经
+// App.integrationsHomeOverride 覆盖为 t.TempDir()，避免测试真的读写运行
+// 测试的开发机的真实 home 目录。生产环境该字段恒为空串，回退到真实 home。
 func (a *App) integrationsHome() (string, error) {
 	if a.integrationsHomeOverride != "" {
 		return a.integrationsHomeOverride, nil
 	}
-	return os.UserHomeDir()
+	return hostpaths.UserHome()
 }
 
 // integrationsFsNewFileModeRestricted 是 write 端点 new_file_mode 字段唯一被

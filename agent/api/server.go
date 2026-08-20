@@ -301,7 +301,7 @@ type App struct {
 	listenAddr string
 	// integrationsHomeOverride 仅供包内测试覆盖受限文件端点（Task 4）使用的
 	// home 根目录（通常赋值为 t.TempDir()），避免测试真的读写开发机的真实
-	// home 目录。生产环境恒为空串，integrationsHome 回退到 os.UserHomeDir。
+	// home 目录。生产环境恒为空串，integrationsHome 回退到 hostpaths.UserHome。
 	integrationsHomeOverride string
 }
 

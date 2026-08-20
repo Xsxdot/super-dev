@@ -25,12 +25,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/xsxdot/super-dev/agent/hostpaths"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
 // mcpSetupHomeDir 是本机 HOME 目录解析的测试替身。
 //
-// 生产环境为空字符串时，用 os.UserHomeDir() 解析真实路径；测试把它赋值为
+// 生产环境为空字符串时，用 hostpaths.UserHome() 解析真实路径；测试把它赋值为
 // t.TempDir()，从而在不触碰真实用户目录的前提下验证真实文件读写。
 var mcpSetupHomeDir string
 
@@ -88,7 +89,7 @@ func (a *App) setupClaudeCodeMCP(w http.ResponseWriter, r *http.Request) {
 func mcpSetupConfigPath() (string, error) {
 	home := mcpSetupHomeDir
 	if home == "" {
-		h, err := os.UserHomeDir()
+		h, err := hostpaths.UserHome()
 		if err != nil {
 			return "", err
 		}
