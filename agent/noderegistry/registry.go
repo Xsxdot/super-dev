@@ -197,6 +197,34 @@ func (r *Registry) ApplyForTest(batch []nodetransport.NodeStatus) {
 	r.applyBatch(-1, batch, time.Now().UTC())
 }
 
+// Forget 从节点快照集合中移除一台 host，并广播一次新快照。
+//
+// 参数：
+//   - hostID: 要移除的主机 ID；不存在时静默返回，不广播
+//
+// 为什么需要它：卸载（以及 detach）是权威事件——它确定地告诉我们这台机器
+// 上已经没有 agent 了。而快照里的 Agent.Installed / Agent.Version 是「正状态」，
+// 心跳超时只会把 Reachable/Health 翻成不可达，这两个字段永远不会反向失效。
+// 不摘除的后果实测可见：一台二进制、unit、数据目录、控制面配置全删干净的机器，
+// /api/agents 仍报 installed=true version=0.2.3，界面上「装了但连不上」和
+// 「根本没装」不可辨——而这两种情况的处置动作正好相反。
+//
+// 注意：本方法只处理「我们确知它没了」。仅仅不可达不要调它——那种情况下
+// 保留末次已知值是有意义的。
+func (r *Registry) Forget(hostID string) {
+	r.mu.Lock()
+	if _, existed := r.nodes[hostID]; !existed {
+		r.mu.Unlock()
+		return
+	}
+	delete(r.nodes, hostID)
+	delete(r.lastSeen, hostID)
+	r.broadcastLocked(sortedSnapshot(r.nodes))
+	r.mu.Unlock()
+
+	log.Printf("[SuperDev] noderegistry: 已摘除 host=%s 的节点快照（卸载/解除纳管）", hostID)
+}
+
 func (r *Registry) consumeTransport(ctx context.Context, idx int, transport nodetransport.NodeTransport) {
 	ch, cancel := transport.SubscribeNodes(ctx)
 	defer cancel()

@@ -21,6 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xsxdot/super-dev/agent/installer"
 	"github.com/xsxdot/super-dev/agent/model"
+	"github.com/xsxdot/super-dev/agent/noderegistry"
+	"github.com/xsxdot/super-dev/agent/nodetransport"
 	"github.com/xsxdot/super-dev/agent/operation"
 	"github.com/xsxdot/super-dev/agent/tunnel"
 )
@@ -81,6 +83,41 @@ func TestUninstallAgentRemovesConfigAfterRemoteSuccessAndPreservesHost(t *testin
 	_, hostFound, err := app.remoteHostByID(hostID)
 	require.NoError(t, err)
 	assert.True(t, hostFound)
+}
+
+// TestUninstallAgentForgetsNodeRegistrySnapshot 验证卸载成功后节点快照不再覆盖真实状态。
+func TestUninstallAgentForgetsNodeRegistrySnapshot(t *testing.T) {
+	fake := &fakeAgentInstaller{}
+	registry := noderegistry.New(nil, noderegistry.Options{})
+	app, err := NewApp(AppConfig{
+		DataDir:              t.TempDir(),
+		InstallerOverride:    fake,
+		NodeRegistryOverride: registry,
+	})
+	require.NoError(t, err)
+	defer app.Close()
+	hostID := createInstallTestHost(t, app)
+	postInstallTestAgent(t, app, hostID, `
+	  "transport":{"chain":[{"type":"direct","direct":{"address":"100.117.127.123:57019"}}]},
+	  "config":{"listen_port":57019},
+	  "security":{"tls":{"mode":"auto"}}
+	`)
+	registry.ApplyForTest([]nodetransport.NodeStatus{
+		{HostID: hostID, Agent: model.AgentRuntime{Installed: true, Version: "0.2.3", Reachable: true}},
+	})
+
+	before := httptestDo(t, app, http.MethodGet, "/api/agents", nil)
+	require.Equal(t, http.StatusOK, before.Code)
+	assert.Contains(t, before.Body.String(), `"installed":true`)
+
+	resp := httptestDo(t, app, http.MethodPost, "/api/agents/"+hostID+"/uninstall", bytes.NewBufferString(`{}`))
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	_, ok := registry.SnapshotOf(hostID)
+	assert.False(t, ok, "卸载成功后 registry 不应保留该 host 的陈旧快照")
+	after := httptestDo(t, app, http.MethodGet, "/api/agents", nil)
+	require.Equal(t, http.StatusOK, after.Code)
+	assert.NotContains(t, after.Body.String(), `"installed":true`)
 }
 
 // TestUninstallAgentPurgesRemoteDataOnlyWhenExplicitlyRequested 验证只有显式选择

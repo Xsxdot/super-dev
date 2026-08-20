@@ -108,6 +108,57 @@ func deploymentIDsOf(status nodetransport.NodeStatus) []string {
 	return out
 }
 
+// TestForgetRemovesNodeAndBroadcasts 钉死「卸载是权威事件，快照必须消失」。
+//
+// 为什么不是「把 installed 改成 false」而是整条移除：控制面对这台机器已经
+// 一无所知（agent 配置也一并删了），保留一条 installed=false 的空壳快照等于
+// 用另一个断言替换旧断言。没有就是没有。
+func TestForgetRemovesNodeAndBroadcasts(t *testing.T) {
+	r := noderegistry.New(nil, noderegistry.Options{})
+	r.ApplyForTest([]nodetransport.NodeStatus{{
+		HostID: "h1",
+		Agent:  model.AgentRuntime{Installed: true, Version: "0.2.3", Reachable: true},
+	}})
+	_, ok := r.SnapshotOf("h1")
+	require.True(t, ok)
+
+	ch, cancel := r.Subscribe()
+	defer cancel()
+	// Subscribe 建立订阅时会立刻推一帧当前快照，先排掉它，否则下面的 select
+	// 会读到 Forget 之前的那一帧而假通过。
+	<-ch
+
+	r.Forget("h1")
+
+	_, ok = r.SnapshotOf("h1")
+	require.False(t, ok, "Forget 之后不应再有该 host 的快照")
+
+	select {
+	case snap := <-ch:
+		for _, n := range snap {
+			require.NotEqual(t, "h1", n.HostID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Forget 应当广播一次新快照")
+	}
+}
+
+// TestForgetUnknownHostIsNoop 钉死重复卸载/卸载未知 host 不 panic、不广播。
+func TestForgetUnknownHostIsNoop(t *testing.T) {
+	r := noderegistry.New(nil, noderegistry.Options{})
+	ch, cancel := r.Subscribe()
+	defer cancel()
+	<-ch // 排掉 Subscribe 的初始帧，见上一条测试的说明
+
+	r.Forget("nobody")
+
+	select {
+	case <-ch:
+		t.Fatal("未命中任何 host 时不应广播")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func snapshotByHost(snapshot []nodetransport.NodeStatus) map[string]nodetransport.NodeStatus {
 	out := map[string]nodetransport.NodeStatus{}
 	for _, status := range snapshot {
