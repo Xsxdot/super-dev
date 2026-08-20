@@ -64,6 +64,26 @@ func (s *runtimeStatusService) Snapshot(ctx context.Context, project model.Proje
 				}
 				continue
 			}
+			// location:local 说的是「跑在持有这个项目 dev 环境的那台机器上」，
+			// 而归属转移之后那台机器可能已经不是本机了。此处必须再问一次归属，
+			// 否则会拿本机的进程管理器去采样一个根本不在本机的进程——结果恒为
+			// stopped，而归属机的节点帧里明明有 running 的真相。
+			//
+			// 复用 homeRouteTargetForDeployment：与 start/stop 的转发判定同一套
+			// 口径（只认 dev 环境，prod 的 host 由自身 Location/HostIDs 钉死），
+			// 不在这里另立一套归属判断——两套口径迟早会漂移成「能启动但显示没起」。
+			if homeHostID := s.app.homeRouteTargetForDeployment(project, deployment.EnvName); homeHostID != "" {
+				host := hostsByID[homeHostID]
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					inst := s.remoteInstance(service, deployment, homeHostID, host)
+					mu.Lock()
+					sections[envName] = append(sections[envName], inst)
+					mu.Unlock()
+				}()
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
