@@ -22,9 +22,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/agenthealth"
 	"github.com/xsxdot/super-dev/agent/gitinfo"
 	"github.com/xsxdot/super-dev/agent/model"
 	"github.com/xsxdot/super-dev/agent/nodetransport"
+	"github.com/xsxdot/super-dev/agent/pipeline"
 )
 
 // initTransferTestRepo 在临时目录初始化一个真实 git 仓库并提交一次初始文件，
@@ -601,4 +603,56 @@ func TestTransferPreflight_AgentVersionHealthUnreachable_ReadyContainsUnverified
 	}
 	assert.NotContains(t, blockerCodes, "agent_version_mismatch", "无法核对时不应误判为主版本不一致，实际 blockers=%v", blockerCodes)
 	assert.Contains(t, readyCodes, "agent_version_unverified", "无法核对目标机版本时应提示 agent_version_unverified，实际 ready=%v", readyCodes)
+}
+
+// streamTaggingAgentRunner 模拟一次真实远端命令的三股输出：命令自身的
+// stdout / stderr，以及 RoutingRunner 之外的 system 自述行由真实
+// RoutingRunner 负责发出（本 fake 只补命令侧的两股）。
+type streamTaggingAgentRunner struct{}
+
+func (streamTaggingAgentRunner) RunRemote(_ context.Context, _ pipeline.Target, _ string, _ string, onLine func(string, string)) error {
+	if onLine != nil {
+		onLine("/opt/mirror-demo-home", "stdout")
+		onLine("warning: something", "stderr")
+	}
+	return nil
+}
+
+func (streamTaggingAgentRunner) Transfer(_ context.Context, _ pipeline.Target, _ string, _ string, _ func(string, string)) error {
+	return nil
+}
+
+// TestTransferRemoteRunnerKeepsSystemLinesOutOfStdout 钉死「stdout 桶只装真
+// stdout」。
+//
+// 为什么必须用真实的 RoutingRunner 而不是把 system 行也 fake 出来：发出
+// system 行的正是 RoutingRunner 自己（「remote route host … -> agent」），
+// 用 fake 顶掉它，这条测试就永远看不到真实链路上实际存在的那股流——而这正是
+// 本 bug 逃过全部既有测试的原因：转移相关用例一律注入假 runner，真实的
+// 三股分流从未被执行过一次。
+//
+// 真机上的后果（2026-08-20 实测）：路由行混进 stdout 后，`cd && pwd` 解析出的
+// 归属机目录变成「路由行\n真实路径」，后续 git -C 全部指向不存在的目录；而
+// `git status --porcelain` 的 stdout 因这行恒非空，干净仓库被判成「有未提交
+// 变更」，迁回 100% 失败，且报错把用户指向一个根本不存在的原因。
+func TestTransferRemoteRunnerKeepsSystemLinesOutOfStdout(t *testing.T) {
+	app := newTestAppForPackage(t)
+	_, err := app.remoteStore.AddHost(testTunnelHost("h1", "agent-host", "127.0.0.1", "ops"))
+	require.NoError(t, err)
+	app.pipelineAgentRunner = streamTaggingAgentRunner{}
+	app.agentHealth = agenthealth.NewMonitor(staticAgentHealthProber{
+		result: agenthealth.ProbeResult{AllEndpointsOK: true},
+	})
+	app.agentHealth.ProbeOnce(context.Background(), "h1")
+
+	runner := app.buildTransferRemoteRunner(pipeline.Target{HostID: "h1", HostName: "agent-host"})
+	res, err := runner(context.Background(), "pwd", "")
+
+	require.NoError(t, err)
+	// 判定面：只有命令自己的 stdout。多一个字节，探测类判定就会失真。
+	assert.Equal(t, "/opt/mirror-demo-home", res.Stdout)
+	assert.NotContains(t, res.Stdout, "remote route host", "路由自述行绝不能进 stdout")
+	// 取证面：system 与 stderr 都留着，失败时看得见。
+	assert.Contains(t, res.Stderr, "remote route host h1 -> agent")
+	assert.Contains(t, res.Stderr, "warning: something")
 }

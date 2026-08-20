@@ -597,13 +597,22 @@ func (a *App) buildTransferRemoteRunner(target pipeline.Target) gitinfo.Runner {
 
 		var outLines, errLines []string
 		runErr := runner.RunRemote(ctx, target, cmd, "", func(line, stream string) {
-			// 两股分开收：诊断要 stderr，而探测类命令的判定只认 stdout，
-			// 合并会让 shell 的任何一行 stderr 把 test -d / pwd 的判断带偏。
-			if stream == "stderr" {
+			// 三股分流，且 stdout 必须用**白名单**而不是「不是 stderr 就算」：
+			// RunRemote 除 stdout/stderr 外还会发 stream="system" 的自述行
+			// （routing_runner 的「remote route host … -> agent」、agent_runner
+			// 的「remote agent transfer completed: …」）。它们不是被执行命令的
+			// 输出，一旦混进 stdout，探测类判定就会全面失真——真机实测：
+			// `cd && pwd` 的 stdout 变成「路由行\n真实路径」，homeDir 被污染成
+			// 不存在的目录；`git status --porcelain` 的 stdout 因为那行恒非空，
+			// 干净仓库被判成「有未提交变更」，迁回 100% 失败且报错完全误导。
+			// system 归到 errLines：它是诊断，失败取证时看得见有价值，而
+			// errLines 从不参与任何判定，不会造成同类失真。
+			switch stream {
+			case "stdout":
+				outLines = append(outLines, line)
+			default:
 				errLines = append(errLines, line)
-				return
 			}
-			outLines = append(outLines, line)
 		})
 		res := gitinfo.CommandResult{
 			Stdout: strings.Join(outLines, "\n"),
