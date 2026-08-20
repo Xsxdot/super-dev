@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -415,6 +416,17 @@ func (m *Manager) startLaunchdDeployment(dep model.Deployment) error {
 
 // startByID 以指定的 id 为键启动进程，是所有启动路径的核心实现。
 func (m *Manager) startByID(id string, spec ProcessSpec) error {
+	// 空命令守卫：command 与 argv 双双为空时拒绝启动，而不是交给 shell 跑一个
+	// 空串。真机上出现过这条序列——下发式远端 deployment 不携带 StartCommand，
+	// deploymentToSpec 因此产出空 spec，进程层照跑不误并打出 "started pid=..."，
+	// 调用方与界面都以为服务起来了。起不来就必须说出来。
+	// 放在 Reconcile 与任何状态写入之前：注定失败的启动不该先把状态改成 starting。
+	if strings.TrimSpace(spec.Command) == "" && len(spec.Argv) == 0 {
+		err := fmt.Errorf("拒绝启动 %s：命令为空（command 与 argv 均未提供，workDir=%q）", id, spec.WorkDir)
+		log.Printf("[process] 拒绝启动 id=%s workdir=%q: 命令为空（command 与 argv 均未提供）", id, spec.WorkDir)
+		return err
+	}
+
 	// 进入启动决策前先对账，避免旧 runner 对象残留导致重启请求被静默跳过。
 	m.Reconcile(id)
 

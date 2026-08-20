@@ -285,6 +285,38 @@ func TestManagerStartProcess(t *testing.T) {
 	}
 }
 
+// TestStartProcessRejectsEmptyCommand 钉死「空命令必须报错，不能报告已启动」。
+//
+// 为什么：真机上出现过 argv=[] command="" 却紧接着打出 "started pid..." 的
+// 序列——进程层跑了一个空 shell、立刻退出，调用方与界面都以为服务起来了。
+// 一个起不来的服务必须以错误的形式说出来；静默的成功比失败更难排查。
+func TestStartProcessRejectsEmptyCommand(t *testing.T) {
+	mgr := process.NewManager(func(model.LogEntry) {})
+
+	err := mgr.StartProcess("dep-empty", process.ProcessSpec{})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "命令为空")
+	require.Contains(t, err.Error(), "dep-empty")
+}
+
+// TestStartDeploymentRejectsEmptyRemoteStartCommand 钉死这条守卫覆盖到
+// 下发式远端 deployment——它正是真机上触发空命令的那条路径
+// （deploymentToSpec 对 location=remote 取 dep.StartCommand，而下发合成的
+// deployment 连 StartCommand 都没有）。
+func TestStartDeploymentRejectsEmptyRemoteStartCommand(t *testing.T) {
+	mgr := process.NewManager(func(model.LogEntry) {})
+
+	err := mgr.StartDeployment(model.Deployment{
+		ID:       "dep-remote",
+		EnvName:  "dev",
+		Location: model.LocationRemote,
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "命令为空")
+}
+
 func TestManagerStartDeployment(t *testing.T) {
 	mgr := process.NewManager(func(e model.LogEntry) {})
 
