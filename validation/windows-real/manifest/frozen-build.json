@@ -46,9 +46,10 @@
       "names": ["cpp", "go", "java", "kotlin", "node", "python", "rust"]
     },
     "mcp_tools": {
-      "count": 75,
-      "canonical_json_sha256": "0070f711712272bb788ae52e4ae4d8db1a472f40293b549c264aa9855840474c",
+      "count": 79,
+      "canonical_json_sha256": "5de3218f0ea1dd097f90835a4b3f6c2fe71e463c67ebcb4a3b0a8f1dd20d5763",
       "names": [
+        "acquire_test_database",
         "analyze_trace_logs",
         "append_debug_session_note",
         "append_log_analysis_to_session",
@@ -104,6 +105,7 @@
         "list_pipeline_runs",
         "list_projects",
         "list_services",
+        "list_test_databases",
         "open_browser_debug_session",
         "preview_config_change",
         "preview_operation",
@@ -111,6 +113,8 @@
         "preview_service_execution",
         "probe_project_config",
         "read_pipeline_run_logs",
+        "release_test_database",
+        "renew_test_database",
         "restart_service",
         "search_logs",
         "set_debug_breakpoints",

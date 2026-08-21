@@ -924,6 +924,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/test-databases", a.listTestDatabases)
 	mux.HandleFunc("DELETE /api/test-databases/{lease_id}", a.deleteTestDatabase)
 	mux.HandleFunc("POST /api/test-databases/reconcile", a.reconcileTestDatabases)
+	mux.HandleFunc("POST /api/test-databases/{lease_id}/renew", a.renewTestDatabase)
+	mux.HandleFunc("POST /api/projects/{id}/test-database/acquire", a.acquireTestDatabase)
 	mux.HandleFunc("POST /api/projects/{id}/test-database/dry-run", a.dryRunTestDatabase)
 
 	// 远端编程智能体接入（Task 3）：detect 是接入流程第一步，只读，受

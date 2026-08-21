@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xsxdot/super-dev/agent/dbprovision"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -154,6 +155,14 @@ type AgentClient interface {
 	ListPipelineArtifacts(context.Context, string, string) ([]model.ArtifactRef, error)
 	// ReadPipelineRunLogs 查询项目级 pipeline 单次执行日志。
 	ReadPipelineRunLogs(context.Context, string, string, string, url.Values) ([]model.RunLogLine, error)
+	// AcquireTestDatabase 申请一组真实的隔离测试资源；approvalToken 为空表示首次请求。
+	AcquireTestDatabase(context.Context, string, TestDatabaseAcquireRequest, string) (dbprovision.Lease, error)
+	// ReleaseTestDatabase 回收指定租约；重复调用必须保持幂等。
+	ReleaseTestDatabase(context.Context, string) error
+	// RenewTestDatabase 延长指定租约的 TTL，ttlMinutes 为零表示使用服务端默认值。
+	RenewTestDatabase(context.Context, string, TestDatabaseRenewRequest) (dbprovision.Lease, error)
+	// ListTestDatabases 列出当前租约；返回值不含明文 DSN。
+	ListTestDatabases(context.Context) ([]dbprovision.Lease, error)
 }
 
 // AgentError 保留 agent 业务错误中的机器可读 code 和结构化数据。
@@ -965,6 +974,64 @@ func (c *HTTPAgentClient) ReadPipelineRunLogs(ctx context.Context, projectID, pi
 	}
 	path := "/api/projects/" + url.PathEscape(projectID) + "/pipelines/" + url.PathEscape(pipelineID) + "/runs/" + url.PathEscape(runID) + "/logs"
 	return out.Items, c.get(ctx, withQuery(path, q), &out)
+}
+
+// AcquireTestDatabase 请求 agent 创建真实的临时测试资源。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - projectID: 项目 ID
+//   - req: purpose、TTL 与资源类型
+//   - approvalToken: 审批通过后的一次性 token，可为空
+//
+// 返回：
+//   - 含明文 DSN 的租约；这是 MCP 明文凭据出口
+//   - HTTP 或 agent 业务错误
+func (c *HTTPAgentClient) AcquireTestDatabase(ctx context.Context, projectID string, req TestDatabaseAcquireRequest, approvalToken string) (dbprovision.Lease, error) {
+	var out dbprovision.Lease
+	path := "/api/projects/" + url.PathEscape(projectID) + "/test-database/acquire"
+	return out, c.postWithApprovalToken(ctx, path, req, approvalToken, &out)
+}
+
+// ReleaseTestDatabase 请求 agent 回收一个临时测试租约。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - leaseID: 租约 ID
+//
+// 返回：
+//   - HTTP 或 agent 业务错误；租约不存在/已释放由 agent 保持幂等
+func (c *HTTPAgentClient) ReleaseTestDatabase(ctx context.Context, leaseID string) error {
+	return c.delete(ctx, "/api/test-databases/"+url.PathEscape(leaseID), nil)
+}
+
+// RenewTestDatabase 请求 agent 延长一个临时测试租约。
+//
+// 参数：
+//   - ctx: 请求上下文
+//   - leaseID: 租约 ID
+//   - req: 续租时长请求
+//
+// 返回：
+//   - 更新后的租约（不含 DSN）
+//   - HTTP 或 agent 业务错误
+func (c *HTTPAgentClient) RenewTestDatabase(ctx context.Context, leaseID string, req TestDatabaseRenewRequest) (dbprovision.Lease, error) {
+	var out dbprovision.Lease
+	path := "/api/test-databases/" + url.PathEscape(leaseID) + "/renew"
+	return out, c.post(ctx, path, req, &out)
+}
+
+// ListTestDatabases 请求 agent 列出临时测试租约。
+//
+// 参数：
+//   - ctx: 请求上下文
+//
+// 返回：
+//   - 已脱敏租约列表
+//   - HTTP 或解码错误
+func (c *HTTPAgentClient) ListTestDatabases(ctx context.Context) ([]dbprovision.Lease, error) {
+	var out []dbprovision.Lease
+	return out, c.get(ctx, "/api/test-databases", &out)
 }
 
 func (c *HTTPAgentClient) get(ctx context.Context, path string, out any) error {

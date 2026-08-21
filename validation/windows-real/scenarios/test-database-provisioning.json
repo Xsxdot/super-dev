@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "kind": "superdev.windows-validation.scenario",
+  "id": "test-database-provisioning",
+  "title": "Real test database provisioning lifecycle",
+  "requires": ["runtime_identity_attested", "test_database_bound"],
+  "variables": {
+    "test_database_project_id": {
+      "required": true,
+      "description": "A campaign project with registered PostgreSQL and Redis test database bindings."
+    }
+  },
+  "steps": [
+    {
+      "id": "acquire-test-database",
+      "tool": "acquire_test_database",
+      "coverage": "primary",
+      "arguments": {
+        "project_id": "{{test_database_project_id}}",
+        "purpose": "Windows real database validation",
+        "approval_wait_seconds": 30
+      },
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.lease.id", "operator": "not_empty"}]},
+      "evidence": {"record": ["structuredContent.data.lease.id", "structuredContent.data.lease.resources"], "redact": ["structuredContent.data.lease.resources.*.dsn"], "forbid": ["password", "secret"]},
+      "capture": {"test_database_lease_id": "structuredContent.data.lease.id"}
+    },
+    {
+      "id": "renew-test-database",
+      "tool": "renew_test_database",
+      "coverage": "primary",
+      "arguments": {"lease_id": "{{test_database_lease_id}}", "ttl_minutes": 30},
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.lease.id", "operator": "eq", "variable": "test_database_lease_id"}]},
+      "evidence": {"record": ["structuredContent.data.lease"], "redact": ["structuredContent.data.lease.resources.*.dsn"], "forbid": ["password", "secret"]}
+    },
+    {
+      "id": "list-test-databases",
+      "tool": "list_test_databases",
+      "coverage": "primary",
+      "arguments": {},
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.count", "operator": "gt", "value": 0}]},
+      "evidence": {"record": ["structuredContent.data"], "redact": [], "forbid": ["dsn", "password", "secret"]}
+    },
+    {
+      "id": "release-test-database",
+      "tool": "release_test_database",
+      "coverage": "primary",
+      "arguments": {"lease_id": "{{test_database_lease_id}}"},
+      "expect": {"outcome": "success", "assertions": [{"path": "structuredContent.data.lease_id", "operator": "eq", "variable": "test_database_lease_id"}]},
+      "evidence": {"record": ["structuredContent.data"], "redact": [], "forbid": ["dsn", "password", "secret"]}
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "release-test-database-cleanup",
+      "tool": "release_test_database",
+      "coverage": "supporting",
+      "arguments": {"lease_id": "{{test_database_lease_id}}"},
+      "expect": {"outcome": "success", "assertions": []},
+      "evidence": {"record": [], "redact": [], "forbid": ["dsn", "password", "secret"]}
+    }
+  ]
+}

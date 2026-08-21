@@ -22,4 +22,6 @@
 | 2026-08-21 | Task 10 / 双裁决第 3 轮 | 规格与代码质量通过；DryRun 不落租约且脱敏、Reconcile 逐项容错、Reaper 可停止并完成启动对账/TTL 巡检；构建与 dbprovision/store 测试通过 | 04735911..11a36453 |
 | 2026-08-21 | Task 11 / 双裁决第 1 轮 | 规格与代码质量通过；Project 数据模型与 project.yaml 共享层完成数据源绑定读写，local.yaml 不承载该字段；配置/model 测试与 `go build ./...` 通过 | 8dd7ab81 |
 | 2026-08-21 | Task 12 / 双裁决第 1 轮 | 规格与代码质量通过；新增断连中风险 operation plan、默认免审开关与复用 operation 审批/豁免/token 的 gate；定向与全量 api/operation/config 测试、全 agent 构建通过 | 6fb13dc3 |
-| 2026-08-21 | Task 13 / 双裁决第 2 轮 | 规格与代码质量通过；数据源 CRUD/probe、租约列表/回收/对账/dry-run 路由、组件装配与关闭回收已完成；修复 ProbeError 400 映射与 `%2A%2A%2A` 脱敏占位符后，完整 api 回归、定向测试与构建通过 | b3e89fab |
+| 2026-08-21 | Task 13 / 双裁决第 2 轮 | 规格与代码质量通过；数据源 CRUD/probe、租约列表/回收/对账/dry-run 路由、组件装配与关闭回收已完成；修复 ProbeError 400 映射与 `%2A%2A%2A` 脱敏占位符后，完整 api 回归、定向测试与构建通过 | 5e75cdb7 |
+| 2026-08-21 | Task 14 / 修复第 2 轮 | 首轮 MCP 全量测试发现冻结 Windows 工具目录仍为 75 项；补齐 79 项工具目录摘要与临时库生命周期场景，注册表/场景契约复验通过；外部 superdev skill 不存在，记为待审核者本地补做 | e974ab36..de512792 |
+| 2026-08-21 | Task 14 / 双裁决第 3 轮 | 规格与代码质量通过；四个 MCP 工具、HTTP client 三条专用调用、审批轮询、明文 DSN 唯一出口、列表脱敏与幂等回收已实现；MCP 全量测试与构建通过 | e974ab36..de512792 |

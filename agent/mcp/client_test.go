@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xsxdot/super-dev/agent/dbprovision"
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
@@ -445,6 +446,46 @@ func TestHTTPAgentClientPreservesApprovalRequiredError(t *testing.T) {
 	assert.Equal(t, "opa_1", agentErr.Approval.ID)
 	assert.Equal(t, "host-1", agentErr.Approval.Plan.Target.HostID)
 	assert.Equal(t, "dbg-1", agentErr.Approval.Plan.Target.DebugSessionID)
+}
+
+func TestHTTPAgentClientTestDatabaseLifecycle(t *testing.T) {
+	var paths []string
+	var approvalToken string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		approvalToken = r.Header.Get("X-SuperDev-Approval-Token")
+		switch r.URL.Path {
+		case "/api/projects/p1/test-database/acquire":
+			jsonOKForMCPClientTest(w, dbprovision.Lease{ID: "lease-1", Resources: []dbprovision.Resource{{DSN: "postgres://u:secret@host/db"}}})
+		case "/api/test-databases/lease-1/renew":
+			jsonOKForMCPClientTest(w, dbprovision.Lease{ID: "lease-1"})
+		case "/api/test-databases":
+			jsonOKForMCPClientTest(w, []dbprovision.Lease{{ID: "lease-1"}})
+		case "/api/test-databases/lease-1":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewHTTPAgentClient(server.URL, server.Client())
+
+	lease, err := client.AcquireTestDatabase(context.Background(), "p1", TestDatabaseAcquireRequest{Purpose: "tests"}, "approval-1")
+	require.NoError(t, err)
+	assert.Equal(t, "lease-1", lease.ID)
+	assert.Equal(t, "approval-1", approvalToken)
+
+	_, err = client.RenewTestDatabase(context.Background(), "lease-1", TestDatabaseRenewRequest{TTLMinutes: 15})
+	require.NoError(t, err)
+	_, err = client.ListTestDatabases(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, client.ReleaseTestDatabase(context.Background(), "lease-1"))
+	assert.Equal(t, []string{
+		"POST /api/projects/p1/test-database/acquire",
+		"POST /api/test-databases/lease-1/renew",
+		"GET /api/test-databases",
+		"DELETE /api/test-databases/lease-1",
+	}, paths)
 }
 
 func jsonOKForMCPClientTest(w http.ResponseWriter, v any) {
