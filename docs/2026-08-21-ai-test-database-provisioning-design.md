@@ -37,6 +37,7 @@ AI coding agent 自主工作时拿不到可安全使用的真实数据库——�
 |---|---|---|
 | D1 | PG 克隆走「**克隆前踢掉开发库连接**」 | `pg_terminate_backend` 后 `CREATE DATABASE ... TEMPLATE`。开发环境可接受瞬断。留 per-project 开关，默认开。 |
 | D2 | Redis 临时凭据 = **实例密码 + 分配的 db 号** | Redis 无 db 级权限隔离，隔离靠约定。回收时 `FLUSHDB`。 |
+| D2b | PG 隔离是**数据层**隔离，不是连接层 | 真机实测校正：临时角色读不到/写不了别的库，但能连上并枚举其结构（PG 默认 PUBLIC 有 CONNECT）。详见 §6.4 后的边界说明。 |
 | D3 | 空闲 db 号判定 = **登记表 + `INFO keyspace` 对账**，db0 永不分配 | keyspace 里有 key 的 db 视为人在用，排除出分配池。 |
 | D4 | 首版**含前端**：设置页新增「数据源」页 + 项目配置新增「数据源」区块 | 形态已走查确认，见 §11。 |
 | D5 | 「踢连接」**走操作审批门禁**，且**仅在真检测到活跃连接时**才生成审批请求 | acquire 本身豁免审批。无活跃连接时直接克隆，不打扰。 |
@@ -312,6 +313,16 @@ TestDatabaseTerminateConns bool `json:"test_database_terminate_conns"`
    - 遇 SQLSTATE `55006`（object in use）→ 重跑步骤 4 后重试一次；再失败即放弃并回滚
    - `CREATE DATABASE` 不能在事务内执行，回滚必须手工做
 6. `REVOKE CONNECT ON DATABASE <name> FROM PUBLIC`
+
+**PG 隔离的真实边界（2026-08-21 真机实测校正）**
+
+这一步只防「别人连临时库」，**不防临时角色往外连**：PostgreSQL 默认把 `CONNECT` 授给 `PUBLIC`，所以临时角色能连上同实例的每一个数据库。实测结论：
+
+- 读不到别的库的数据（`permission denied for table`）
+- 写不了别的库（`permission denied for schema public`）
+- **但能连上、能枚举别的库的表名与结构**
+
+要真正堵死只有两条路，且都超出本设计「不要求 superuser」的前提：在其他库上 `REVOKE CONNECT FROM PUBLIC`（侵入用户集群），或改 `pg_hba.conf`（需文件权限）。**因此本功能提供的隔离是「数据层隔离」，不是「连接层隔离」**——核心目标「AI 碰不到你的真实数据」达成，元数据可见性是已知且接受的边界。
 7. 更新登记 status=`active`
 8. 组装 DSN：`postgres://<name>:<urlencoded_pw>@<host>:<port>/<name>?sslmode=disable`（`sslmode` 取自 `Extra`，默认 `disable`——本机开发场景）
 
