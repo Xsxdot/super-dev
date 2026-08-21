@@ -669,6 +669,13 @@ BEGIN
            AND NOT EXISTS (SELECT 1 FROM pg_depend d
                             WHERE d.classid = 'pg_class'::regclass
                               AND d.objid = c.oid AND d.deptype = 'e')
+           -- serial/identity 自动建的序列被属主表「拥有」，PostgreSQL 不允许单独改
+           -- 它的属主（0A000），必须跟着表走。表改完属主后这类序列自动跟随。
+           AND NOT (c.relkind = 'S' AND EXISTS (
+                    SELECT 1 FROM pg_depend d
+                     WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                       AND d.refclassid = 'pg_class'::regclass AND d.refobjsubid <> 0
+                       AND d.deptype IN ('a','i')))
     LOOP
         EXECUTE format('ALTER TABLE %%I.%%I OWNER TO %%I', r.nspname, r.relname, target);
     END LOOP;

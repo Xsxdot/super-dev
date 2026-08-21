@@ -116,7 +116,12 @@ func (s *Server) acquireTestDatabaseTool(ctx context.Context, args json.RawMessa
 	logger.GetLogger().WithEntryName("MCPTestDatabase").WithFields(map[string]any{
 		"lease_id": lease.ID, "resource_names": resourceNames, "expires_at": lease.ExpiresAt,
 	}).Info("临时测试资源申请成功")
-	return toolSuccess("test database environment acquired", map[string]any{"lease": lease}, nil, nil), nil
+	// notice 是给 AI 的使用护栏：Redis 无 db 级强制隔离，越界用别的 db 号会踩到
+	// 用户自己的数据；到期会自动回收，用完主动 release 可以让配额尽快回到池子里。
+	return toolSuccess("test database environment acquired", map[string]any{
+		"lease":  lease,
+		"notice": "Redis 无 db 级隔离，只使用分配给你的 db 号；临时资源到期自动回收，用完请调用 release_test_database。",
+	}, nil, nil), nil
 }
 
 func (s *Server) releaseTestDatabaseTool(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
