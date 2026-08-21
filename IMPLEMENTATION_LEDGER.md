@@ -13,3 +13,6 @@
 | 2026-08-21 | Task 6 / 修复第 2 轮 | 补充 CREATE DATABASE 完成耗时日志，以及 200ms 等待和 55006 单次重试原因注释；集成测试无环境变量按预期 SKIP | 64a11c8c..35968503 |
 | 2026-08-21 | Task 6 / 双裁决第 3 轮 | 规格与代码质量通过；PG 临时角色、克隆、断连重试、REVOKE、级联回滚、FORCE 幂等回收已实现；构建与 dbprovision 测试通过 | 64a11c8c..35968503 |
 | 2026-08-21 | Task 7 / 双裁决第 1 轮 | 规格与代码质量通过；PG 仅按 `sdev_eph_` 前缀扫描库/角色、跳过 known、报告孤儿不主动回收；对账测试无环境变量按预期 SKIP，构建与 dbprovision 测试通过 | dfd214bc..071db0e9 |
+| 2026-08-21 | Task 8 / 修复第 2 轮 | 补充 Redis 显式选择目标 db、无效配置的非空错误 cause、成功供给日志；首次使用不存在的 `Client.Select`，验证原始错误为 `client.Select undefined` | 6ab01082..98d9909c |
+| 2026-08-21 | Task 8 / 修复第 3 轮 | 按 go-redis v9 实际 API 改用 `Do("SELECT", ...)`；纯单测、构建与 dbprovision 测试通过，集成测试无环境变量按预期 SKIP | 6ab01082..98d9909c |
+| 2026-08-21 | Task 8 / 双裁决第 4 轮 | 规格与代码质量通过；Redis 探测、db0 保留分配、空库复核、定向 FLUSHDB 与恒空 Reconcile 已实现 | 6ab01082..98d9909c |
