@@ -1,7 +1,7 @@
 // report.go 把结构化 campaign 结果渲染为便于人工复查的 Markdown 报告。
 //
 // 职责：
-//   - 分开展示 installer、core、provider、75 工具、pipeline 与 cleanup 结果
+//   - 分开展示 installer、core、provider、79 工具、pipeline 与 cleanup 结果
 //   - 保留每一条 BLOCKED/FAIL 和证据相对路径
 //
 // 边界：
@@ -60,7 +60,7 @@ func writeMarkdownReport(path string, report CampaignReport) error {
 		{"Environment preflight", report.Sections.Environment},
 		{"Core", report.Sections.Core},
 		{"七语言 provider", report.Sections.Providers},
-		{"75 MCP tools", report.Sections.MCPTools},
+		{"79 MCP tools", report.Sections.MCPTools},
 		{"Remote pipeline", report.Sections.Pipeline},
 		{"Cleanup / baseline restore", report.Sections.Cleanup},
 	} {
@@ -135,7 +135,7 @@ func writeMarkdownReport(path string, report CampaignReport) error {
 			markdownCell(provider.EvidencePath), markdownCell(provider.Reason))
 	}
 
-	out.WriteString("\n## 75 个 MCP 工具证据\n\n")
+	out.WriteString("\n## 79 个 MCP 工具证据\n\n")
 	out.WriteString("| 工具 | 场景/步骤 | 结论 | Outcome | 证据 | 原因 |\n|---|---|---|---|---|---|\n")
 	for _, row := range report.ToolRows {
 		fmt.Fprintf(&out, "| `%s` | `%s/%s` | %s/%t | `%s` | `%s` | %s |\n",
@@ -265,22 +265,22 @@ func aggregateProviderResult(providers []ProviderExecution, expectedNames []stri
 }
 
 func aggregateToolResult(rows []ToolEvidenceRow, expectedNames []string, expectedCoverage ...[]CoverageAssignment) ValidationResult {
-	if len(rows) != 75 {
-		return attemptedResult(false, fmt.Sprintf("75 MCP tool coverage has %d rows, want exactly 75", len(rows)), "", "", nil)
+	if len(rows) != 79 {
+		return attemptedResult(false, fmt.Sprintf("79 MCP tool coverage has %d rows, want exactly 79", len(rows)), "", "", nil)
 	}
 	seen := make(map[string]bool, len(rows))
 	children := make([]ValidationResult, 0, len(rows))
 	for _, row := range rows {
 		name := strings.TrimSpace(row.Tool)
 		if name == "" || seen[name] {
-			return attemptedResult(false, fmt.Sprintf("75 MCP tool coverage contains blank or duplicate tool %q", name), "", "", nil)
+			return attemptedResult(false, fmt.Sprintf("79 MCP tool coverage contains blank or duplicate tool %q", name), "", "", nil)
 		}
 		seen[name] = true
 		children = append(children, row.Result)
 	}
 	if len(expectedNames) > 0 {
-		if len(expectedNames) != 75 {
-			return attemptedResult(false, fmt.Sprintf("runtime attestation has %d tool names, want exactly 75", len(expectedNames)), "", "", nil)
+		if len(expectedNames) != 79 {
+			return attemptedResult(false, fmt.Sprintf("runtime attestation has %d tool names, want exactly 79", len(expectedNames)), "", "", nil)
 		}
 		expected := append([]string{}, expectedNames...)
 		actual := make([]string, 0, len(seen))
@@ -290,7 +290,7 @@ func aggregateToolResult(rows []ToolEvidenceRow, expectedNames []string, expecte
 		sort.Strings(expected)
 		sort.Strings(actual)
 		if strings.Join(expected, "\x00") != strings.Join(actual, "\x00") {
-			return attemptedResult(false, "75 MCP tool rows do not match the attested frozen tool catalog", "", "", nil)
+			return attemptedResult(false, "79 MCP tool rows do not match the attested frozen tool catalog", "", "", nil)
 		}
 	}
 	if len(expectedCoverage) > 0 {
@@ -298,7 +298,7 @@ func aggregateToolResult(rows []ToolEvidenceRow, expectedNames []string, expecte
 			return attemptedResult(false, err.Error(), "", "", nil)
 		}
 	}
-	return aggregateResult("75 MCP tool coverage", 75, children)
+	return aggregateResult("79 MCP tool coverage", 79, children)
 }
 
 func pipelineSection(scenarios []ScenarioExecution) ReportSection {

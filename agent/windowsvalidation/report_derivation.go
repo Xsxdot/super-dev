@@ -384,8 +384,8 @@ func validateCampaignReportStructure(report CampaignReport) error {
 	if len(catalog.Scenarios) == 0 {
 		return fmt.Errorf("frozen scenario catalog is missing")
 	}
-	if len(catalog.Coverage) != 75 {
-		return fmt.Errorf("frozen coverage catalog has %d rows, want exactly 75", len(catalog.Coverage))
+	if len(catalog.Coverage) != 79 {
+		return fmt.Errorf("frozen coverage catalog has %d rows, want exactly 79", len(catalog.Coverage))
 	}
 
 	executions := make(map[string]ScenarioExecution, len(report.Scenarios))

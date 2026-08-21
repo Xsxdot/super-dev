@@ -1,7 +1,7 @@
 // windows_validation_scenarios_test.go 把便携验证场景与真实 MCP 注册表做静态契约校验。
 //
 // 职责：
-//   - 保证冻结 75 工具目录与当前 packaged MCP 工具注册表双向一致
+//   - 保证冻结 79 工具目录与当前 packaged MCP 工具注册表双向一致
 //   - 保证所有 primary/supporting/cleanup 调用只使用真实 schema 允许的参数
 //
 // 边界：

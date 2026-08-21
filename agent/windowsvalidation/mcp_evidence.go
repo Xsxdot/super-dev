@@ -6,7 +6,7 @@
 //
 // 边界：
 //   - 不判断业务动作是否成功，也不直接生成 Phase Status
-//   - primary 75 工具的精选证据仍由 scenario executor 按冻结合同生成
+//   - primary 79 工具的精选证据仍由 scenario executor 按冻结合同生成
 package windowsvalidation
 
 import (

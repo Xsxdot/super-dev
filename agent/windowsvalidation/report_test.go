@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 防止功能 PASS 在 cleanup 前被误报为最终 PASS
-//   - 防止最终摘要遗漏独立 MSI lane、七 provider 或 75 工具
+//   - 防止最终摘要遗漏独立 MSI lane、七 provider 或 79 工具
 //
 // 边界：
 //   - 不启动 Windows 进程或真实 MCP
@@ -169,7 +169,7 @@ func TestFinalizeCampaignCleanupRebuildsCompleteAggregateSummary(t *testing.T) {
 	if summary.Result.PhaseStatus != PhaseStatusPass || summary.Sections.MSIInstaller.Result.PhaseStatus != PhaseStatusPass || summary.Sections.Cleanup.Result.PhaseStatus != PhaseStatusPass {
 		t.Fatalf("aggregate summary is incomplete: %#v", summary.Sections)
 	}
-	if len(summary.Providers) != 7 || len(summary.ToolRows) != 75 {
+	if len(summary.Providers) != 7 || len(summary.ToolRows) != 79 {
 		t.Fatalf("aggregate rows providers=%d tools=%d", len(summary.Providers), len(summary.ToolRows))
 	}
 }
@@ -524,9 +524,9 @@ func testCleanupCategoryHashMap() map[string]string {
 func testValidationSurface(result ValidationResult) (ValidationCatalog, []ScenarioExecution, []ToolEvidenceRow, []string) {
 	catalog := ValidationCatalog{Scenarios: []ScenarioCatalogEntry{{ID: "remote-pipeline", Title: "remote pipeline"}}}
 	execution := ScenarioExecution{ID: "remote-pipeline", Title: "remote pipeline"}
-	rows := make([]ToolEvidenceRow, 0, 75)
-	toolNames := make([]string, 0, 75)
-	for index := 0; index < 75; index++ {
+	rows := make([]ToolEvidenceRow, 0, 79)
+	toolNames := make([]string, 0, 79)
+	for index := 0; index < 79; index++ {
 		tool := fmt.Sprintf("tool-%02d", index)
 		stepID := fmt.Sprintf("step-%02d", index)
 		contract := StepCatalogEntry{StepID: stepID, Tool: tool, Coverage: CoveragePrimary}

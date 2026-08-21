@@ -36,7 +36,7 @@ func TestCompareCoverageRequiresExactDynamicToolSet(t *testing.T) {
 	require.Equal(t, []string{"list_hosts"}, report.UnexpectedPrimary)
 }
 
-func TestRepositoryScenarioPrimarySetMatchesCurrentFrozenMCPToolSurface(t *testing.T) {
+func TestRepositoryScenarioPrimarySetMatchesRuntimeValidatedMCPToolSurface(t *testing.T) {
 	t.Parallel()
 
 	manifestPath := filepath.Join("..", "..", "validation", "windows-real", "manifest", "frozen-build.json")
@@ -53,10 +53,26 @@ func TestRepositoryScenarioPrimarySetMatchesCurrentFrozenMCPToolSurface(t *testi
 	scenarios, err := LoadScenarios(filepath.Join("..", "..", "validation", "runtime", "scenarios"))
 	require.NoError(t, err)
 
-	report, err := CompareCoverage(manifest.SourceSurface.MCPTools.Names, scenarios)
+	// 临时数据库四个工具需要真实 PG/Redis 与项目绑定，本包的跨平台 runtime
+	// validation 不具备该环境；它们由 dbprovision/MCP 集成测试覆盖，不能伪造
+	// 成功步骤塞进本场景。Windows packaged surface 仍保留完整 79 个工具。
+	outOfBand := map[string]struct{}{
+		"acquire_test_database": {},
+		"list_test_databases":   {},
+		"release_test_database": {},
+		"renew_test_database":   {},
+	}
+	runtimeNames := make([]string, 0, len(manifest.SourceSurface.MCPTools.Names))
+	for _, name := range manifest.SourceSurface.MCPTools.Names {
+		if _, excluded := outOfBand[name]; excluded {
+			continue
+		}
+		runtimeNames = append(runtimeNames, name)
+	}
+	report, err := CompareCoverage(runtimeNames, scenarios)
 	require.NoError(t, err)
 	require.True(t, report.Complete, "missing=%v unexpected=%v", report.MissingPrimary, report.UnexpectedPrimary)
-	require.Equal(t, len(manifest.SourceSurface.MCPTools.Names), report.PrimaryCount)
+	require.Equal(t, len(runtimeNames), report.PrimaryCount)
 }
 
 func TestCompareCoverageRejectsDuplicateLiveToolNames(t *testing.T) {

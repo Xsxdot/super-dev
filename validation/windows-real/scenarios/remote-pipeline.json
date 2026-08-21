@@ -525,7 +525,7 @@
       "id": "pipeline-deploy-b",
       "tool": "deploy_project_pipeline",
       "coverage": "supporting",
-      "_comment": "真实 update B；tool coverage 仍归属 pipeline-deploy-a，避免 75-tool 主归属重复。",
+      "_comment": "真实 update B；tool coverage 仍归属 pipeline-deploy-a，避免 79-tool 主归属重复。",
       "arguments": {
         "project_name": "{{project_name}}",
         "pipeline_id": "{{pipeline_id}}",

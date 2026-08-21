@@ -14,7 +14,7 @@ This directory is the immutable source of a portable Windows 10 22H2 x64 (build 
 - Browser identity is read from executable metadata, SHA-256, and Authenticode without launching Chrome or Edge. JVM adapter identity requires an operator-frozen command plus SHA-256; expected values must be frozen before the independent collector runs.
 - Environment admission accepts only the collector-owned in-memory result. Persisted JSON supports structural and drift review but cannot mint a new final admission after public digests are recomputed.
 - Every persisted report is re-derived from execution facts, prerequisite facts, and evidence obligations before it is written or finalized; stored status strings are never trusted as input.
-- The report persists the frozen scenario/step/cleanup and 75-tool coverage catalog; missing, duplicate, or remapped rows are rejected before any aggregate result is derived.
+- The report persists the frozen scenario/step/cleanup and 79-tool coverage catalog; missing, duplicate, or remapped rows are rejected before any aggregate result is derived.
 - Cleanup PASS is bound to the exact prepared `baseline.json`: the finalizer recomputes the whole-file and six category hashes, then requires the manifest, cleanup report, campaign ID, and lane to agree.
 - Do not add runtime input, installers, backups, or results inside the extracted package.
 - A macOS build may report only `package_verified`. It cannot produce Windows MCP or provider verdicts.

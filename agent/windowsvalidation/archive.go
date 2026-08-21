@@ -170,7 +170,7 @@ func BuildPortableArchive(ctx context.Context, options BuildOptions) (verificati
 		FileCount:     len(files) + 1,
 		ToolVerdicts:  []map[string]any{},
 		Checks: map[string]bool{
-			"frozen_75_tool_assignment_exact":  len(source.Coverage) == 75,
+			"frozen_79_tool_assignment_exact":  len(source.Coverage) == 79,
 			"seven_fixture_contracts_present":  len(source.Fixtures) == 7,
 			"windows_amd64_driver_built":       true,
 			"windows_amd64_pe_verified":        true,

@@ -1,6 +1,6 @@
 # Windows 10 22H2 x64 (build 19045) 一次性真实验证 Runbook
 
-本包由 macOS 构建，但所有功能结论只能在专用 **Windows 10 22H2 x64 (build 19045)** 机器上产生。验证固定构建 `e3cc94fe7ba3e53ca1b46a24d730bebc173e5cdb` / `0.2.1`，覆盖 75 个 MCP 工具和 Go、Node、Python、Java、Kotlin、Rust、C++ 七个正式 language provider。UBR 与已安装 KB 只作为 observed evidence；当前流程没有权威、机械的 ESU entitlement 证明，因此所有 ESU 表述只能是 compatibility-only caveat，不能宣称 supported。
+本包由 macOS 构建，但所有功能结论只能在专用 **Windows 10 22H2 x64 (build 19045)** 机器上产生。验证固定构建 `e3cc94fe7ba3e53ca1b46a24d730bebc173e5cdb` / `0.2.1`，覆盖 79 个 MCP 工具和 Go、Node、Python、Java、Kotlin、Rust、C++ 七个正式 language provider。UBR 与已安装 KB 只作为 observed evidence；当前流程没有权威、机械的 ESU entitlement 证明，因此所有 ESU 表述只能是 compatibility-only caveat，不能宣称 supported。
 
 这是一次性、无常驻状态的验证流程：ZIP 始终只读，机器变化只允许存在于包外的 `backups`、`campaigns`、`results` 和冻结安装器目录；本包不新增 worker、调度器、恢复服务或验证平台。每个 lane 都必须以完整 cleanup 结束，后一个 lane 不复用前一个 lane 的 backup、campaign 或用户状态。
 
@@ -101,7 +101,7 @@ MSI smoke 不依赖浏览器功能配置；start 成功后直接运行：
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -Lane msi_smoke -RuntimeInput ..\runtime-input.json -PreparedBackupDirectory <msi-backup>
 ```
 
-**Expected**：`<msi-backup>\installer-lifecycle\01-install.json`、`02-start.json` 是两份普通 JSON 动作事实；每份都绑定 campaign、lane、prepared backup/baseline、冻结 MSI 与安装根，并保存 attempted、开始/结束时间、真实命令结果和 required observations。install 保存 MSI 真实退出码、clean baseline 后唯一的 exact-version GUID ProductCode + `msiexec.exe` 卸载身份、安装目录、`SuperDev.exe` 与三个 sidecar 的大小/SHA-256；默认 WiX 未写 `ARPINSTALLLOCATION` 时允许卸载项 `InstallLocation` 为空，非空则必须等于绑定安装根。start 保存主 Desktop PID、受绑定 Electron 子进程、Agent PID/路径/hash 和 57017 owning PID。driver 在任何 install 副作用前先验证 `<msi-backup>\environment-preinstall` 的 prepared PASS；同一 backup 以最小 OS lock 单飞，start 还会在 `Start-Process` 前只读证明绑定文件仍一致、无绑定进程且 57017 未监听。结果目录包含 campaign ID；MSI lane 只执行 smoke surface，不产生 75 个功能 PASS。
+**Expected**：`<msi-backup>\installer-lifecycle\01-install.json`、`02-start.json` 是两份普通 JSON 动作事实；每份都绑定 campaign、lane、prepared backup/baseline、冻结 MSI 与安装根，并保存 attempted、开始/结束时间、真实命令结果和 required observations。install 保存 MSI 真实退出码、clean baseline 后唯一的 exact-version GUID ProductCode + `msiexec.exe` 卸载身份、安装目录、`SuperDev.exe` 与三个 sidecar 的大小/SHA-256；默认 WiX 未写 `ARPINSTALLLOCATION` 时允许卸载项 `InstallLocation` 为空，非空则必须等于绑定安装根。start 保存主 Desktop PID、受绑定 Electron 子进程、Agent PID/路径/hash 和 57017 owning PID。driver 在任何 install 副作用前先验证 `<msi-backup>\environment-preinstall` 的 prepared PASS；同一 backup 以最小 OS lock 单飞，start 还会在 `Start-Process` 前只读证明绑定文件仍一致、无绑定进程且 57017 未监听。结果目录包含 campaign ID；MSI lane 只执行 smoke surface，不产生 79 个功能 PASS。
 
 **Stop**：安装器身份、sidecar、版本、工具或 provider 目录漂移时，停止 MSI 功能结论并进入步骤 5 卸载/恢复；完成 cleanup 后仅按残留是否污染 NSIS 身份/启动来决定 continuation，MSI FAIL 本身不自动阻断 NSIS。
 
@@ -219,7 +219,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-Validation.ps1 -La
 - update B、rollback A、normal cleanup 与 abort cleanup 固定传 `root_mode=existing`。同一个首步骤必须先证明 exact root 是非 symlink 目录、`.campaign-owner` 是单行非 symlink 文件且内容等于本 campaign，再留下 `"root_mode":"existing"`、`"root_state":"owned"` 日志；缺根、缺 owner、owner 不同或任一 symlink 都直接 FAIL，后续写入/cleanup 不执行。
 - abort cleanup 只有在 wait A 已成功并捕获 `pipeline_run_a_complete` 后才允许执行。若 deploy A 因 preflight 发现既有 root 而失败，这个 capture 不存在，cleanup 不得反向删除该既有 root；残留只能作为失败现场按 dedicated resettable Host 的受控重置流程处理。
 
-**Expected**：物理顺序固定为：Prepare 只读环境 A 已验证并冻结稳定 runtime/plan 投影 → 已绑定冻结安装器的 install/start 生命周期 → fresh Desktop UI 建立 dedicated Host/Agent/provision/tunnel-only state → packaged MCP `list_hosts` 冻结 fresh canonical Host ID 到包外 input → safe Remote Observation 绑定包外 human attestation → fresh browser 配置 → 从该安装目录启动 packaged MCP → runtime attestation → B 完整 input/governance 校验 → A stable plan 投影比对 → 34 项安装后环境 B 采集/admission（`previous_manifest_sha256` 绑定 A）→ A/B comparison 持久化 → 一次性 credential lease → 场景、七 provider、75 工具。baseline 身份来自 `environment-manifest.json#remote.linux-machine`；remote pipeline 任何写入前必须重读并写 `evidence\remote-observation\before-remote-write.json`，cleanup 返回后必须第三次重读并写 `after-cleanup.json`。三次都比较 exact `host_id + agent_node_id + machine_id_sha256`；缺事实 `BLOCKED`，漂移 `FAIL`，写前非 PASS 必须在任何 remote MCP 写调用前停止。install/start 和人工 UI bootstrap 只是获得已安装 MCP/Agent seam 的准备动作，不由环境清单替代也不计 PASS；环境未准入时只保留已验证 installer/runtime/environment 事实，并拒绝进入功能事实。准入后再按身份 → 配置/审批/生命周期 → Go 日志诊断 → 浏览器调试 → 代码调试 → 七 provider → Windows→Linux pipeline A→B→A→cleanup 执行；报告分别呈现 NSIS/core、环境、七 provider、75 工具、pipeline，不以总分掩盖 FAIL/BLOCKED。`get_debug_credentials` 必须真实调用并证明 `count > 0`、预期 name/desc、`source=ephemeral_service` 与 `value_present=true`；空集合不得 PASS。
+**Expected**：物理顺序固定为：Prepare 只读环境 A 已验证并冻结稳定 runtime/plan 投影 → 已绑定冻结安装器的 install/start 生命周期 → fresh Desktop UI 建立 dedicated Host/Agent/provision/tunnel-only state → packaged MCP `list_hosts` 冻结 fresh canonical Host ID 到包外 input → safe Remote Observation 绑定包外 human attestation → fresh browser 配置 → 从该安装目录启动 packaged MCP → runtime attestation → B 完整 input/governance 校验 → A stable plan 投影比对 → 34 项安装后环境 B 采集/admission（`previous_manifest_sha256` 绑定 A）→ A/B comparison 持久化 → 一次性 credential lease → 场景、七 provider、79 工具。baseline 身份来自 `environment-manifest.json#remote.linux-machine`；remote pipeline 任何写入前必须重读并写 `evidence\remote-observation\before-remote-write.json`，cleanup 返回后必须第三次重读并写 `after-cleanup.json`。三次都比较 exact `host_id + agent_node_id + machine_id_sha256`；缺事实 `BLOCKED`，漂移 `FAIL`，写前非 PASS 必须在任何 remote MCP 写调用前停止。install/start 和人工 UI bootstrap 只是获得已安装 MCP/Agent seam 的准备动作，不由环境清单替代也不计 PASS；环境未准入时只保留已验证 installer/runtime/environment 事实，并拒绝进入功能事实。准入后再按身份 → 配置/审批/生命周期 → Go 日志诊断 → 浏览器调试 → 代码调试 → 七 provider → Windows→Linux pipeline A→B→A→cleanup 执行；报告分别呈现 NSIS/core、环境、七 provider、79 工具、pipeline，不以总分掩盖 FAIL/BLOCKED。`get_debug_credentials` 必须真实调用并证明 `count > 0`、预期 name/desc、`source=ephemeral_service` 与 `value_present=true`；空集合不得 PASS。
 
 **Stop**：fresh Host/Agent 创建、install、provision、Probe、tunnel 或 packaged `list_hosts` 任一步失败/取消时，不得用旧 profile/Host/Agent/token 补齐，也不得启动 driver；记录具名 BLOCKED，保留现场并按步骤 8 完成受约束官方卸载，再由步骤 9 丢弃整个 lane-owned fresh profile 并恢复 Prepare 隔离的原 state。正常执行中若出现越界路径、非预期 transport、凭据泄漏或无法确认资源身份，同样立即停止新增功能操作并进入卸载/恢复。审批超时或产品错误不是可忽略阻塞。
 
@@ -266,13 +266,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1
 
 **Evidence**：NSIS cleanup report、最终 campaign JSON/Markdown、`validation-summary.json/.md` 与失败时的 recovery quarantine 路径。
 
-**Cleanup responsibility**：Cleanup 恢复本地机器；操作者核对 MSI、NSIS、core、七 provider、75 工具、pipeline、cleanup 八个独立 section 后归档。`-RemoveResults` 仅在证据已有独立副本时使用，并在 finalizer 成功后执行；backup 最后由操作者按验证资料保留策略处置。
+**Cleanup responsibility**：Cleanup 恢复本地机器；操作者核对 MSI、NSIS、core、七 provider、79 工具、pipeline、cleanup 八个独立 section 后归档。`-RemoveResults` 仅在证据已有独立副本时使用，并在 finalizer 成功后执行；backup 最后由操作者按验证资料保留策略处置。
 
 ## 10. Core-only：跳过安装，只验证 MCP 与七种语言
 
 **Prerequisite**：冻结构建已经通过正式方式安装，`superdev-mcp.exe` 路径和 `0.2.1` runtime identity 可核对；执行前关闭 Desktop、Agent sidecar 与 MCP，确认端口 `57017` 无监听。禁止运行 `Invoke-InstallerLifecycle.ps1`、MSI 或 NSIS EXE；产品缺失或版本不符时记录 `BLOCKED` 并停止，不能在本 lane 补做安装。
 
-**Action**：复制包外 `runtime-input.json`，设置 `lane=core_only`、`installer_directory=""`，并填写步骤 2 的工具链、adapter、浏览器、Linux Host 与治理绑定。Prepare 会把既有安装身份作为 Prepared Baseline，只隔离原 `.superdev`；随后按步骤 7 在 fresh profile 中完成 Host/Agent/tunnel-only、浏览器与治理声明 bootstrap。完整 75 工具覆盖包含 remote pipeline，因此没有合格 Linux Host 时必须保留具名 `BLOCKED`，不能删除或伪造这些工具行。
+**Action**：复制包外 `runtime-input.json`，设置 `lane=core_only`、`installer_directory=""`，并填写步骤 2 的工具链、adapter、浏览器、Linux Host 与治理绑定。Prepare 会把既有安装身份作为 Prepared Baseline，只隔离原 `.superdev`；随后按步骤 7 在 fresh profile 中完成 Host/Agent/tunnel-only、浏览器与治理声明 bootstrap。完整 79 工具覆盖包含 remote pipeline，因此没有合格 Linux Host 时必须保留具名 `BLOCKED`，不能删除或伪造这些工具行。
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Prepare-Validation.ps1 -Lane core_only -RuntimeInput ..\runtime-input.json
@@ -282,14 +282,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Cleanup-Validation.ps1
 
 Run 出现隐藏凭据提示时，只由操作者输入一次本次测试凭据；不得把值写入 input、命令参数、日志或证据。无论 Run 成功、失败还是中断，都必须关闭本 lane 启动的进程并执行上述 Cleanup；Cleanup 以 Prepare 记录的既有安装路径和卸载项为 expected，证明验证没有改变安装状态，并恢复原用户 state。
 
-**Expected**：MCP runtime attestation、七 provider 和 75 个工具各自保留真实结果；installer artifact、install、start、stop、uninstall 与 lifecycle 必须全部保持 `NOT_RUN`。这是能力诊断，不构成安装器验收或最终 Windows 全量发布结论。
+**Expected**：MCP runtime attestation、七 provider 和 79 个工具各自保留真实结果；installer artifact、install、start、stop、uninstall 与 lifecycle 必须全部保持 `NOT_RUN`。这是能力诊断，不构成安装器验收或最终 Windows 全量发布结论。
 
 判定规则：每个目标统一输出 `phase_status = NOT_RUN | BLOCKED | PASS | FAIL`、`attempted`、原始执行事实与 required evidence。`NOT_RUN` 和 `BLOCKED` 的目标都必须 `attempted=false`，其中只有具名 prerequisite 才是 `BLOCKED`；`FAIL` 要求目标已尝试，或尝试后的 required evidence 缺失/写入失败。真实 MCP response 或 transport/product error 与开始/结束时间即使在后置断言失败时也必须保留。只有实际工具响应与断言均满足才是 PASS；产品错误、摘要/目录漂移、意外审批错误、SSH fallback、远端或本地清理失败、summary 回写失败、secret 扫描失败均是 FAIL。
 
-每份 campaign report 同时保存冻结 `validation_catalog`：scenario、target step、supporting/cleanup step 和 75 工具的 `scenario_id/step_id` 归属必须完整且唯一。持久化后删除失败 scenario、省略未触发 cleanup 或改写工具归属都会让重新派生失败，不得用当前数组长度充当预期覆盖数。
+每份 campaign report 同时保存冻结 `validation_catalog`：scenario、target step、supporting/cleanup step 和 79 工具的 `scenario_id/step_id` 归属必须完整且唯一。持久化后删除失败 scenario、省略未触发 cleanup 或改写工具归属都会让重新派生失败，不得用当前数组长度充当预期覆盖数。
 
 环境结论同样只能由统一结果模块派生。正式 `nsis_core` 要求 A/B 各自的完整 plan 与各自 manifest 一致，并要求 B 的安装前稳定 plan 投影与 A 的 `stable_plan_sha256` 一致；fresh Host 与产品安装后 Node asset 等 post-install 扩展不要求复用 A 的 placeholder 完整 digest。34-key catalog v2 的所有 required prerequisite 都必须为 PASS，且 admission 只接受 collector 产生、未被调用方改写的内存 provenance；A→B comparison 写盘也是 required evidence，写失败必须 FAIL。`Scenario.requires` 只是编排元数据，不能合成 PASS。公开 `observation_digest` 仅用于结构/漂移检测，不是可信签名。修改 resolved path/source/version 后重算公开 digest 不能获得准入，磁盘 JSON 也不能单独作为新的 final admission 输入。
 
 `artifact_verified` 与 `installer_executed` 是独立事实：冻结安装包名称/大小/SHA-256 匹配只能让 artifact phase PASS，runtime attestation、MCP start/stop 和 cleanup 基线恢复也都不能证明 installer 动作发生。只有 packaged driver 逐文件重读并严格校验 `01-install.json`、`02-start.json`、`03-stop.json`、`04-uninstall.json` 的 campaign/lane/prepared backup/baseline/artifact/install-root、attempted/时间、真实命令结果、目标文件即时 size/SHA 与 required observations 后，才能把这些普通事实交给统一 `DeriveInstallerExecution`；其他模块不得手工拼 PASS/FAIL。缺动作、损坏、额外文件、乱序、跨绑定、required evidence 缺失或系统观察矛盾都不能 PASS。macOS 侧的 `package_verified` 不是 Windows PASS，Cleanup PASS 也不单独等于整场 PASS。
 
-`core_only` 只用于定向诊断：它与 `nsis_core` 一样执行相同的 core、七 provider、75 工具、remote pipeline 和 A→B stable binding 合同，但不读取、要求、摘要、校验或执行任何 installer；`installer_directory` 可为空，其值即使变化也不属于 stable digest，MSI/NSIS installer section 和 artifact 都保持 `NOT_RUN`。它的 A、B 均使用 `diagnostic` admission；只有 `runtime-input.json` 中显式列出的 capability key 可以保留 `BLOCKED` 后继续，未列出的 BLOCKED、任意 FAIL/NOT_RUN、三项不可豁免平台 prerequisite 都会拒绝继续。实际启动该 lane 时，必须在独立 fresh profile 中完成与步骤 7 相同的浏览器配置门并由该 lane 自己清理，不能复用 MSI、NSIS 或原用户的设置。它可以收集票 28 所需根因证据，不能替代正式安装器 lane 或票 29 的最终全量验收。
+`core_only` 只用于定向诊断：它与 `nsis_core` 一样执行相同的 core、七 provider、79 工具、remote pipeline 和 A→B stable binding 合同，但不读取、要求、摘要、校验或执行任何 installer；`installer_directory` 可为空，其值即使变化也不属于 stable digest，MSI/NSIS installer section 和 artifact 都保持 `NOT_RUN`。它的 A、B 均使用 `diagnostic` admission；只有 `runtime-input.json` 中显式列出的 capability key 可以保留 `BLOCKED` 后继续，未列出的 BLOCKED、任意 FAIL/NOT_RUN、三项不可豁免平台 prerequisite 都会拒绝继续。实际启动该 lane 时，必须在独立 fresh profile 中完成与步骤 7 相同的浏览器配置门并由该 lane 自己清理，不能复用 MSI、NSIS 或原用户的设置。它可以收集票 28 所需根因证据，不能替代正式安装器 lane 或票 29 的最终全量验收。

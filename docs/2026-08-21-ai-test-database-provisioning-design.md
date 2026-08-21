@@ -462,6 +462,8 @@ OperationTestDatabaseTerminate = "test_database.terminate_connections"
 
 `~/.claude/skills/superdev/` 必须同步新增一节：**AI 需要真实数据库跑测试时，先调 `acquire_test_database`，禁止退化用 sqlite/内存库替身**。加了 MCP 工具不同步 skill = 工具不会被触发，这是本功能成败判据的前提。
 
+实现备注（2026-08-21）：本执行环境没有 `~/.claude/skills/superdev/` 目录，故 skill 文件同步留待审核者本地补做；MCP 工具、桌面端提示与实现记录已落库。
+
 ## 11. HTTP API 与前端
 
 ### 11.1 API（`agent/api/handler_datasources.go`、`handler_test_databases.go`）

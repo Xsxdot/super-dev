@@ -69,7 +69,7 @@ func TestBuildReportSectionsKeepsCoreOnlyInstallerLifecycleNotRun(t *testing.T) 
 
 func TestAggregateToolResultRejectsDuplicateRows(t *testing.T) {
 	t.Parallel()
-	rows := make([]ToolEvidenceRow, 75)
+	rows := make([]ToolEvidenceRow, 79)
 	for index := range rows {
 		rows[index] = ToolEvidenceRow{Tool: fmt.Sprintf("tool-%02d", index), Result: testPassResult()}
 	}
@@ -374,7 +374,7 @@ func TestMaterializePreDriverFailureKeepsTargetsUnattempted(t *testing.T) {
 	if report.Installer.ArtifactVerified || report.Installer.InstallerExecuted || report.Installer.Artifact.PhaseStatus != PhaseStatusFail || report.Installer.Lifecycle.PhaseStatus != PhaseStatusNotRun {
 		t.Fatalf("pre-driver artifact and lifecycle facts were conflated: %#v", report.Installer)
 	}
-	if len(report.ToolRows) != 75 || len(report.Providers) != 7 {
+	if len(report.ToolRows) != 79 || len(report.Providers) != 7 {
 		t.Fatalf("pre-driver matrix providers=%d tools=%d", len(report.Providers), len(report.ToolRows))
 	}
 	for _, row := range report.ToolRows {

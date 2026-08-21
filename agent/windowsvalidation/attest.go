@@ -2,7 +2,7 @@
 //
 // 职责：
 //   - 校验 initialize server/version/protocol
-//   - 双向比较 tools/list 的 75 个名称
+//   - 双向比较 tools/list 的 79 个名称
 //   - 通过正式 provider 工具双向比较七语言清单并记录 sidecar 摘要
 //
 // 边界：
@@ -90,7 +90,7 @@ func attestRuntime(ctx context.Context, client runtimeAttestationClient, source 
 		return finish(err)
 	}
 	if !sameNameSet(toolNames, source.Frozen.SourceSurface.MCPTools.Names) {
-		err = fmt.Errorf("installed MCP tool surface differs from frozen 75-tool catalog")
+		err = fmt.Errorf("installed MCP tool surface differs from frozen 79-tool catalog")
 		attempts[len(attempts)-1].AssertionError = err.Error()
 		return finish(err)
 	}
