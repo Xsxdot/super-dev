@@ -143,6 +143,136 @@ func TestPostgresPlanHasNoSideEffectWhenIdle(t *testing.T) {
 	}
 }
 
+func TestPostgresProvisionClonesTemplateAndGrantsOnlyOwnDB(t *testing.T) {
+	ds := pgTestDataSource(t)
+	tmpl := mustCreateTemplateDB(t, ds)
+	defer mustDropDB(t, ds, tmpl)
+	seed := mustConnect(t, adminDSN(ds, tmpl))
+	if _, err := seed.Exec(context.Background(), `CREATE TABLE marker(id int)`); err != nil {
+		t.Fatalf("建标记表失败: %v", err)
+	}
+	seed.Close(context.Background())
+
+	p := NewPostgresProvisioner()
+	ctx := context.Background()
+	plan, err := p.Plan(ctx, ds, PlanRequest{
+		ProjectID: "p", NameSeed: mustName(t, "itclone"),
+		Binding: ProjectBinding{Postgres: &PostgresBinding{DevDatabase: tmpl, TerminateConnections: true}},
+	})
+	if err != nil {
+		t.Fatalf("Plan 失败: %v", err)
+	}
+	res, err := p.Provision(ctx, ds, plan)
+	if err != nil {
+		t.Fatalf("Provision 失败: %v", err)
+	}
+	defer p.Reclaim(ctx, ds, res)
+
+	if res.DSN == "" {
+		t.Fatal("必须返回明文 DSN")
+	}
+	conn := mustConnect(t, res.DSN)
+	defer conn.Close(ctx)
+	var n int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM marker`).Scan(&n); err != nil {
+		t.Fatalf("克隆库里应存在 marker 表: %v", err)
+	}
+}
+
+func TestPostgresProvisionTerminatesBusyTemplate(t *testing.T) {
+	ds := pgTestDataSource(t)
+	tmpl := mustCreateTemplateDB(t, ds)
+	defer mustDropDB(t, ds, tmpl)
+	busy := mustConnect(t, adminDSN(ds, tmpl))
+	defer busy.Close(context.Background())
+
+	p := NewPostgresProvisioner()
+	ctx := context.Background()
+	plan, err := p.Plan(ctx, ds, PlanRequest{
+		ProjectID: "p", NameSeed: mustName(t, "itkill"),
+		Binding: ProjectBinding{Postgres: &PostgresBinding{DevDatabase: tmpl, TerminateConnections: true}},
+	})
+	if err != nil {
+		t.Fatalf("Plan 失败: %v", err)
+	}
+	res, err := p.Provision(ctx, ds, plan)
+	if err != nil {
+		t.Fatalf("有活跃连接时应能踢掉并克隆成功: %v", err)
+	}
+	defer p.Reclaim(ctx, ds, res)
+}
+
+func TestPostgresReclaimIsIdempotentAndDropsRole(t *testing.T) {
+	ds := pgTestDataSource(t)
+	tmpl := mustCreateTemplateDB(t, ds)
+	defer mustDropDB(t, ds, tmpl)
+
+	p := NewPostgresProvisioner()
+	ctx := context.Background()
+	plan, err := p.Plan(ctx, ds, PlanRequest{
+		ProjectID: "p", NameSeed: mustName(t, "itrec"),
+		Binding: ProjectBinding{Postgres: &PostgresBinding{DevDatabase: tmpl, TerminateConnections: true}},
+	})
+	if err != nil {
+		t.Fatalf("Plan 失败: %v", err)
+	}
+	res, err := p.Provision(ctx, ds, plan)
+	if err != nil {
+		t.Fatalf("Provision 失败: %v", err)
+	}
+	if err := p.Reclaim(ctx, ds, res); err != nil {
+		t.Fatalf("首次 Reclaim 失败: %v", err)
+	}
+	if err := p.Reclaim(ctx, ds, res); err != nil {
+		t.Fatalf("重复 Reclaim 必须幂等，实际报错: %v", err)
+	}
+
+	admin := mustConnect(t, adminDSN(ds, ""))
+	defer admin.Close(ctx)
+	var count int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname = $1`, res.Name).Scan(&count); err != nil {
+		t.Fatalf("查角色失败: %v", err)
+	}
+	if count != 0 {
+		t.Fatal("临时角色必须随库一起删除，不能留僵尸角色")
+	}
+}
+
+func TestPostgresReclaimForcesActiveConnections(t *testing.T) {
+	ds := pgTestDataSource(t)
+	tmpl := mustCreateTemplateDB(t, ds)
+	defer mustDropDB(t, ds, tmpl)
+
+	p := NewPostgresProvisioner()
+	ctx := context.Background()
+	plan, err := p.Plan(ctx, ds, PlanRequest{
+		ProjectID: "p", NameSeed: mustName(t, "itforce"),
+		Binding: ProjectBinding{Postgres: &PostgresBinding{DevDatabase: tmpl, TerminateConnections: true}},
+	})
+	if err != nil {
+		t.Fatalf("Plan 失败: %v", err)
+	}
+	res, err := p.Provision(ctx, ds, plan)
+	if err != nil {
+		t.Fatalf("Provision 失败: %v", err)
+	}
+	hold := mustConnect(t, res.DSN)
+	defer hold.Close(ctx)
+
+	if err := p.Reclaim(ctx, ds, res); err != nil {
+		t.Fatalf("有活跃连接时 Reclaim 应能 FORCE 成功: %v", err)
+	}
+}
+
+func mustName(t *testing.T, seed string) string {
+	t.Helper()
+	name, err := NewResourceName(seed)
+	if err != nil {
+		t.Fatalf("生成资源名失败: %v", err)
+	}
+	return name
+}
+
 func mustConnect(t *testing.T, dsn string) *pgx.Conn {
 	t.Helper()
 	conn, err := pgx.Connect(context.Background(), dsn)

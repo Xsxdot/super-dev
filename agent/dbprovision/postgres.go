@@ -7,6 +7,9 @@ package dbprovision
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xsxdot/gokit/logger"
 )
 
@@ -226,14 +230,168 @@ func (p *PostgresProvisioner) Plan(ctx context.Context, ds DataSource, req PlanR
 	return plan, nil
 }
 
-// Provision 由后续任务实现；当前骨架不创建任何真实资源。
-func (p *PostgresProvisioner) Provision(context.Context, DataSource, Plan) (Resource, error) {
-	return Resource{}, fmt.Errorf("PostgreSQL Provision 尚未实现")
+// Provision 按已审批的 Plan 创建临时角色与模板克隆库，并在失败时级联回滚。
+//
+// 返回：含明文 DSN 的 Resource；该明文只应由 acquire_test_database 作为一次性出口返回。
+// 注意：CREATE DATABASE 不能在事务中执行，因此本方法用 defer 手工删除已完成的中间产物。
+func (p *PostgresProvisioner) Provision(ctx context.Context, ds DataSource, plan Plan) (Resource, error) {
+	resourceName := plan.ResourceName
+	template := plan.Detail["template"]
+	if resourceName == "" || template == "" {
+		return Resource{}, ErrBindingMissing
+	}
+	willTerminate := hasSideEffect(plan, SideEffectTerminateConnections)
+	log := logger.GetLogger().WithEntryName("DBProvisionPG").WithFields(map[string]any{
+		"resource_name": resourceName, "template": template, "will_terminate": willTerminate,
+	})
+	log.Info("开始供给 PostgreSQL 临时库")
+	started := time.Now()
+	passwordBytes := make([]byte, 24)
+	if _, err := rand.Read(passwordBytes); err != nil {
+		log.WithField("step", "generate_password").WithErr(err).Error("生成 PostgreSQL 临时角色密码失败")
+		return Resource{}, fmt.Errorf("生成临时角色密码失败: %w", err)
+	}
+	password := base64.RawURLEncoding.EncodeToString(passwordBytes)
+	conn, err := pgx.Connect(ctx, adminDSN(ds, ""))
+	if err != nil {
+		log.WithField("step", "connect_admin").WithErr(err).Error("连接 PostgreSQL 维护库失败")
+		return Resource{}, fmt.Errorf("连接 PostgreSQL 维护库失败: %w", err)
+	}
+	defer conn.Close(ctx)
+
+	roleCreated := false
+	databaseCreated := false
+	rollback := true
+	defer func() {
+		if !rollback {
+			return
+		}
+		rolledBackDB := false
+		rolledBackRole := false
+		if databaseCreated {
+			if _, dropErr := conn.Exec(ctx, `DROP DATABASE IF EXISTS `+pgx.Identifier{resourceName}.Sanitize()+` WITH (FORCE)`); dropErr == nil {
+				rolledBackDB = true
+			} else {
+				log.WithField("step", "rollback_database").WithErr(dropErr).Error("回滚 PostgreSQL 临时库失败")
+			}
+		}
+		if roleCreated {
+			if _, dropErr := conn.Exec(ctx, `DROP ROLE IF EXISTS `+pgx.Identifier{resourceName}.Sanitize()); dropErr == nil {
+				rolledBackRole = true
+			} else {
+				log.WithField("step", "rollback_role").WithErr(dropErr).Error("回滚 PostgreSQL 临时角色失败")
+			}
+		}
+		log.WithFields(map[string]any{
+			"resource_name": resourceName, "rolled_back_db": rolledBackDB, "rolled_back_role": rolledBackRole,
+		}).Warn("PostgreSQL 临时库供给失败，已触发回滚")
+	}()
+
+	log.WithField("role", resourceName).Debug("开始创建 PostgreSQL 临时角色")
+	createRole := fmt.Sprintf(
+		`CREATE ROLE %s LOGIN PASSWORD %s NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`,
+		pgx.Identifier{resourceName}.Sanitize(), quoteLiteral(password),
+	)
+	if _, err := conn.Exec(ctx, createRole); err != nil {
+		log.WithFields(map[string]any{"resource_name": resourceName, "step": "create_role"}).WithErr(err).Error("创建 PostgreSQL 临时角色失败")
+		return Resource{}, fmt.Errorf("创建临时角色失败: %w", err)
+	}
+	roleCreated = true
+	log.WithField("role", resourceName).Debug("PostgreSQL 临时角色创建完成")
+
+	if willTerminate {
+		if _, err := terminateTemplateConnections(ctx, conn, template); err != nil {
+			log.WithFields(map[string]any{"resource_name": resourceName, "step": "terminate_connections"}).WithErr(err).Error("断开 PostgreSQL 模板库连接失败")
+			return Resource{}, fmt.Errorf("断开模板库连接失败: %w", err)
+		}
+		// pg_terminate_backend 返回并不代表后端已退出，等待 200ms 再发起克隆可避开短暂竞态。
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	createDatabase := func() error {
+		log.WithFields(map[string]any{"resource_name": resourceName, "template": template}).Info("开始创建 PostgreSQL 临时库")
+		_, createErr := conn.Exec(ctx, fmt.Sprintf(
+			`CREATE DATABASE %s TEMPLATE %s OWNER %s`,
+			pgx.Identifier{resourceName}.Sanitize(), pgx.Identifier{template}.Sanitize(), pgx.Identifier{resourceName}.Sanitize(),
+		))
+		return createErr
+	}
+	if err := createDatabase(); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "55006" && willTerminate {
+			// 只重试一次，避免在开发库持续瞬断时无限延长本次申请的影响窗口。
+			log.WithFields(map[string]any{"resource_name": resourceName, "attempt": 2}).WithErr(err).Warn("模板库仍繁忙，断连后重试创建临时库")
+			if _, terminateErr := terminateTemplateConnections(ctx, conn, template); terminateErr != nil {
+				log.WithFields(map[string]any{"resource_name": resourceName, "step": "retry_terminate_connections"}).WithErr(terminateErr).Error("重试断开 PostgreSQL 模板库连接失败")
+				return Resource{}, fmt.Errorf("重试断开模板库连接失败: %w", terminateErr)
+			}
+			// pg_terminate_backend 返回并不代表后端已经退出，等待后再重试可避免立即再次收到 55006。
+			time.Sleep(200 * time.Millisecond)
+			if err := createDatabase(); err != nil {
+				log.WithFields(map[string]any{"resource_name": resourceName, "step": "create_database_retry"}).WithErr(err).Error("重试创建 PostgreSQL 临时库失败")
+				return Resource{}, fmt.Errorf("重试创建临时库失败: %w", err)
+			}
+		} else {
+			log.WithFields(map[string]any{"resource_name": resourceName, "step": "create_database"}).WithErr(err).Error("创建 PostgreSQL 临时库失败")
+			return Resource{}, fmt.Errorf("创建临时库失败: %w", err)
+		}
+	}
+	databaseCreated = true
+	log.WithFields(map[string]any{
+		"resource_name": resourceName, "elapsed_ms": time.Since(started).Milliseconds(),
+	}).Info("PostgreSQL 临时库创建完成")
+
+	resDSN := postgresDSN(ds, resourceName, password, resourceName)
+	// CREATE DATABASE 不能包在事务里；库建好后再连入目标库执行 REVOKE CONNECT，才能收紧 PUBLIC 权限。
+	targetConn, err := pgx.Connect(ctx, resDSN)
+	if err != nil {
+		log.WithFields(map[string]any{"resource_name": resourceName, "step": "connect_target"}).WithErr(err).Error("连接 PostgreSQL 临时库失败")
+		return Resource{}, fmt.Errorf("连接临时库失败: %w", err)
+	}
+	_, revokeErr := targetConn.Exec(ctx, `REVOKE CONNECT ON DATABASE `+pgx.Identifier{resourceName}.Sanitize()+` FROM PUBLIC`)
+	_ = targetConn.Close(ctx)
+	if revokeErr != nil {
+		log.WithFields(map[string]any{"resource_name": resourceName, "step": "revoke_public_connect"}).WithErr(revokeErr).Error("收紧 PostgreSQL 临时库连接权限失败")
+		return Resource{}, fmt.Errorf("收紧临时库连接权限失败: %w", revokeErr)
+	}
+	rollback = false
+	log.WithFields(map[string]any{
+		"resource_name": resourceName, "elapsed_ms": time.Since(started).Milliseconds(),
+	}).Info("PostgreSQL 临时库供给成功")
+	return Resource{
+		Kind: KindPostgres,
+		Name: resourceName,
+		DSN:  resDSN,
+		Meta: map[string]string{"database": resourceName, "role": resourceName, "cloned_from": template},
+	}, nil
 }
 
-// Reclaim 由后续任务实现；当前骨架不执行任何回收动作。
-func (p *PostgresProvisioner) Reclaim(context.Context, DataSource, Resource) error {
-	return fmt.Errorf("PostgreSQL Reclaim 尚未实现")
+// Reclaim 强制删除 PostgreSQL 临时库与其同名角色，重复调用幂等。
+//
+// 注意：必须先删库再删角色，因为角色是数据库 owner，反过来会因 owner 依赖而失败。
+func (p *PostgresProvisioner) Reclaim(ctx context.Context, ds DataSource, res Resource) error {
+	log := logger.GetLogger().WithEntryName("DBProvisionPG").WithField("resource_name", res.Name)
+	log.Info("开始回收 PostgreSQL 临时库")
+	conn, err := pgx.Connect(ctx, adminDSN(ds, ""))
+	if err != nil {
+		log.WithErr(err).Error("连接 PostgreSQL 维护库失败")
+		return fmt.Errorf("连接 PostgreSQL 维护库失败: %w", err)
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, `DROP DATABASE IF EXISTS `+pgx.Identifier{res.Name}.Sanitize()+` WITH (FORCE)`); err != nil {
+		log.WithErr(err).Error("回收 PostgreSQL 临时库失败")
+		return fmt.Errorf("删除临时库失败: %w", err)
+	}
+	role := res.Meta["role"]
+	if role == "" {
+		role = res.Name
+	}
+	if _, err := conn.Exec(ctx, `DROP ROLE IF EXISTS `+pgx.Identifier{role}.Sanitize()); err != nil {
+		log.WithErr(err).Error("回收 PostgreSQL 临时角色失败")
+		return fmt.Errorf("删除临时角色失败: %w", err)
+	}
+	log.Info("PostgreSQL 临时库回收完成")
+	return nil
 }
 
 // Reconcile 由后续任务实现；当前骨架不扫描或回收任何数据库。
@@ -273,6 +431,10 @@ func adminDSN(ds DataSource, database string) string {
 			database = "postgres"
 		}
 	}
+	return postgresDSN(ds, ds.User, ds.Password, database)
+}
+
+func postgresDSN(ds DataSource, user, password, database string) string {
 	sslmode := ds.Extra["sslmode"]
 	if sslmode == "" {
 		sslmode = "disable"
@@ -281,12 +443,54 @@ func adminDSN(ds DataSource, database string) string {
 		Scheme: "postgres",
 		Host:   net.JoinHostPort(ds.Host, strconv.Itoa(ds.Port)),
 		Path:   "/" + database,
-		User:   url.UserPassword(ds.User, ds.Password),
+		User:   url.UserPassword(user, password),
 	}
 	query := url.Values{}
 	query.Set("sslmode", sslmode)
 	u.RawQuery = query.Encode()
 	return u.String()
+}
+
+func quoteLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func hasSideEffect(plan Plan, kind string) bool {
+	for _, effect := range plan.SideEffects {
+		if effect.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func terminateTemplateConnections(ctx context.Context, conn *pgx.Conn, database string) (int, error) {
+	rows, err := conn.Query(ctx, `
+		SELECT pg_terminate_backend(pid)
+		FROM pg_stat_activity
+		WHERE datname = $1 AND pid <> pg_backend_pid()
+	`, database)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	terminated := 0
+	for rows.Next() {
+		var ok bool
+		if err := rows.Scan(&ok); err != nil {
+			return terminated, err
+		}
+		if ok {
+			terminated++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return terminated, err
+	}
+	logger.GetLogger().WithEntryName("DBProvisionPG").WithFields(map[string]any{
+		"template": database, "terminated": terminated,
+	}).Info("已断开 PostgreSQL 模板库连接")
+	return terminated, nil
 }
 
 func postgresMajorVersion(version string) (int, error) {
