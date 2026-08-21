@@ -2,9 +2,12 @@ package dbprovision
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // pgTestDataSource 从 SUPERDEV_TEST_PG_* 环境变量构造测试用管理连接。
@@ -63,5 +66,111 @@ func TestPostgresProbeReportsMissingCapability(t *testing.T) {
 	}
 	if len(res.Missing) == 0 || res.FixHint == "" {
 		t.Fatalf("必须给出 Missing 与 FixHint: %+v", res)
+	}
+}
+
+func TestPostgresPlanRejectsMissingTemplate(t *testing.T) {
+	ds := pgTestDataSource(t)
+	_, err := NewPostgresProvisioner().Plan(context.Background(), ds, PlanRequest{
+		ProjectID: "p", NameSeed: "sdev_eph_it_planmiss",
+		Binding: ProjectBinding{Postgres: &PostgresBinding{DevDatabase: "no_such_db_xyz", TerminateConnections: true}},
+	})
+	if err == nil {
+		t.Fatal("模板库不存在时 Plan 必须报错")
+	}
+}
+
+func TestPostgresPlanReportsTerminateSideEffectWhenBusy(t *testing.T) {
+	ds := pgTestDataSource(t)
+	tmpl := mustCreateTemplateDB(t, ds)
+	defer mustDropDB(t, ds, tmpl)
+
+	busy := mustConnect(t, adminDSN(ds, tmpl))
+	defer busy.Close(context.Background())
+
+	p := NewPostgresProvisioner()
+	plan, err := p.Plan(context.Background(), ds, PlanRequest{
+		ProjectID: "p", NameSeed: "sdev_eph_it_busy",
+		Binding: ProjectBinding{Postgres: &PostgresBinding{DevDatabase: tmpl, TerminateConnections: true}},
+	})
+	if err != nil {
+		t.Fatalf("Plan 失败: %v", err)
+	}
+	if len(plan.SideEffects) != 1 || plan.SideEffects[0].Kind != SideEffectTerminateConnections {
+		t.Fatalf("应声明断连副作用: %+v", plan.SideEffects)
+	}
+	if plan.SideEffects[0].Count < 1 {
+		t.Fatalf("副作用应统计到至少 1 个活跃连接: %+v", plan.SideEffects)
+	}
+	if plan.ResourceName != "sdev_eph_it_busy" {
+		t.Fatalf("PG 应采用 NameSeed 作资源名: %s", plan.ResourceName)
+	}
+	if plan.Detail["template_size"] == "" {
+		t.Fatal("必须给出模板库体积")
+	}
+}
+
+func TestPostgresPlanFailsWhenBusyAndTerminateDisabled(t *testing.T) {
+	ds := pgTestDataSource(t)
+	tmpl := mustCreateTemplateDB(t, ds)
+	defer mustDropDB(t, ds, tmpl)
+	busy := mustConnect(t, adminDSN(ds, tmpl))
+	defer busy.Close(context.Background())
+
+	_, err := NewPostgresProvisioner().Plan(context.Background(), ds, PlanRequest{
+		ProjectID: "p", NameSeed: "sdev_eph_it_nokill",
+		Binding: ProjectBinding{Postgres: &PostgresBinding{DevDatabase: tmpl, TerminateConnections: false}},
+	})
+	if !errors.Is(err, ErrTemplateBusy) {
+		t.Fatalf("应返回 ErrTemplateBusy，实际 %v", err)
+	}
+}
+
+func TestPostgresPlanHasNoSideEffectWhenIdle(t *testing.T) {
+	ds := pgTestDataSource(t)
+	tmpl := mustCreateTemplateDB(t, ds)
+	defer mustDropDB(t, ds, tmpl)
+
+	plan, err := NewPostgresProvisioner().Plan(context.Background(), ds, PlanRequest{
+		ProjectID: "p", NameSeed: "sdev_eph_it_idle",
+		Binding: ProjectBinding{Postgres: &PostgresBinding{DevDatabase: tmpl, TerminateConnections: true}},
+	})
+	if err != nil {
+		t.Fatalf("Plan 失败: %v", err)
+	}
+	if len(plan.SideEffects) != 0 {
+		t.Fatalf("无活跃连接时不应有副作用: %+v", plan.SideEffects)
+	}
+}
+
+func mustConnect(t *testing.T, dsn string) *pgx.Conn {
+	t.Helper()
+	conn, err := pgx.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("连接 PostgreSQL 失败: %v", err)
+	}
+	return conn
+}
+
+func mustCreateTemplateDB(t *testing.T, ds DataSource) string {
+	t.Helper()
+	name, err := NewResourceName("ittpl")
+	if err != nil {
+		t.Fatalf("生成模板库名失败: %v", err)
+	}
+	admin := mustConnect(t, adminDSN(ds, ""))
+	defer admin.Close(context.Background())
+	if _, err := admin.Exec(context.Background(), `CREATE DATABASE `+pgx.Identifier{name}.Sanitize()); err != nil {
+		t.Fatalf("创建模板库失败: %v", err)
+	}
+	return name
+}
+
+func mustDropDB(t *testing.T, ds DataSource, name string) {
+	t.Helper()
+	admin := mustConnect(t, adminDSN(ds, ""))
+	defer admin.Close(context.Background())
+	if _, err := admin.Exec(context.Background(), `DROP DATABASE IF EXISTS `+pgx.Identifier{name}.Sanitize()+` WITH (FORCE)`); err != nil {
+		t.Fatalf("删除模板库失败: %v", err)
 	}
 }
