@@ -3,7 +3,7 @@
 // 职责：
 //   - 校验 prepared backup、campaign 与冻结包身份
 //   - 保留 pre-driver prerequisite 的独立失败事实
-//   - 由统一派生模块生成七 provider、全部 scenario 和 75 工具的未尝试结果
+//   - 由统一派生模块生成七 provider、全部 scenario 和 79 工具的未尝试结果
 //
 // 边界：
 //   - 不执行 MCP、安装器、provider 或 cleanup

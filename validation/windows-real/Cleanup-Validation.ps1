@@ -224,7 +224,7 @@ function Ensure-CampaignReport {
     $script:cleanupLane = [string]$prepared.lane
     $driver = Join-Path $PSScriptRoot 'bin\superdev-windows-validation.exe'
     if (-not (Test-Path -LiteralPath $driver -PathType Leaf)) { throw "Packaged pre-driver report materializer is missing: $driver" }
-    # PowerShell 只提交 backup、campaign 和原始失败记录；Phase Status、七 provider 与 75 工具行全部由 Go 的统一结果模块派生。
+    # PowerShell 只提交 backup、campaign 和原始失败记录；Phase Status、七 provider 与 79 工具行全部由 Go 的统一结果模块派生。
     Write-CleanupEvent 'info' 'pre_driver_report' 'materialize_started' @{ campaign_report = $reportPath }
     & $driver --materialize-pre-driver-failure --package-root $PSScriptRoot --results-root $ResultsRoot --campaign-id $CampaignId --prepared-backup $Backup
     $materializeExit = $LASTEXITCODE

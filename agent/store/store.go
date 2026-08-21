@@ -239,6 +239,33 @@ func migrate(db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_pipeline_run_logs_filter
 			ON pipeline_run_logs(run_id, step_name, host_id, id);
+
+		CREATE TABLE IF NOT EXISTS provision_leases (
+			id            TEXT PRIMARY KEY,
+			project_id    TEXT NOT NULL,
+			purpose       TEXT NOT NULL DEFAULT '',
+			created_at    INTEGER NOT NULL,   -- unix 秒
+			expires_at    INTEGER NOT NULL,
+			renew_count   INTEGER NOT NULL DEFAULT 0,
+			status        TEXT NOT NULL       -- 'active' | 'releasing' | 'released'
+		);
+		CREATE INDEX IF NOT EXISTS idx_provision_leases_project ON provision_leases(project_id, status);
+		CREATE INDEX IF NOT EXISTS idx_provision_leases_expiry  ON provision_leases(expires_at, status);
+
+		CREATE TABLE IF NOT EXISTS provision_resources (
+			id             TEXT PRIMARY KEY,
+			lease_id       TEXT NOT NULL,
+			datasource_id  TEXT NOT NULL,
+			kind           TEXT NOT NULL,
+			name           TEXT NOT NULL,     -- PG 库名 / Redis "db7"
+			meta_json      TEXT NOT NULL DEFAULT '{}',
+			status         TEXT NOT NULL,     -- 'creating' | 'active' | 'reclaimed'
+			created_at     INTEGER NOT NULL
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_provision_resources_slot
+			ON provision_resources(datasource_id, kind, name)
+			WHERE status <> 'reclaimed';
+		CREATE INDEX IF NOT EXISTS idx_provision_resources_lease ON provision_resources(lease_id);
 	`)
 	if err != nil {
 		return err

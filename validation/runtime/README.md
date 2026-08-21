@@ -33,6 +33,12 @@ may create campaign-owned state in the clone and under
 `/srv/superdev-runtime-validation/<campaign-id>`, but it must not create, update,
 delete, or relabel the borrowed Host/Agent/Tunnel records.
 
+The packaged MCP surface currently contains 79 tools. This cross-platform
+campaign keeps 75 primary scenario assignments because the four
+`*_test_database` tools require a real PG/Redis instance and a project binding;
+they are covered by the dbprovision and MCP integration suites instead of being
+represented by a fabricated runtime scenario.
+
 The cleanup journal records both lifecycle-owning roots and every MCP write
 call. A write receives `intent` before the call and `acquired` after application
 success, but it is not marked `released` merely because the call returned.

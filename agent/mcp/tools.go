@@ -1536,5 +1536,42 @@ func defaultTools(s *Server) []registeredTool {
 			},
 			Handler: s.importPipelineTemplateTool,
 		},
+		{
+			Tool: Tool{
+				Name:        "acquire_test_database",
+				Title:       "Acquire test database",
+				Description: acquireTestDatabaseDescription,
+				InputSchema: acquireTestDatabaseInputSchema(),
+			},
+			Handler: s.acquireTestDatabaseTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "release_test_database",
+				Title:       "Release test database",
+				Description: "Release an isolated real test environment before its lease expires.",
+				InputSchema: testDatabaseLeaseInputSchema(),
+			},
+			Handler: s.releaseTestDatabaseTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "renew_test_database",
+				Title:       "Renew test database",
+				Description: "Renew an isolated real test environment lease before it expires.",
+				InputSchema: renewTestDatabaseInputSchema(),
+			},
+			Handler: s.renewTestDatabaseTool,
+		},
+		{
+			Tool: Tool{
+				Name:        "list_test_databases",
+				Title:       "List test databases",
+				Description: "List active isolated real test environments without connection strings.",
+				InputSchema: emptyInputSchema(),
+				Annotations: map[string]any{"readOnlyHint": true},
+			},
+			Handler: s.listTestDatabasesTool,
+		},
 	}
 }

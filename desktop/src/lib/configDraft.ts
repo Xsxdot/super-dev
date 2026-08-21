@@ -28,6 +28,7 @@ import type {
   ControlMode,
   CodeDebugConfig,
   DebugCredential,
+  ProjectDataSourceBinding,
 } from '@/api/agent'
 import { i18n } from '@/i18n'
 
@@ -51,6 +52,8 @@ export interface ConfigDraft {
   debug_credentials: DebugCredential[]
   services: ConfigDraftService[]
   pipelines: ProjectPipeline[]
+  /** 项目共享层的临时资源绑定；密码永远不进入草稿。 */
+  data_source_binding?: ProjectDataSourceBinding
 }
 
 export type ValidationScope = 'config' | 'pipeline'
@@ -226,6 +229,7 @@ export function projectToDraft(p: Project): ConfigDraft {
       deployments: (s.deployments ?? []).map(d => normalizeDeployment(d)),
     })),
     pipelines: (p.pipelines ?? []).map(pipeline => clone(pipeline)),
+    data_source_binding: p.data_source_binding ? clone(p.data_source_binding) : undefined,
   }
 }
 
@@ -328,7 +332,18 @@ export function draftToPayload(draft: ConfigDraft): SetupPayload {
       }),
     })),
     pipelines: draft.pipelines,
+    ...(hasProjectDataSourceBinding(draft.data_source_binding)
+      ? { data_source_binding: clone(draft.data_source_binding) }
+      : {}),
   }
+}
+
+function hasProjectDataSourceBinding(binding?: ProjectDataSourceBinding): boolean {
+  return Boolean(
+    binding?.postgres?.datasource_name?.trim()
+      || binding?.postgres?.dev_database?.trim()
+      || binding?.redis?.datasource_name?.trim(),
+  )
 }
 
 function pipelineSteps(pipeline?: Pipeline): PipelineStep[] {

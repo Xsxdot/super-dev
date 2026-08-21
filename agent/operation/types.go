@@ -36,6 +36,8 @@ const (
 	OperationCodeDebugOpen = "code_debug.open"
 	// OperationCodeDebugEvaluate 表示在代码调试会话中执行表达式求值。
 	OperationCodeDebugEvaluate = "code_debug.evaluate"
+	// OperationTestDatabaseTerminate 表示克隆临时库前断开开发库活跃连接。
+	OperationTestDatabaseTerminate = "test_database.terminate_connections"
 	// OperationBrowserDebugControl 表示在已打开调试会话上执行页面控制动作。
 	//
 	// 注意：

@@ -6,7 +6,7 @@
 //   - 验证 readiness、鉴权正常/受控错误和真实断点采集
 //
 // 边界：
-//   - provider 结果独立报告，不创建或复制任何 75 工具 verdict 行
+//   - provider 结果独立报告，不创建或复制任何 79 工具 verdict 行
 //   - 依赖缺失保持 BLOCKED，产品/适配器缺陷保持 FAIL
 package windowsvalidation
 

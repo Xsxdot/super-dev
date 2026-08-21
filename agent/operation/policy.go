@@ -17,6 +17,46 @@ import (
 	"github.com/xsxdot/super-dev/agent/model"
 )
 
+// PlanTestDatabaseTerminate 为临时库克隆前的开发库断连生成中风险计划。
+//
+// 参数：
+//   - projectID: 发生断连的项目 ID
+//   - template: 将被断连并克隆的开发库名
+//   - count: 当前检测到的活跃连接数
+//   - detail: 已脱敏的占用者摘要
+//
+// 返回：
+//   - 始终要求审批、风险级别为 medium 的 operation plan
+//
+// 注意：
+//   - 该函数只描述断连副作用，不执行任何数据库操作。
+func PlanTestDatabaseTerminate(projectID, template string, count int, detail string) Plan {
+	now := time.Now().UTC()
+	summary := fmt.Sprintf("断开开发库 %s 上的 %d 个活跃连接以克隆临时库", template, count)
+	plan := Plan{
+		ID:               newID("op"),
+		Kind:             OperationTestDatabaseTerminate,
+		Target:           Target{ProjectID: projectID},
+		TargetSummary:    summary,
+		RiskLevel:        RiskMedium,
+		RequiresApproval: true,
+		ExpectedEffects:  []string{summary},
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(DefaultPlanTTL),
+	}
+	if detail != "" {
+		plan.Checks = []Check{{Name: "active_connections", Status: "warning", Message: detail}}
+	}
+	plan.Fingerprint = stableFingerprint(map[string]any{
+		"kind":     plan.Kind,
+		"project":  projectID,
+		"template": template,
+		"count":    count,
+		"detail":   detail,
+	})
+	return plan
+}
+
 // RuntimeDeploymentTarget 描述批量运行态操作中的单个 deployment 目标。
 //
 // 参数：

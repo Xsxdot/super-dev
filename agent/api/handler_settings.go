@@ -73,14 +73,15 @@ type settingsPatchRequest struct {
 }
 
 type approvalPolicyPatch struct {
-	ConfigUpsert      *bool `json:"config_upsert"`
-	PipelineUpsert    *bool `json:"pipeline_upsert"`
-	PipelineRun       *bool `json:"pipeline_run"`
-	TemplateImport    *bool `json:"template_import"`
-	BrowserDebugOpen  *bool `json:"browser_debug_open"`
-	CodeDebugOpen     *bool `json:"code_debug_open"`
-	CodeDebugEvaluate *bool `json:"code_debug_evaluate"`
-	GraceMinutes      *int  `json:"grace_minutes"`
+	ConfigUpsert               *bool `json:"config_upsert"`
+	PipelineUpsert             *bool `json:"pipeline_upsert"`
+	PipelineRun                *bool `json:"pipeline_run"`
+	TemplateImport             *bool `json:"template_import"`
+	BrowserDebugOpen           *bool `json:"browser_debug_open"`
+	CodeDebugOpen              *bool `json:"code_debug_open"`
+	CodeDebugEvaluate          *bool `json:"code_debug_evaluate"`
+	TestDatabaseTerminateConns *bool `json:"test_database_terminate_conns"`
+	GraceMinutes               *int  `json:"grace_minutes"`
 }
 
 type debugBrowserSettingsPatch struct {
@@ -112,6 +113,9 @@ func mergeApprovalPolicyPatch(current config.ApprovalPolicy, patch approvalPolic
 	}
 	if patch.CodeDebugEvaluate != nil {
 		current.CodeDebugEvaluate = *patch.CodeDebugEvaluate
+	}
+	if patch.TestDatabaseTerminateConns != nil {
+		current.TestDatabaseTerminateConns = *patch.TestDatabaseTerminateConns
 	}
 	if patch.GraceMinutes != nil {
 		current.GraceMinutes = *patch.GraceMinutes

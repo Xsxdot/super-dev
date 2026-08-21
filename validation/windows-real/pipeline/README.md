@@ -20,4 +20,4 @@ The Windows side does not execute Bash or this `.sh` file. The cross-platform `a
 
 After packaging, a Windows-native PowerShell `Get-FileHash` step writes a campaign-owned SHA-256 sidecar under the project workspace. The artifact and sidecar are transferred separately; Linux compares the exact tar.gz digest before extraction. The A sidecar remains available for rollback, so rollback reuses the registered A artifact instead of rebuilding it.
 
-The scenario imports `templates/remote-validation-deploy.yaml`, upserts a campaign-owned project pipeline, then performs deploy A, update B, rollback A, and exact cleanup. `deploy_project_pipeline` owns coverage only on deploy A; subsequent calls are marked as supporting calls so the frozen 75-tool manifest still assigns every tool exactly once.
+The scenario imports `templates/remote-validation-deploy.yaml`, upserts a campaign-owned project pipeline, then performs deploy A, update B, rollback A, and exact cleanup. `deploy_project_pipeline` owns coverage only on deploy A; subsequent calls are marked as supporting calls so the frozen 79-tool manifest still assigns every tool exactly once.

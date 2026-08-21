@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Added AI real-test database provisioning through `acquire_test_database`, `release_test_database`, `renew_test_database`, and `list_test_databases`, plus desktop data-source registration, project binding, dry-run, TTL reclamation, and reconciliation. Redis isolation relies on convention and the assigned db number rather than database-level permissions; `db0` is reserved and users must not place unrelated data in a leased db.
+
 ## [0.2.5] - 2026-08-21
 
 ### Fixed

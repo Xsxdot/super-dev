@@ -51,6 +51,7 @@ function defaultApprovalPolicy(): ApprovalPolicy {
     browser_debug_open: true,
     code_debug_open: true,
     code_debug_evaluate: true,
+    test_database_terminate_conns: true,
     grace_minutes: 15,
   }
 }
@@ -79,6 +80,7 @@ async function saveApprovalSettings() {
       browser_debug_open: approvalForm.browser_debug_open,
       code_debug_open: approvalForm.code_debug_open,
       code_debug_evaluate: approvalForm.code_debug_evaluate,
+      test_database_terminate_conns: approvalForm.test_database_terminate_conns,
       grace_minutes: approvalForm.grace_minutes,
     })
     saveMessageKind.value = 'success'
@@ -166,6 +168,13 @@ function decidedLabel(approval: OperationApproval): string {
         <label class="policy-toggle">
           <input v-model="approvalForm.code_debug_evaluate" data-test="approval-switch-code-debug-evaluate" type="checkbox" @change="clearSaveMessage">
           <span>{{ t('settings.approvals.codeDebugEvaluate') }}</span>
+        </label>
+        <label class="policy-toggle">
+          <input v-model="approvalForm.test_database_terminate_conns" data-test="approval-switch-test-database-terminate-conns" type="checkbox" @change="clearSaveMessage">
+          <span class="policy-toggle-copy">
+            <span>{{ t('settings.approvals.testDatabaseTerminateConns') }}</span>
+            <small>{{ t('settings.approvals.testDatabaseTerminateConnsDescription') }}</small>
+          </span>
         </label>
         <label class="policy-number">
           <span>{{ t('settings.approvals.graceMinutes') }}</span>
@@ -366,6 +375,15 @@ function decidedLabel(approval: OperationApproval): string {
   width: 16px;
   height: 16px;
   accent-color: var(--accent);
+}
+.policy-toggle-copy {
+  display: grid;
+  gap: 2px;
+}
+.policy-toggle-copy small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.35;
 }
 .approval-save-notice {
   margin: 0;

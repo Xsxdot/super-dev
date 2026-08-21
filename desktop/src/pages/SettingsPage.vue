@@ -27,6 +27,7 @@ import DNSProviderTab from '@/components/Settings/DNSProviderTab.vue'
 import CertificateTab from '@/components/Settings/CertificateTab.vue'
 import McpManagerTab from '@/components/Settings/McpManagerTab.vue'
 import OperationApprovalsTab from '@/components/Settings/OperationApprovalsTab.vue'
+import DataSourceTab from '@/components/Settings/DataSourceTab.vue'
 import DebugBrowserTab from '@/components/Settings/DebugBrowserTab.vue'
 import TemplateManagerTab from '@/components/Settings/TemplateManagerTab.vue'
 import TemplateContentModal from '@/components/Settings/TemplateContentModal.vue'
@@ -39,7 +40,7 @@ import type {
   Service,
 } from '@/api/agent'
 
-type SettingsTab = 'general' | 'projects' | 'hosts' | 'agents' | 'dns' | 'ssl' | 'templates' | 'approvals' | 'debugBrowser' | 'mcp'
+type SettingsTab = 'general' | 'projects' | 'hosts' | 'agents' | 'dns' | 'ssl' | 'templates' | 'datasource' | 'approvals' | 'debugBrowser' | 'mcp'
 
 const route = useRoute()
 const router = useRouter()
@@ -60,11 +61,13 @@ const selectedTab = ref<SettingsTab>(
           ? 'ssl'
           : route.query.tab === 'templates'
             ? 'templates'
-            : route.query.tab === 'approvals'
-              ? 'approvals'
-              : route.query.tab === 'mcp'
-                ? 'mcp'
-                : 'general',
+            : route.query.tab === 'datasource'
+              ? 'datasource'
+              : route.query.tab === 'approvals'
+                ? 'approvals'
+                : route.query.tab === 'mcp'
+                  ? 'mcp'
+                  : 'general',
 )
 
 onMounted(() => {
@@ -262,6 +265,18 @@ const artifactKeepVersions = computed({
           <path d="M10 2.5v3h3M5 8h6M5 10.5h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
         </svg>
         {{ t('settings.tabs.templates') }}
+      </button>
+      <button
+        data-test="settings-tab-datasource"
+        class="settings-nav-item"
+        :class="{ active: selectedTab === 'datasource' }"
+        @click="selectedTab = 'datasource'"
+      >
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:5px">
+          <ellipse cx="8" cy="4" rx="5" ry="2.2" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M3 4v4c0 1.2 2.2 2.2 5 2.2S13 9.2 13 8V4M3 8v4c0 1.2 2.2 2.2 5 2.2s5-1 5-2.2V8" stroke="currentColor" stroke-width="1.4"/>
+        </svg>
+        {{ t('settings.tabs.dataSource') }}
       </button>
       <button
         data-test="settings-tab-approvals"
@@ -476,6 +491,10 @@ const artifactKeepVersions = computed({
           :on-import="importPipelineTemplate"
           :on-view="viewTemplate"
         />
+      </section>
+
+      <section v-else-if="selectedTab === 'datasource'" class="settings-pane">
+        <DataSourceTab />
       </section>
 
       <section v-else-if="selectedTab === 'approvals'" class="settings-pane">

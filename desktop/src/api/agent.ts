@@ -167,7 +167,14 @@ async function requestHeaders(headers?: HeadersInit): Promise<Record<string, str
   return merged
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+// request 发送带本机 agent 鉴权头的 JSON 请求。
+//
+// 参数：
+//   - path: agent REST 路径
+//   - options: 可选 HTTP 方法、请求体与额外头
+//
+// 返回：解码后的 JSON 响应；非 2xx 响应抛出 AgentAPIError。
+export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const { headers, ...rest } = options ?? {}
   // 首次 401：多半是 agent 重启轮换了本机 token——失效缓存重取一次再试。
   // 仅在首次请求确实带了凭据时才重试：裸连（token 为 null）的 401 重发只会原样再失败一次。
@@ -660,6 +667,20 @@ export interface Service {
   auth_hint?: string
 }
 
+/** 项目共享层里的 PG/Redis 临时资源绑定，不含机器凭据。 */
+export interface ProjectDataSourceBinding {
+  postgres?: {
+    datasource_name: string
+    dev_database: string
+    terminate_connections: boolean
+  }
+  redis?: {
+    datasource_name: string
+  }
+  max_concurrent_leases?: number
+  default_ttl_minutes?: number
+}
+
 export interface Project {
   id: string
   name: string
@@ -691,6 +712,8 @@ export interface Project {
   home_host_id?: string
   /** home_host_id 对应的主机展示名；归属主机已被删除时为空（ID 仍保留）。 */
   home_host_name?: string
+  /** 项目共享层里的 AI 临时库绑定；只含数据源名和模板库名，不含密码。 */
+  data_source_binding?: ProjectDataSourceBinding
 }
 
 // ===== 配置分层迁移（legacy config.yaml → project.yaml + local.yaml） =====
@@ -860,6 +883,8 @@ export interface ApprovalPolicy {
   browser_debug_open: boolean
   code_debug_open: boolean
   code_debug_evaluate: boolean
+  /** 临时库克隆前断开开发库连接是否免人工审批；旧服务端可能不返回该字段。 */
+  test_database_terminate_conns?: boolean
   grace_minutes: number
 }
 
@@ -1186,6 +1211,8 @@ export interface SetupPayload {
   services: SetupServiceEntry[]
   debug_credentials?: DebugCredential[]
   pipelines?: ProjectPipeline[]
+  /** 共享层项目配置中的临时资源绑定，不含密码。 */
+  data_source_binding?: ProjectDataSourceBinding
 }
 
 export interface ProjectPipelinePreviewRequest {

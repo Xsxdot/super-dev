@@ -4,6 +4,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import ProjectConfigEditor from '@/components/Settings/ProjectConfigEditor.vue'
 import { installTestI18n } from '@/test-utils/i18n'
 import type { Project } from '@/api/agent'
+import { dataSourceApi } from '@/api/datasources'
 
 vi.mock('@/api/agent', async () => {
   const actual = await vi.importActual<typeof import('@/api/agent')>('@/api/agent')
@@ -14,6 +15,19 @@ vi.mock('@/api/agent', async () => {
       listHosts: vi.fn().mockResolvedValue([]),
       putProjectSetup: vi.fn().mockResolvedValue({}),
       listProjects: vi.fn().mockResolvedValue([]),
+    },
+  }
+})
+
+vi.mock('@/api/datasources', async () => {
+  const actual = await vi.importActual<typeof import('@/api/datasources')>('@/api/datasources')
+  return {
+    ...actual,
+    dataSourceApi: {
+      ...actual.dataSourceApi,
+      list: vi.fn().mockResolvedValue([]),
+      leases: vi.fn().mockResolvedValue([]),
+      dryRun: vi.fn().mockResolvedValue({ plans: [], masked_dsns: [], succeeded: true }),
     },
   }
 })
@@ -327,5 +341,79 @@ describe('ProjectConfigEditor', () => {
 
     expect(wrapper.text()).toContain('Save')
     expect(wrapper.text()).toContain('Cancel')
+  })
+
+  it('渲染数据源区块并按已登记实例填充下拉', async () => {
+    vi.mocked(dataSourceApi.list).mockResolvedValueOnce([
+      { id: 'pg-1', kind: 'postgres', name: 'local-pg', host: '127.0.0.1', port: 5432, probe: { ok: true } },
+      { id: 'redis-1', kind: 'redis', name: 'local-redis', host: '127.0.0.1', port: 6379, probe: { ok: true } },
+    ])
+    const wrapper = mountProjectConfigEditor(project())
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="project-data-source-binding"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-test="project-pg-datasource"] option').map(option => option.text()).join(' ')).toContain('local-pg')
+    expect(wrapper.findAll('[data-test="project-redis-datasource"] option').map(option => option.text()).join(' ')).toContain('local-redis')
+  })
+
+  it('保存时把绑定写进 data_source_binding 字段', async () => {
+    const { api } = await import('@/api/agent')
+    vi.mocked(dataSourceApi.list).mockResolvedValueOnce([
+      { id: 'pg-1', kind: 'postgres', name: 'local-pg', host: '127.0.0.1', port: 5432, probe: { ok: true } },
+      { id: 'redis-1', kind: 'redis', name: 'local-redis', host: '127.0.0.1', port: 6379, probe: { ok: true } },
+    ])
+    const wrapper = mountProjectConfigEditor(project())
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="project-pg-datasource"]').setValue('local-pg')
+    await wrapper.find('[data-test="project-pg-dev-database"]').setValue('tk_dev')
+    await wrapper.find('[data-test="project-redis-datasource"]').setValue('local-redis')
+    await wrapper.find('[data-test="project-max-concurrent-leases"]').setValue(4)
+    await wrapper.find('[data-test="project-default-ttl-minutes"]').setValue(45)
+    await wrapper.find('[data-test="config-save"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(api.putProjectSetup).toHaveBeenCalledWith('p1', expect.objectContaining({
+      data_source_binding: {
+        postgres: { datasource_name: 'local-pg', dev_database: 'tk_dev', terminate_connections: true },
+        redis: { datasource_name: 'local-redis' },
+        max_concurrent_leases: 4,
+        default_ttl_minutes: 45,
+      },
+    }))
+  })
+
+  it('踢连接开关默认勾选且展示瞬断代价', async () => {
+    const wrapper = mountProjectConfigEditor(project())
+    await new Promise(r => setTimeout(r))
+
+    const toggle = wrapper.find('[data-test="project-pg-terminate-connections"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.find('[data-test="project-pg-terminate-warning"]').exists()).toBe(true)
+  })
+
+  it('点击试跑调用 dry-run 并渲染步骤与脱敏 DSN', async () => {
+    vi.mocked(dataSourceApi.dryRun).mockResolvedValueOnce({
+      plans: [{ kind: 'postgres', resource_name: 'sdev_eph_demo_aabbcc', steps: ['克隆 tk_dev'] }],
+      masked_dsns: ['postgres://role:***@127.0.0.1/db'],
+      succeeded: true,
+    })
+    const wrapper = mountProjectConfigEditor(project())
+    await new Promise(r => setTimeout(r))
+
+    await wrapper.find('[data-test="project-data-source-dry-run"]').trigger('click')
+    await new Promise(r => setTimeout(r))
+
+    expect(dataSourceApi.dryRun).toHaveBeenCalledWith('p1')
+    expect(wrapper.find('[data-test="project-dry-run-result"]').text()).toContain('postgres://role:***@127.0.0.1/db')
+    expect(wrapper.find('[data-test="project-dry-run-result"]').text()).toContain('克隆 tk_dev')
+  })
+
+  it('未登记数据源时给出去设置页登记的引导', async () => {
+    vi.mocked(dataSourceApi.list).mockResolvedValueOnce([])
+    const wrapper = mountProjectConfigEditor(project())
+    await new Promise(r => setTimeout(r))
+
+    expect(wrapper.find('[data-test="project-data-source-register-hint"]').exists()).toBe(true)
   })
 })

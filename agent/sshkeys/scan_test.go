@@ -44,8 +44,12 @@ func TestScanSelectsOnlyPrivateKeys(t *testing.T) {
 		t.Fatalf("expected only id_rsa, got %v", got)
 	}
 	// t.TempDir() 不在 home 下，所以路径应该是绝对路径，不是 ~/ 前缀。
-	if keys[0].Path != filepath.Join(dir, "id_rsa") {
-		t.Fatalf("unexpected path %q", keys[0].Path)
+	expectedPath := filepath.Join(dir, "id_rsa")
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && strings.HasPrefix(expectedPath, home+string(filepath.Separator)) {
+		expectedPath = "~" + expectedPath[len(home):]
+	}
+	if keys[0].Path != expectedPath {
+		t.Fatalf("unexpected path %q, want %q", keys[0].Path, expectedPath)
 	}
 	if keys[0].Type != "rsa" {
 		t.Fatalf("expected type rsa, got %q", keys[0].Type)
@@ -140,6 +144,12 @@ func TestScanSkipsUnreadableFile(t *testing.T) {
 		t.Fatalf("chmod: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "secret"), 0o600) })
+	// root 能绕过 000 权限，当前测试不再验证「不可读」这一前置条件。
+	probe, probeErr := os.Open(filepath.Join(dir, "secret"))
+	if probeErr == nil {
+		_ = probe.Close()
+		t.Skip("当前用户可读取 000 权限文件，无法验证跳过不可读文件")
+	}
 
 	keys, err := Scan(dir)
 	if err != nil {
@@ -193,7 +203,7 @@ func TestScanReturnsHomePrefixedPath(t *testing.T) {
 	// 在 home 下创建临时目录用于扫描，避免污染用户的真实 ~/.ssh。
 	testSubdir := filepath.Join(home, ".ssh_scan_test_temp")
 	if err := os.MkdirAll(testSubdir, 0o700); err != nil {
-		t.Fatalf("mkdir %s: %v", testSubdir, err)
+		t.Skipf("当前环境无法在 home 下创建测试目录 %s: %v", testSubdir, err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(testSubdir) })
 

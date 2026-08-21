@@ -24,3 +24,5 @@
 | 远程开发机 · 双面孔节点卡（桌面端在线徽标+端口镜像区） | remote-dev-machine | pages/node-center.html | 确认中（2026-08-01 用户走查认可） |
 | 远程开发机 · 双控制面审批（先裁决者生效+对方已处理态） | remote-dev-machine | pages/popover.html | 确认中（2026-08-01 用户走查认可） |
 | 远程开发机 · 配置面（主机级「开发机模式」开关+纳管已有 agent；添加时不默认勾选） | remote-dev-machine | pages/settings.html | 确认中（2026-08-01 用户裁决：主机级粒度够、不默认勾选） |
+| AI 临时库供给 · 设置「数据源」页（管理连接登记+权限探测+db 号占用图+活跃临时资源+对账） | db-provisioning | pages/settings.html | 确认中（2026-08-21 用户走查认可） |
+| AI 临时库供给 · 项目配置「数据源」区块（绑定实例/开发库、克隆前踢连接开关、配额与 TTL、试跑） | db-provisioning | pages/project-datasource.html（新增页，真实对应 ProjectConfigEditor 新区块） | 确认中（2026-08-21 用户走查认可） |

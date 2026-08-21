@@ -21,8 +21,10 @@ ProjectConfigSurface：项目运行配置的可复用编辑主体。
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api, type Project } from '@/api/agent'
+import { api, type Project, type ProjectDataSourceBinding } from '@/api/agent'
 import { useAgentStore } from '@/stores/agent'
+import { useDataSourceStore } from '@/stores/datasources'
+import type { DryRunResult } from '@/api/datasources'
 import { projectToDraft, draftToPayload, validateDraftDetailed, formatValidationIssue, type ConfigDraft, type ConfigDraftService } from '@/lib/configDraft'
 import type { ProjectConfigSurfaceState } from '@/stores/workspace'
 import AIGuidanceFields from './AIGuidanceFields.vue'
@@ -47,6 +49,7 @@ const emit = defineEmits<{
 }>()
 
 const agentStore = useAgentStore()
+const dataSourceStore = useDataSourceStore()
 const { t } = useI18n()
 const draft = ref(props.state?.draft ? cloneDraft(props.state.draft) : projectToDraft(props.project))
 const activeEnv = ref(props.state?.activeEnv ?? '')
@@ -57,6 +60,31 @@ const errors = ref<string[]>(props.state?.errors ? [...props.state.errors] : [])
 const saving = ref(false)
 const saveError = ref<string | null>(props.state?.saveError ?? null)
 const showMigrationDialog = ref(false)
+const dryRunResult = ref<DryRunResult | null>(null)
+const dryRunLoading = ref(false)
+const dryRunError = ref('')
+
+function defaultProjectDataSourceBinding(): ProjectDataSourceBinding {
+  return {
+    postgres: { datasource_name: '', dev_database: '', terminate_connections: true },
+    redis: { datasource_name: '' },
+    max_concurrent_leases: 3,
+    default_ttl_minutes: 30,
+  }
+}
+
+function ensureProjectDataSourceBinding() {
+  const source = draft.value.data_source_binding
+  const defaults = defaultProjectDataSourceBinding()
+  draft.value.data_source_binding = {
+    postgres: { ...defaults.postgres, ...(source?.postgres ?? {}) },
+    redis: { ...defaults.redis, ...(source?.redis ?? {}) },
+    max_concurrent_leases: source?.max_concurrent_leases ?? defaults.max_concurrent_leases,
+    default_ttl_minutes: source?.default_ttl_minutes ?? defaults.default_ttl_minutes,
+  }
+}
+
+ensureProjectDataSourceBinding()
 
 function cloneDraft(value: ConfigDraft): ConfigDraft {
   return JSON.parse(JSON.stringify(value))
@@ -80,6 +108,7 @@ function selectDefaultEnvAndService(force = false) {
 
 function resetDraft(project: Project = props.project) {
   draft.value = projectToDraft(project)
+  ensureProjectDataSourceBinding()
   errors.value = []
   saveError.value = null
   renamingEnv.value = ''
@@ -99,6 +128,7 @@ function emitState() {
 
 onMounted(async () => {
   selectDefaultEnvAndService()
+  void dataSourceStore.load().catch(() => undefined)
   try {
     const list = await api.listHosts()
     hosts.value = list.filter(h => !h.is_self).map(h => ({ id: h.id, name: h.name }))
@@ -106,6 +136,26 @@ onMounted(async () => {
     hosts.value = []
   }
 })
+
+const dataSourceBinding = computed(() => draft.value.data_source_binding ?? defaultProjectDataSourceBinding())
+const postgresDataSources = computed(() => dataSourceStore.sources.filter(source => source.kind === 'postgres'))
+const redisDataSources = computed(() => dataSourceStore.sources.filter(source => source.kind === 'redis'))
+const selectedPostgresDataSource = computed(() => postgresDataSources.value.find(
+  source => source.name === dataSourceBinding.value.postgres?.datasource_name,
+))
+
+async function runDataSourceDryRun() {
+  dryRunLoading.value = true
+  dryRunError.value = ''
+  dryRunResult.value = null
+  try {
+    dryRunResult.value = await dataSourceStore.dryRun(props.project.id)
+  } catch (error) {
+    dryRunError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    dryRunLoading.value = false
+  }
+}
 
 // agentStore 会按轮询频率用同 id 的新对象刷新 project；编辑中不能因此覆盖未保存草稿。
 // 真正切换到另一个项目时才重建草稿。
@@ -330,6 +380,91 @@ async function handleMigrated() {
       </ul>
       <div v-if="saveError" class="settings-alert settings-alert-danger err-list">{{ saveError }}</div>
 
+      <!--
+        数据源绑定写入共享层 project.yaml，随项目配置提交；管理连接密码只在机器层登记表中保存。
+        这里因此只能选择数据源名和模板库名，绝不提供密码输入或把凭据带进项目草稿。
+      -->
+      <section class="settings-card project-data-source-card" data-test="project-data-source-binding">
+        <div class="project-data-source-header">
+          <div>
+            <h2>{{ t('settings.projectDataSources.title') }}</h2>
+            <p>{{ t('settings.projectDataSources.description') }}</p>
+          </div>
+          <button
+            type="button"
+            class="settings-btn settings-btn-secondary"
+            data-test="project-data-source-dry-run"
+            :disabled="dryRunLoading"
+            @click="runDataSourceDryRun"
+          >
+            {{ dryRunLoading ? t('common.loading') : t('settings.projectDataSources.dryRun') }}
+          </button>
+        </div>
+        <p v-if="!dataSourceStore.sources.length && !dataSourceStore.loading" class="settings-alert settings-alert-warning" data-test="project-data-source-register-hint">
+          {{ t('settings.projectDataSources.registerHint') }}
+        </p>
+        <p v-if="dataSourceStore.error" class="settings-alert settings-alert-danger" data-test="project-data-source-error">
+          {{ dataSourceStore.error }}
+        </p>
+        <div class="project-data-source-grid">
+          <div class="project-data-source-kind">
+            <h3>{{ t('settings.projectDataSources.postgres') }}</h3>
+            <label class="settings-field">
+              <span class="settings-field-label">{{ t('settings.projectDataSources.managementSource') }}</span>
+              <select v-model="dataSourceBinding.postgres!.datasource_name" class="settings-input" data-test="project-pg-datasource">
+                <option value="">{{ t('settings.projectDataSources.selectSource') }}</option>
+                <option v-for="source in postgresDataSources" :key="source.id" :value="source.name">{{ source.name }}</option>
+              </select>
+            </label>
+            <label class="settings-field">
+              <span class="settings-field-label">{{ t('settings.projectDataSources.devDatabase') }}</span>
+            <input v-model="dataSourceBinding.postgres!.dev_database" class="settings-input" data-test="project-pg-dev-database" :placeholder="t('settings.projectDataSources.devDatabasePlaceholder')">
+            </label>
+            <p class="project-data-source-template-hint" data-test="project-pg-template-hint">
+              {{ t('settings.projectDataSources.templateHint', {
+                size: selectedPostgresDataSource?.probe.facts?.template_size || t('settings.projectDataSources.templateSizeUnknown'),
+                eta: selectedPostgresDataSource?.probe.facts?.estimated_clone_time || t('settings.projectDataSources.estimatedTimeUnknown'),
+              }) }}
+            </p>
+            <label class="project-data-source-toggle">
+              <input v-model="dataSourceBinding.postgres!.terminate_connections" type="checkbox" data-test="project-pg-terminate-connections">
+              <span>{{ t('settings.projectDataSources.terminateConnections') }}</span>
+            </label>
+            <p class="settings-alert settings-alert-warning project-data-source-warning" data-test="project-pg-terminate-warning">
+              {{ t('settings.projectDataSources.terminateWarning') }}
+            </p>
+          </div>
+          <div class="project-data-source-kind">
+            <h3>{{ t('settings.projectDataSources.redis') }}</h3>
+            <label class="settings-field">
+              <span class="settings-field-label">{{ t('settings.projectDataSources.managementSource') }}</span>
+              <select v-model="dataSourceBinding.redis!.datasource_name" class="settings-input" data-test="project-redis-datasource">
+                <option value="">{{ t('settings.projectDataSources.selectSource') }}</option>
+                <option v-for="source in redisDataSources" :key="source.id" :value="source.name">{{ source.name }}</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="project-data-source-limits">
+          <label class="settings-field">
+            <span class="settings-field-label">{{ t('settings.projectDataSources.maxConcurrentLeases') }}</span>
+            <input v-model.number="dataSourceBinding.max_concurrent_leases" class="settings-input" data-test="project-max-concurrent-leases" type="number" min="1">
+          </label>
+          <label class="settings-field">
+            <span class="settings-field-label">{{ t('settings.projectDataSources.defaultTTL') }}</span>
+            <input v-model.number="dataSourceBinding.default_ttl_minutes" class="settings-input" data-test="project-default-ttl-minutes" type="number" min="1">
+          </label>
+        </div>
+        <div v-if="dryRunError" class="settings-alert settings-alert-danger" data-test="project-dry-run-error">{{ dryRunError }}</div>
+        <div v-if="dryRunResult" class="settings-alert settings-alert-success project-dry-run-result" data-test="project-dry-run-result">
+          <div v-for="plan in dryRunResult.plans" :key="`${plan.kind}:${plan.resource_name}`">
+            <strong>{{ plan.kind }} · {{ plan.resource_name }}</strong>
+            <ul><li v-for="step in plan.steps" :key="step">{{ step }}</li></ul>
+          </div>
+          <div v-for="dsn in dryRunResult.masked_dsns" :key="dsn"><code class="settings-mono">{{ dsn }}</code></div>
+        </div>
+      </section>
+
       <section class="config-env-shell">
         <AIGuidanceFields
           class="project-ai-guidance"
@@ -495,13 +630,66 @@ async function handleMigrated() {
   color: var(--text-tertiary);
 }
 .config-env-shell,
-.editor-right {
+.editor-right,
+.project-data-source-card {
   border: 1px solid var(--border-secondary);
   border-radius: 8px;
   background: rgba(13, 19, 28, 0.78);
 }
 .config-env-shell {
   padding: 12px 14px 14px;
+}
+.project-data-source-card {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+.project-data-source-header,
+.project-data-source-grid,
+.project-data-source-limits {
+  display: grid;
+  gap: 14px;
+}
+.project-data-source-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+.project-data-source-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.project-data-source-kind {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 12px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 7px;
+}
+.project-data-source-kind h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.project-data-source-limits {
+  grid-template-columns: repeat(2, minmax(140px, 240px));
+}
+.project-data-source-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.project-data-source-warning {
+  margin: 0;
+  font-size: 11px;
+}
+.project-dry-run-result {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+.project-dry-run-result ul {
+  margin: 4px 0;
 }
 .project-ai-guidance {
   margin-bottom: 12px;
@@ -576,7 +764,10 @@ async function handleMigrated() {
 }
 @media (max-width: 860px) {
   .env-settings,
-  .editor-columns {
+  .editor-columns,
+  .project-data-source-grid,
+  .project-data-source-header,
+  .project-data-source-limits {
     grid-template-columns: 1fr;
   }
   .editor-left {

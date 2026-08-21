@@ -16,6 +16,20 @@ import (
 	pipelinetemplate "github.com/xsxdot/super-dev/agent/template"
 )
 
+// TestDatabaseAcquireRequest 是 acquire_test_database 发给 agent 的请求体。
+//
+// 边界：只含项目申请参数，不承载任何管理连接凭据。
+type TestDatabaseAcquireRequest struct {
+	Purpose    string   `json:"purpose"`
+	TTLMinutes int      `json:"ttl_minutes,omitempty"`
+	Kinds      []string `json:"kinds,omitempty"`
+}
+
+// TestDatabaseRenewRequest 是 renew_test_database 发给 agent 的请求体。
+type TestDatabaseRenewRequest struct {
+	TTLMinutes int `json:"ttl_minutes,omitempty"`
+}
+
 // LogsResponse 是 deployment 日志分页接口响应。
 type LogsResponse struct {
 	Items []model.LogEntry `json:"items"`

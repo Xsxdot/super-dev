@@ -3,7 +3,7 @@
 // 职责：
 //   - 建立 campaign 变量、按依赖顺序执行固定 MCP steps
 //   - 处理有限的状态轮询、变量捕获、严格策略拒绝和精确 cleanup
-//   - 生成恰好 75 条 primary 工具结果行
+//   - 生成恰好 79 条 primary 工具结果行
 
 // 边界：
 //   - 不接受任意命令、插件、脚本步骤或动态图
@@ -77,7 +77,7 @@ type RunOptions struct {
 	DebugCredentialValue string `json:"-" yaml:"-"`
 }
 
-// ToolEvidenceRow 是最终 75 工具表中的一行。
+// ToolEvidenceRow 是最终 79 工具表中的一行。
 type ToolEvidenceRow struct {
 	Tool           string           `json:"tool"`
 	ScenarioID     string           `json:"scenario_id"`
@@ -123,7 +123,7 @@ type ScenarioCatalogEntry struct {
 	Cleanup []StepCatalogEntry `json:"cleanup"`
 }
 
-// ValidationCatalog 把本次报告绑定到冻结 scenario、step 与 75 工具归属。
+// ValidationCatalog 把本次报告绑定到冻结 scenario、step 与 79 工具归属。
 type ValidationCatalog struct {
 	Scenarios []ScenarioCatalogEntry `json:"scenarios"`
 	Coverage  []CoverageAssignment   `json:"coverage"`

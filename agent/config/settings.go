@@ -72,7 +72,11 @@ type ApprovalPolicy struct {
 	BrowserDebugOpen  bool `json:"browser_debug_open"`  // 打开浏览器调试会话是否审批
 	CodeDebugOpen     bool `json:"code_debug_open"`     // 打开代码调试会话是否审批
 	CodeDebugEvaluate bool `json:"code_debug_evaluate"` // 在代码调试会话中求值是否审批
-	GraceMinutes      int  `json:"grace_minutes"`       // 豁免窗口时长（分钟）
+	// TestDatabaseTerminateConns 表示临时库克隆前断开开发库连接是否需要审批。
+	//
+	// 注意：只有真检测到活跃连接时才会触发审批；无连接时直接克隆，不生成审批请求。
+	TestDatabaseTerminateConns bool `json:"test_database_terminate_conns"`
+	GraceMinutes               int  `json:"grace_minutes"` // 豁免窗口时长（分钟）
 }
 
 // DebugBrowserSettings 表示本机浏览器调试偏好。
@@ -124,14 +128,15 @@ func DefaultAgentSettings() AgentSettings {
 		LogCleanupIntervalSeconds: DefaultLogCleanupIntervalSeconds,
 		ArtifactKeepVersions:      DefaultArtifactKeepVersions,
 		Approval: ApprovalPolicy{
-			ConfigUpsert:      true,
-			PipelineUpsert:    true,
-			PipelineRun:       true,
-			TemplateImport:    true,
-			BrowserDebugOpen:  true,
-			CodeDebugOpen:     true,
-			CodeDebugEvaluate: true,
-			GraceMinutes:      DefaultGraceMinutes,
+			ConfigUpsert:               true,
+			PipelineUpsert:             true,
+			PipelineRun:                true,
+			TemplateImport:             true,
+			BrowserDebugOpen:           true,
+			CodeDebugOpen:              true,
+			CodeDebugEvaluate:          true,
+			TestDatabaseTerminateConns: true,
+			GraceMinutes:               DefaultGraceMinutes,
 		},
 		DebugBrowser: DebugBrowserSettings{
 			ProfileMode:       DebugBrowserProfileModeEphemeral,

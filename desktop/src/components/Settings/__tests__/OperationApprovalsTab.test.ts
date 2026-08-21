@@ -126,6 +126,7 @@ describe('OperationApprovalsTab', () => {
         browser_debug_open: false,
         code_debug_open: true,
         code_debug_evaluate: true,
+        test_database_terminate_conns: true,
         grace_minutes: 30,
       },
     } as any)
@@ -145,6 +146,7 @@ describe('OperationApprovalsTab', () => {
         browser_debug_open: false,
         code_debug_open: true,
         code_debug_evaluate: true,
+        test_database_terminate_conns: true,
         grace_minutes: 30,
       },
     })
@@ -181,6 +183,43 @@ describe('OperationApprovalsTab', () => {
     expect(saveApprovalPolicy).toHaveBeenCalledWith(expect.objectContaining({
       code_debug_open: false,
       code_debug_evaluate: false,
+    }))
+  })
+
+  it('渲染临时库断连免审开关并回写设置字段', async () => {
+    const approvalStore = useOperationApprovalStore()
+    vi.spyOn(approvalStore, 'loadPending').mockResolvedValue(undefined)
+    const settingsStore = useSettingsStore()
+    settingsStore.agentSettings = {
+      log_retention_days: 7,
+      artifact_keep_versions: 10,
+      approval: {
+        config_upsert: true,
+        pipeline_upsert: true,
+        pipeline_run: true,
+        template_import: true,
+        browser_debug_open: true,
+        code_debug_open: true,
+        code_debug_evaluate: true,
+        test_database_terminate_conns: true,
+        grace_minutes: 15,
+      },
+    }
+    vi.spyOn(settingsStore, 'loadAgentSettings').mockResolvedValue(undefined)
+    const saveApprovalPolicy = vi.spyOn(settingsStore, 'saveApprovalPolicy').mockResolvedValue(undefined)
+
+    const wrapper = mount(OperationApprovalsTab, { global: { plugins: [installTestI18n('zh-CN')] } })
+    await flushPromises()
+
+    const toggle = wrapper.get('[data-test="approval-switch-test-database-terminate-conns"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+    expect(wrapper.text()).toContain('临时库克隆前断开开发库连接')
+
+    await toggle.setValue(false)
+    await wrapper.get('[data-test="approval-settings-save"]').trigger('click')
+
+    expect(saveApprovalPolicy).toHaveBeenCalledWith(expect.objectContaining({
+      test_database_terminate_conns: false,
     }))
   })
 

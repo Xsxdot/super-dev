@@ -34,6 +34,7 @@ import (
 	"github.com/xsxdot/super-dev/agent/codedebug"
 	"github.com/xsxdot/super-dev/agent/collector"
 	"github.com/xsxdot/super-dev/agent/config"
+	"github.com/xsxdot/super-dev/agent/dbprovision"
 	"github.com/xsxdot/super-dev/agent/debugcredential"
 	"github.com/xsxdot/super-dev/agent/debugsession"
 	"github.com/xsxdot/super-dev/agent/identity"
@@ -163,16 +164,19 @@ func (p productionHostAgentInstaller) UpdateBinary(ctx context.Context, host mod
 
 // App 是 HTTP API 服务的核心结构，持有所有运行时状态。
 type App struct {
-	cfg       AppConfig
-	mu        sync.RWMutex
-	closeOnce sync.Once
-	closeFn   func() // 仅供包内测试注入，生产环境 nil 时执行真实清理。
-	projects  []model.Project
-	managers  map[string]*process.Manager // projectID → manager
-	buf       *logbuf.Buffer
-	store     *store.Store
-	registry  *config.Registry
-	settings  *config.SettingsStore
+	cfg                AppConfig
+	mu                 sync.RWMutex
+	closeOnce          sync.Once
+	closeFn            func() // 仅供包内测试注入，生产环境 nil 时执行真实清理。
+	projects           []model.Project
+	managers           map[string]*process.Manager // projectID → manager
+	buf                *logbuf.Buffer
+	store              *store.Store
+	registry           *config.Registry
+	settings           *config.SettingsStore
+	dataSourceRegistry *dbprovision.FileRegistry
+	provisionManager   *dbprovision.Manager
+	provisionReaper    *dbprovision.Reaper
 	// uiState 持久化纯 UI 偏好（如各环境勾选的服务列表），split 格式项目的
 	// env_selected_service_ids 唯一归宿，不与项目配置文件混在一起。
 	uiState                *config.UIStateStore
@@ -377,6 +381,12 @@ func NewApp(cfg AppConfig) (*App, error) {
 	buf := logbuf.New(storeWriter{s: s}, 2000, id.NodeID, seqWatermarks)
 	registryPath := filepath.Join(cfg.DataDir, "projects.json")
 	registry := config.NewRegistry(registryPath)
+	dataSourcePath := filepath.Join(cfg.DataDir, "datasources.json")
+	dataSourceRegistry, err := dbprovision.NewFileRegistry(dataSourcePath)
+	if err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("初始化数据源注册表失败: %w", err)
+	}
 	// uiState 与 registry/settings 同级：agent 数据目录下的独立 JSON 文件，
 	// 承载 split 格式项目的 env_selected_service_ids UI 偏好。
 	uiState := config.NewUIStateStore(cfg.DataDir)
@@ -564,6 +574,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		store:                       s,
 		registry:                    registry,
 		settings:                    settingsStore,
+		dataSourceRegistry:          dataSourceRegistry,
 		uiState:                     uiState,
 		procMgr:                     procMgr,
 		collector:                   colMgr,
@@ -610,6 +621,30 @@ func NewApp(cfg AppConfig) (*App, error) {
 		ingressStore:                ingress.NewFileStore(cfg.DataDir),
 		ingressRegistry:             ingress.NewRegistry(),
 	}
+	dataSourceRegistry.SetActiveLeaseCounter(func(datasourceID string) int {
+		count, err := s.CountActiveLeasesByDataSource(datasourceID)
+		if err != nil {
+			logger.GetLogger().WithEntryName("DataSourceAPI").WithErr(err).WithField("datasource_id", datasourceID).Error("统计数据源活跃租约失败")
+			return 0
+		}
+		return count
+	})
+	app.provisionManager = dbprovision.NewManager(dbprovision.ManagerDeps{
+		Registry:     dataSourceRegistry,
+		Store:        s,
+		Bindings:     appBindingResolver{app: app},
+		ApprovalGate: NewProvisionApprovalGate(settingsStore, operationApprovals, operationGrace),
+		Now:          time.Now,
+		ListDataSources: func(ctx context.Context) ([]dbprovision.DataSource, error) {
+			return dataSourceRegistry.List(ctx)
+		},
+	})
+	app.provisionReaper = dbprovision.NewReaper(app.provisionManager, 30*time.Second)
+	app.provisionReaper.Start(context.Background())
+	logger.GetLogger().WithEntryName("DBProvisionAssembly").WithFields(map[string]any{
+		"datasources_path":        dataSourcePath,
+		"reaper_interval_seconds": 30,
+	}).Info("AI 临时资源供给层已装配")
 	app.remoteNodeMutations = newRemoteNodeMutationApplication(remoteStore, agentStore, app.hostAssembler, newAuditedTunnelRuntimeInvalidator(
 		func(hostID string) tunnel.Status {
 			return app.tunnels.Status(hostID)
@@ -763,6 +798,9 @@ func (a *App) doClose() {
 	if a.debugCredentialLeases != nil {
 		a.debugCredentialLeases.Clear()
 	}
+	if a.provisionReaper != nil {
+		a.provisionReaper.Stop()
+	}
 	if a.nodeRegistryCancel != nil {
 		a.nodeRegistryCancel()
 	}
@@ -876,6 +914,19 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /ws/node-status", a.wsNodeStatus)
 	mux.HandleFunc("GET /api/settings", a.getSettings)
 	mux.HandleFunc("PUT /api/settings", a.putSettings)
+
+	// AI 临时测试资源
+	mux.HandleFunc("GET /api/datasources", a.listDataSources)
+	mux.HandleFunc("POST /api/datasources", a.createDataSource)
+	mux.HandleFunc("PUT /api/datasources/{id}", a.updateDataSource)
+	mux.HandleFunc("DELETE /api/datasources/{id}", a.deleteDataSource)
+	mux.HandleFunc("POST /api/datasources/{id}/probe", a.probeDataSource)
+	mux.HandleFunc("GET /api/test-databases", a.listTestDatabases)
+	mux.HandleFunc("DELETE /api/test-databases/{lease_id}", a.deleteTestDatabase)
+	mux.HandleFunc("POST /api/test-databases/reconcile", a.reconcileTestDatabases)
+	mux.HandleFunc("POST /api/test-databases/{lease_id}/renew", a.renewTestDatabase)
+	mux.HandleFunc("POST /api/projects/{id}/test-database/acquire", a.acquireTestDatabase)
+	mux.HandleFunc("POST /api/projects/{id}/test-database/dry-run", a.dryRunTestDatabase)
 
 	// 远端编程智能体接入（Task 3）：detect 是接入流程第一步，只读，受
 	// withSecurity 保护——不进 securityBypassPath 白名单，匿名请求必须 401。
