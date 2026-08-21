@@ -50,7 +50,8 @@ func TestLoadBackfillsArtifactKeepVersionsDefault(t *testing.T) {
 func TestDefaultAgentSettingsApprovalPolicy(t *testing.T) {
 	s := config.DefaultAgentSettings()
 	if !s.Approval.ConfigUpsert || !s.Approval.PipelineUpsert ||
-		!s.Approval.PipelineRun || !s.Approval.TemplateImport || !s.Approval.BrowserDebugOpen {
+		!s.Approval.PipelineRun || !s.Approval.TemplateImport || !s.Approval.BrowserDebugOpen ||
+		!s.Approval.TestDatabaseTerminateConns {
 		t.Fatalf("default approval switches must all be true, got %+v", s.Approval)
 	}
 	if s.Approval.GraceMinutes != config.DefaultGraceMinutes {

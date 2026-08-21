@@ -11,6 +11,7 @@ package operation
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,6 +31,22 @@ func TestPlanTunnelInvalidationDoesNotClaimMutationAlreadyPersisted(t *testing.T
 	assert.Equal(t, "prepared_audit_required", plan.Checks[0].Name)
 	assert.Equal(t, "passed", plan.Checks[0].Status)
 	assert.NotContains(t, plan.Checks[0].Message, "persisted before invalidation")
+}
+
+func TestPlanTestDatabaseTerminateIsMediumRisk(t *testing.T) {
+	plan := PlanTestDatabaseTerminate("proj-1", "tk_dev", 3, "tk-server(pid 4821)")
+	if plan.Kind != OperationTestDatabaseTerminate {
+		t.Fatalf("kind 不对: %s", plan.Kind)
+	}
+	if plan.RiskLevel != RiskMedium {
+		t.Fatalf("断连是可见副作用但只影响开发环境，应为 medium，实际 %s", plan.RiskLevel)
+	}
+	if !strings.Contains(plan.TargetSummary, "tk_dev") {
+		t.Fatalf("摘要必须点名模板库，否则审批弹层看不出要断谁: %s", plan.TargetSummary)
+	}
+	if !strings.Contains(plan.TargetSummary, "3") {
+		t.Fatalf("摘要必须给出连接数: %s", plan.TargetSummary)
+	}
 }
 
 func TestPlanRuntimeAllowsDevLocalDeployment(t *testing.T) {

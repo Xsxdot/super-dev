@@ -20,4 +20,5 @@
 | 2026-08-21 | Task 9 / 双裁决第 3 轮 | 规格与代码质量通过；LeaseManager 已实现绑定解析、配额、统一审批、槽位重选、全量回滚、续租、幂等释放和列表脱敏；store/dbprovision 测试与构建通过 | 5ae3f712..9fa33128 |
 | 2026-08-21 | Task 10 / 修复第 2 轮 | 将 DryRun 改为命名返回值以保留回收失败状态，补齐 Lease 回收日志模块名并提升试跑计划错误日志级别；复验通过 | 04735911..11a36453 |
 | 2026-08-21 | Task 10 / 双裁决第 3 轮 | 规格与代码质量通过；DryRun 不落租约且脱敏、Reconcile 逐项容错、Reaper 可停止并完成启动对账/TTL 巡检；构建与 dbprovision/store 测试通过 | 04735911..11a36453 |
-| 2026-08-21 | Task 11 / 双裁决第 1 轮 | 规格与代码质量通过；Project 数据模型与 project.yaml 共享层完成数据源绑定读写，local.yaml 不承载该字段；配置/model 测试与 `go build ./...` 通过 | bee0dd3d |
+| 2026-08-21 | Task 11 / 双裁决第 1 轮 | 规格与代码质量通过；Project 数据模型与 project.yaml 共享层完成数据源绑定读写，local.yaml 不承载该字段；配置/model 测试与 `go build ./...` 通过 | 8dd7ab81 |
+| 2026-08-21 | Task 12 / 双裁决第 1 轮 | 规格与代码质量通过；新增断连中风险 operation plan、默认免审开关与复用 operation 审批/豁免/token 的 gate；定向与全量 api/operation/config 测试、全 agent 构建通过 | 本次提交待落地 |
