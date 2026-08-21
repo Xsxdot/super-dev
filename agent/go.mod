@@ -10,7 +10,7 @@ require (
 	github.com/playwright-community/playwright-go v0.5700.1
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/stretchr/testify v1.11.1
-	github.com/xsxdot/gokit v0.0.3
+	github.com/xsxdot/gokit v0.0.6
 	golang.org/x/crypto v0.51.0
 	golang.org/x/sys v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
