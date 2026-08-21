@@ -667,6 +667,20 @@ export interface Service {
   auth_hint?: string
 }
 
+/** 项目共享层里的 PG/Redis 临时资源绑定，不含机器凭据。 */
+export interface ProjectDataSourceBinding {
+  postgres?: {
+    datasource_name: string
+    dev_database: string
+    terminate_connections: boolean
+  }
+  redis?: {
+    datasource_name: string
+  }
+  max_concurrent_leases?: number
+  default_ttl_minutes?: number
+}
+
 export interface Project {
   id: string
   name: string
@@ -698,6 +712,8 @@ export interface Project {
   home_host_id?: string
   /** home_host_id 对应的主机展示名；归属主机已被删除时为空（ID 仍保留）。 */
   home_host_name?: string
+  /** 项目共享层里的 AI 临时库绑定；只含数据源名和模板库名，不含密码。 */
+  data_source_binding?: ProjectDataSourceBinding
 }
 
 // ===== 配置分层迁移（legacy config.yaml → project.yaml + local.yaml） =====
@@ -867,6 +883,8 @@ export interface ApprovalPolicy {
   browser_debug_open: boolean
   code_debug_open: boolean
   code_debug_evaluate: boolean
+  /** 临时库克隆前断开开发库连接是否免人工审批；旧服务端可能不返回该字段。 */
+  test_database_terminate_conns?: boolean
   grace_minutes: number
 }
 
@@ -1193,6 +1211,8 @@ export interface SetupPayload {
   services: SetupServiceEntry[]
   debug_credentials?: DebugCredential[]
   pipelines?: ProjectPipeline[]
+  /** 共享层项目配置中的临时资源绑定，不含密码。 */
+  data_source_binding?: ProjectDataSourceBinding
 }
 
 export interface ProjectPipelinePreviewRequest {

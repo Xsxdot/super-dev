@@ -49,6 +49,7 @@ export const useSettingsStore = defineStore('settings', () => {
       browser_debug_open: true,
       code_debug_open: true,
       code_debug_evaluate: true,
+      test_database_terminate_conns: true,
       grace_minutes: 15,
     },
     debug_browser: {
