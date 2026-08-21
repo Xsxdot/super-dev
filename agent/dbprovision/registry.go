@@ -81,12 +81,12 @@ func (r *FileRegistry) Add(ctx context.Context, ds DataSource) (DataSource, erro
 	if err != nil {
 		log := logger.GetLogger().WithEntryName("DBProvisionRegistry").WithField("kind", ds.Kind).WithField("name", ds.Name).WithField("missing", probe.Missing)
 		log.WithErr(err).Error("数据源探测失败，拒绝登记")
-		return DataSource{}, fmt.Errorf("数据源探测失败: %w", err)
+		return DataSource{}, &ProbeError{Result: probe, Cause: fmt.Errorf("数据源探测失败: %w", err)}
 	}
 	if !probe.OK {
 		err := fmt.Errorf("数据源探测未通过: %s; 修复提示: %s", probe.Error, probe.FixHint)
 		logger.GetLogger().WithEntryName("DBProvisionRegistry").WithField("kind", ds.Kind).WithField("name", ds.Name).WithField("missing", probe.Missing).WithErr(err).Error("数据源探测失败，拒绝登记")
-		return DataSource{}, err
+		return DataSource{}, &ProbeError{Result: probe, Cause: err}
 	}
 
 	r.mu.Lock()
@@ -136,10 +136,10 @@ func (r *FileRegistry) Update(ctx context.Context, id string, ds DataSource) (Da
 	}
 	probe, err := p.Probe(ctx, ds)
 	if err != nil {
-		return DataSource{}, fmt.Errorf("数据源探测失败: %w", err)
+		return DataSource{}, &ProbeError{Result: probe, Cause: fmt.Errorf("数据源探测失败: %w", err)}
 	}
 	if !probe.OK {
-		return DataSource{}, fmt.Errorf("数据源探测未通过: %s; 修复提示: %s", probe.Error, probe.FixHint)
+		return DataSource{}, &ProbeError{Result: probe, Cause: fmt.Errorf("数据源探测未通过: %s; 修复提示: %s", probe.Error, probe.FixHint)}
 	}
 
 	r.mu.Lock()
@@ -262,10 +262,10 @@ func (r *FileRegistry) Probe(ctx context.Context, id string) (ProbeResult, error
 
 func validateDataSource(ds DataSource) error {
 	if strings.TrimSpace(ds.Kind) == "" || strings.TrimSpace(ds.Name) == "" || strings.TrimSpace(ds.Host) == "" {
-		return errors.New("数据源 kind、name、host 不能为空")
+		return fmt.Errorf("%w: 数据源 kind、name、host 不能为空", ErrInvalidDataSource)
 	}
 	if ds.Port < 1 || ds.Port > 65535 {
-		return fmt.Errorf("数据源端口必须在 1..65535 内: %d", ds.Port)
+		return fmt.Errorf("%w: 数据源端口必须在 1..65535 内: %d", ErrInvalidDataSource, ds.Port)
 	}
 	return nil
 }

@@ -35,7 +35,40 @@ var (
 	ErrUnsupportedKind = errors.New("unsupported resource kind")
 	// ErrDataSourceInUse 表示数据源上仍有活跃租约，不能移除。
 	ErrDataSourceInUse = errors.New("data source still has active leases")
+	// ErrInvalidDataSource 表示数据源登记字段不完整或端口越界。
+	ErrInvalidDataSource = errors.New("invalid data source")
 )
+
+// ProbeError 表示数据源连通性或能力探测未通过。
+//
+// 注意：Result 只含探测事实与修复提示，不含密码；API 层可据此构造结构化
+// 4xx 响应，而不必从错误字符串反解析 Missing/FixHint。
+type ProbeError struct {
+	Result ProbeResult
+	Cause  error
+}
+
+// Error 返回适合日志与用户提示的探测失败摘要。
+func (e *ProbeError) Error() string {
+	if e == nil {
+		return "data source probe failed"
+	}
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	if e.Result.Error != "" {
+		return e.Result.Error
+	}
+	return "data source probe failed"
+}
+
+// Unwrap 返回探测流程本身的底层错误。
+func (e *ProbeError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
 
 // DataSource 是一条管理连接登记。
 //

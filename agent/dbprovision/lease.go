@@ -520,7 +520,9 @@ func maskDSN(dsn string) string {
 	if err == nil && parsed.User != nil {
 		username := parsed.User.Username()
 		parsed.User = url.UserPassword(username, "***")
-		return parsed.String()
+		// url.UserPassword 会把星号编码成 %2A；这里的星号是对外界面约定的
+		// 脱敏占位符，不是原始凭据，恢复成可读形式便于 AI/桌面端识别。
+		return strings.ReplaceAll(parsed.String(), "%2A%2A%2A", "***")
 	}
 	if replaced := credentialPattern.ReplaceAllString(dsn, `${1}:***@`); replaced != dsn {
 		return replaced
