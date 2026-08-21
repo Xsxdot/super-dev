@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -271,6 +272,70 @@ func mustName(t *testing.T, seed string) string {
 		t.Fatalf("生成资源名失败: %v", err)
 	}
 	return name
+}
+
+func TestPostgresReconcileFindsPrefixedOrphansOnly(t *testing.T) {
+	ds := pgTestDataSource(t)
+	ctx := context.Background()
+	p := NewPostgresProvisioner()
+
+	orphan := mustName(t, "itorph")
+	admin := mustConnect(t, adminDSN(ds, ""))
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+pgx.Identifier{orphan}.Sanitize()); err != nil {
+		t.Fatalf("造孤儿库失败: %v", err)
+	}
+	admin.Close(ctx)
+	defer mustDropDB(t, ds, orphan)
+
+	known := []Resource{{Kind: KindPostgres, Name: mustName(t, "itknown")}}
+	orphans, err := p.Reconcile(ctx, ds, known)
+	if err != nil {
+		t.Fatalf("Reconcile 失败: %v", err)
+	}
+
+	var found bool
+	for _, item := range orphans {
+		if item.Name == orphan {
+			found = true
+		}
+		if !strings.HasPrefix(item.Name, ResourcePrefix) {
+			t.Fatalf("Reconcile 报告了无前缀的库，会误删用户数据: %s", item.Name)
+		}
+	}
+	if !found {
+		t.Fatalf("未识别出孤儿库 %s: %+v", orphan, orphans)
+	}
+}
+
+func TestPostgresReconcileSkipsKnownResources(t *testing.T) {
+	ds := pgTestDataSource(t)
+	ctx := context.Background()
+	p := NewPostgresProvisioner()
+	tmpl := mustCreateTemplateDB(t, ds)
+	defer mustDropDB(t, ds, tmpl)
+
+	plan, err := p.Plan(ctx, ds, PlanRequest{
+		ProjectID: "p", NameSeed: mustName(t, "itlive"),
+		Binding: ProjectBinding{Postgres: &PostgresBinding{DevDatabase: tmpl, TerminateConnections: true}},
+	})
+	if err != nil {
+		t.Fatalf("Plan 失败: %v", err)
+	}
+	res, err := p.Provision(ctx, ds, plan)
+	if err != nil {
+		t.Fatalf("Provision 失败: %v", err)
+	}
+	defer p.Reclaim(ctx, ds, res)
+
+	orphans, err := p.Reconcile(ctx, ds, []Resource{res.WithoutSecret()})
+	if err != nil {
+		t.Fatalf("Reconcile 失败: %v", err)
+	}
+	for _, item := range orphans {
+		if item.Name == res.Name {
+			t.Fatal("已登记的活跃资源不能被当作孤儿")
+		}
+	}
 }
 
 func mustConnect(t *testing.T, dsn string) *pgx.Conn {

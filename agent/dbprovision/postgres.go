@@ -394,9 +394,96 @@ func (p *PostgresProvisioner) Reclaim(ctx context.Context, ds DataSource, res Re
 	return nil
 }
 
-// Reconcile 由后续任务实现；当前骨架不扫描或回收任何数据库。
-func (p *PostgresProvisioner) Reconcile(context.Context, DataSource, []Resource) ([]Orphan, error) {
-	return nil, fmt.Errorf("PostgreSQL Reconcile 尚未实现")
+// Reconcile 扫描 PostgreSQL 中带 ResourcePrefix 的数据库与角色孤儿。
+//
+// 注意：只报告带 ResourcePrefix 前缀且不在 known 中的资源，无法确证归属的一律放过；
+// 本方法只报告，不执行回收，实际回收由上层按同一 Resource 语义调用 Reclaim。
+func (p *PostgresProvisioner) Reconcile(ctx context.Context, ds DataSource, known []Resource) ([]Orphan, error) {
+	log := logger.GetLogger().WithEntryName("DBProvisionPG").WithField("known_count", len(known))
+	log.Debug("开始对账 PostgreSQL 临时资源")
+	knownNames := make(map[string]struct{}, len(known))
+	for _, resource := range known {
+		knownNames[resource.Name] = struct{}{}
+	}
+	conn, err := pgx.Connect(ctx, adminDSN(ds, ""))
+	if err != nil {
+		log.WithErr(err).Error("连接 PostgreSQL 维护库进行对账失败")
+		return nil, fmt.Errorf("连接 PostgreSQL 维护库失败: %w", err)
+	}
+	defer conn.Close(ctx)
+
+	// LIKE 中的下划线是通配符，必须用 ESCAPE 转义，否则会把 sdevXephY... 等无关库名也扫进来。
+	rows, err := conn.Query(ctx, `
+		SELECT datname FROM pg_database
+		WHERE datname LIKE 'sdev\_eph\_%' ESCAPE '\'
+		ORDER BY datname
+	`)
+	if err != nil {
+		log.WithErr(err).Error("查询 PostgreSQL 临时数据库对账列表失败")
+		return nil, fmt.Errorf("查询临时数据库失败: %w", err)
+	}
+	var orphans []Orphan
+	orphanNames := make(map[string]struct{})
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			log.WithErr(err).Error("读取 PostgreSQL 临时数据库对账项失败")
+			return nil, fmt.Errorf("读取临时数据库失败: %w", err)
+		}
+		if _, ok := knownNames[name]; ok {
+			continue
+		}
+		orphanNames[name] = struct{}{}
+		orphans = append(orphans, Orphan{Kind: KindPostgres, Name: name, Reason: "库带 sdev_eph_ 前缀但不在登记表中"})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		log.WithErr(err).Error("遍历 PostgreSQL 临时数据库对账项失败")
+		return nil, fmt.Errorf("遍历临时数据库失败: %w", err)
+	}
+	rows.Close()
+
+	rows, err = conn.Query(ctx, `
+		SELECT rolname FROM pg_roles
+		WHERE rolname LIKE 'sdev\_eph\_%' ESCAPE '\'
+		ORDER BY rolname
+	`)
+	if err != nil {
+		log.WithErr(err).Error("查询 PostgreSQL 临时角色对账列表失败")
+		return nil, fmt.Errorf("查询临时角色失败: %w", err)
+	}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			log.WithErr(err).Error("读取 PostgreSQL 临时角色对账项失败")
+			return nil, fmt.Errorf("读取临时角色失败: %w", err)
+		}
+		if _, ok := knownNames[name]; ok {
+			continue
+		}
+		if _, ok := orphanNames[name]; ok {
+			continue
+		}
+		orphans = append(orphans, Orphan{Kind: KindPostgres, Name: name, Reason: "角色带 sdev_eph_ 前缀但无对应登记"})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		log.WithErr(err).Error("遍历 PostgreSQL 临时角色对账项失败")
+		return nil, fmt.Errorf("遍历临时角色失败: %w", err)
+	}
+	rows.Close()
+	if len(orphans) > 0 {
+		names := make([]string, 0, len(orphans))
+		for _, orphan := range orphans {
+			names = append(names, orphan.Name)
+		}
+		log.WithFields(map[string]any{"orphan_count": len(orphans), "names": names}).Warn("发现 PostgreSQL 临时资源孤儿")
+	} else {
+		log.WithField("scanned", true).Debug("PostgreSQL 临时资源对账未发现孤儿")
+	}
+	return orphans, nil
 }
 
 func connectionDetails(connections []postgresActiveConnection, limit int) string {
