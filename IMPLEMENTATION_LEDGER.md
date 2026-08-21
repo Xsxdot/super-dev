@@ -16,3 +16,5 @@
 | 2026-08-21 | Task 8 / 修复第 2 轮 | 补充 Redis 显式选择目标 db、无效配置的非空错误 cause、成功供给日志；首次使用不存在的 `Client.Select`，验证原始错误为 `client.Select undefined` | 6ab01082..98d9909c |
 | 2026-08-21 | Task 8 / 修复第 3 轮 | 按 go-redis v9 实际 API 改用 `Do("SELECT", ...)`；纯单测、构建与 dbprovision 测试通过，集成测试无环境变量按预期 SKIP | 6ab01082..98d9909c |
 | 2026-08-21 | Task 8 / 双裁决第 4 轮 | 规格与代码质量通过；Redis 探测、db0 保留分配、空库复核、定向 FLUSHDB 与恒空 Reconcile 已实现 | 6ab01082..98d9909c |
+| 2026-08-21 | Task 9 / 修复第 2 轮 | 将 `store.ResourceRow` 下沉为 `dbprovision.StoredResource` 类型别名，并加入 `LeaseStore` 编译期断言，修复跨包接口无法实现问题 | 5ae3f712..9fa33128 |
+| 2026-08-21 | Task 9 / 双裁决第 3 轮 | 规格与代码质量通过；LeaseManager 已实现绑定解析、配额、统一审批、槽位重选、全量回滚、续租、幂等释放和列表脱敏；store/dbprovision 测试与构建通过 | 5ae3f712..9fa33128 |

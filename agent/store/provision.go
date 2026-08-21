@@ -18,18 +18,15 @@ import (
 )
 
 // ErrResourceSlotTaken 表示同一数据源上的资源槽位已被其他未回收资源占用。
-var ErrResourceSlotTaken = errors.New("provision resource slot taken")
+var ErrResourceSlotTaken = dbprovision.ErrResourceSlotTaken
 
 // ResourceRow 是数据库中一行资源登记，不包含明文 DSN。
-type ResourceRow struct {
-	ID           string
-	LeaseID      string
-	DataSourceID string
-	Kind         string
-	Name         string
-	Meta         map[string]string
-	Status       string
-}
+//
+// 它是 dbprovision.StoredResource 的别名，既保留 store 包的公开名称，也让 Store
+// 可以直接满足 dbprovision.LeaseStore，而不引入反向依赖。
+type ResourceRow = dbprovision.StoredResource
+
+var _ dbprovision.LeaseStore = (*Store)(nil)
 
 // InsertLease 插入一条 active 状态的租约。
 //
@@ -145,6 +142,31 @@ func (s *Store) GetLease(leaseID string) (dbprovision.Lease, []ResourceRow, erro
 	return lease, rows, nil
 }
 
+// GetLeaseWithResources 返回租约及供 LeaseManager 使用的资源行。
+//
+// 注意：released 租约按不存在处理，保证 Release 的重复调用天然幂等。
+func (s *Store) GetLeaseWithResources(leaseID string) (dbprovision.Lease, []dbprovision.StoredResource, error) {
+	lease, rows, err := s.GetLease(leaseID)
+	if err != nil {
+		return dbprovision.Lease{}, nil, err
+	}
+	var status string
+	if err := s.db.QueryRow(`SELECT status FROM provision_leases WHERE id = ?`, leaseID).Scan(&status); err != nil {
+		return dbprovision.Lease{}, nil, err
+	}
+	if status == "released" {
+		return dbprovision.Lease{}, nil, dbprovision.ErrLeaseNotFound
+	}
+	stored := make([]dbprovision.StoredResource, 0, len(rows))
+	for _, row := range rows {
+		stored = append(stored, dbprovision.StoredResource{
+			ID: row.ID, LeaseID: row.LeaseID, DataSourceID: row.DataSourceID,
+			Kind: row.Kind, Name: row.Name, Meta: row.Meta, Status: row.Status,
+		})
+	}
+	return lease, stored, nil
+}
+
 // ListLeases 返回指定项目的 active 租约；projectID 为空时返回全部 active 租约。
 func (s *Store) ListLeases(projectID string) ([]dbprovision.Lease, error) {
 	query := `SELECT id, project_id, purpose, created_at, expires_at, renew_count FROM provision_leases WHERE status = 'active'`
@@ -228,20 +250,39 @@ func (s *Store) listLeases(query string, args ...any) ([]dbprovision.Lease, erro
 		logger.GetLogger().WithEntryName("ProvisionStore").WithField("op", "list_leases").WithErr(err).Error("查询租约失败")
 		return nil, err
 	}
-	defer rows.Close()
 	var leases []dbprovision.Lease
 	for rows.Next() {
 		var lease dbprovision.Lease
 		var createdAt, expiresAt int64
 		if err := rows.Scan(&lease.ID, &lease.ProjectID, &lease.Purpose, &createdAt, &expiresAt, &lease.RenewCount); err != nil {
 			logger.GetLogger().WithEntryName("ProvisionStore").WithField("op", "list_leases").WithErr(err).Error("读取租约列表失败")
+			rows.Close()
 			return nil, err
 		}
 		lease.CreatedAt = time.Unix(createdAt, 0)
 		lease.ExpiresAt = time.Unix(expiresAt, 0)
 		leases = append(leases, lease)
 	}
-	return leases, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	for index := range leases {
+		rows, err := s.listResourceRows(`SELECT id, lease_id, datasource_id, kind, name, meta_json, status FROM provision_resources WHERE lease_id = ? ORDER BY created_at, id`, leases[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			if row.Status == "reclaimed" {
+				continue
+			}
+			leases[index].Resources = append(leases[index].Resources, dbprovision.Resource{
+				Kind: row.Kind, Name: row.Name, Meta: row.Meta,
+			})
+		}
+	}
+	return leases, nil
 }
 
 func (s *Store) listResourceRows(query string, args ...any) ([]ResourceRow, error) {
