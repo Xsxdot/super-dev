@@ -167,7 +167,14 @@ async function requestHeaders(headers?: HeadersInit): Promise<Record<string, str
   return merged
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+// request 发送带本机 agent 鉴权头的 JSON 请求。
+//
+// 参数：
+//   - path: agent REST 路径
+//   - options: 可选 HTTP 方法、请求体与额外头
+//
+// 返回：解码后的 JSON 响应；非 2xx 响应抛出 AgentAPIError。
+export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const { headers, ...rest } = options ?? {}
   // 首次 401：多半是 agent 重启轮换了本机 token——失效缓存重取一次再试。
   // 仅在首次请求确实带了凭据时才重试：裸连（token 为 null）的 401 重发只会原样再失败一次。
