@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-21
+
+### Fixed
+
+- Repaired the sidebar, bottom bar, and panel tabs still showing a homed dev service as not running after 0.2.4 fixed the runtime status snapshot. Those surfaces read `deployment.status` from `GET /api/services`, which was a second copy of the same wrong question: it asked the local process manager for a deployment whose dev environment is owned by another machine, and so could only ever answer stopped. The deployment status loop also sat inside the local-process-manager branch, which a homed project may not have at all. Home resolution now runs first and reuses the same rule as start/stop forwarding and the runtime status snapshot, so all three answers to "which machine runs this deployment" come from one place.
+
+### Changed
+
+- Updated repository, agent runtime, desktop package, Tauri, Cargo metadata, and Cargo lock metadata to version `0.2.5`.
+
 ## [0.2.4] - 2026-08-20
 
 ### Fixed
