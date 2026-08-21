@@ -299,6 +299,16 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, ds DataSource, plan
 	roleCreated = true
 	log.WithField("role", resourceName).Debug("PostgreSQL 临时角色创建完成")
 
+	// PG 16 起 CREATEROLE 建出来的角色只自动带 ADMIN OPTION，不含 SET 权限，
+	// 而 CREATE DATABASE ... OWNER <role> 要求建库者能 SET ROLE 到该属主。
+	// 不显式补这一次 GRANT，非 superuser 管理账号必然撞 42501 must be able to SET ROLE。
+	// 角色随库一起 DROP 时该成员资格自动消失，无需单独回收。
+	grantRole := fmt.Sprintf(`GRANT %s TO CURRENT_USER`, pgx.Identifier{resourceName}.Sanitize())
+	if _, err := conn.Exec(ctx, grantRole); err != nil {
+		log.WithFields(map[string]any{"resource_name": resourceName, "step": "grant_role_to_admin"}).WithErr(err).Error("把 PostgreSQL 临时角色授予管理账号失败")
+		return Resource{}, fmt.Errorf("授予临时角色给管理账号失败: %w", err)
+	}
+
 	if willTerminate {
 		if _, err := terminateTemplateConnections(ctx, conn, template); err != nil {
 			log.WithFields(map[string]any{"resource_name": resourceName, "step": "terminate_connections"}).WithErr(err).Error("断开 PostgreSQL 模板库连接失败")
@@ -340,6 +350,19 @@ func (p *PostgresProvisioner) Provision(ctx context.Context, ds DataSource, plan
 	log.WithFields(map[string]any{
 		"resource_name": resourceName, "elapsed_ms": time.Since(started).Milliseconds(),
 	}).Info("PostgreSQL 临时库创建完成")
+
+	// CREATE DATABASE ... OWNER 只改数据库本身的属主，克隆进来的表/序列/schema
+	// 仍归模板库原属主所有——临时角色连得上却读不了任何表，更谈不上跑迁移
+	// （ALTER TABLE 要求对象属主）。所以必须用管理账号连进克隆库，把库内对象
+	// 逐个转给临时角色。
+	//
+	// 这里刻意不用 REASSIGN OWNED：它除了当前库的对象，还会转走该属主名下的
+	// 「共享对象」——也就是这台实例上他拥有的其他数据库。那会把用户的正式库
+	// 挂到一个即将被 DROP 的临时角色底下，是不可逆的破坏。
+	if err := reassignClonedObjects(ctx, ds, resourceName); err != nil {
+		log.WithFields(map[string]any{"resource_name": resourceName, "step": "reassign_objects"}).WithErr(err).Error("移交 PostgreSQL 临时库内对象属主失败")
+		return Resource{}, fmt.Errorf("移交临时库对象属主失败: %w", err)
+	}
 
 	resDSN := postgresDSN(ds, resourceName, password, resourceName)
 	// CREATE DATABASE 不能包在事务里；库建好后再连入目标库执行 REVOKE CONNECT，才能收紧 PUBLIC 权限。
@@ -590,4 +613,83 @@ func postgresMajorVersion(version string) (int, error) {
 		return strconv.Atoi(majorText)
 	}
 	return 0, fmt.Errorf("版本字符串不含 PostgreSQL 主版本: %q", version)
+}
+
+// reassignClonedObjects 把克隆库内的对象属主全部改为临时角色。
+//
+// 参数：
+//   - ds: 管理连接（必须是模板库内对象的属主，或对其有足够权限）
+//   - resourceName: 临时库名，同时也是临时角色名
+//
+// 返回：
+//   - 任一对象移交失败即返回错误，由调用方触发整体回滚
+//
+// 注意：
+//   - 必须用管理账号连入克隆库执行：ALTER ... OWNER TO 要求执行者是对象属主，
+//     且是目标角色的成员（成员资格由 Provision 里那次 GRANT ... TO CURRENT_USER 提供）。
+//   - 刻意不使用 REASSIGN OWNED：它会连带移交该属主名下的共享对象——也就是这台
+//     实例上他拥有的其他数据库，会把用户的正式库挂到一个即将被 DROP 的临时角色
+//     底下，不可逆。这里只遍历当前库内的 schema、关系与例程。
+func reassignClonedObjects(ctx context.Context, ds DataSource, resourceName string) error {
+	conn, err := pgx.Connect(ctx, adminDSN(ds, resourceName))
+	if err != nil {
+		return fmt.Errorf("以管理账号连接临时库失败: %w", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	// relkind 覆盖普通表/分区表/序列/视图/物化视图/外部表；索引与 TOAST 随属主表走，
+	// 不单独移交。例程含函数与存储过程。系统 schema 一律跳过。
+	//
+	// deptype = 'e' 的对象属于某个扩展（如 pg_trgm 的 set_limit），PostgreSQL 不允许
+	// 单独改它们的属主，碰了就是 42501。这类对象本来就不该归临时角色——扩展函数
+	// 默认对 PUBLIC 可执行，临时角色照常能用。
+	const reassign = `
+DO $$
+DECLARE
+    target CONSTANT text := %s;
+    r record;
+BEGIN
+    FOR r IN
+        SELECT n.nspname FROM pg_namespace n
+         WHERE n.nspname NOT LIKE 'pg\_%%' AND n.nspname <> 'information_schema'
+           AND pg_get_userbyid(n.nspowner) <> target
+           AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                            WHERE d.classid = 'pg_namespace'::regclass
+                              AND d.objid = n.oid AND d.deptype = 'e')
+    LOOP
+        EXECUTE format('ALTER SCHEMA %%I OWNER TO %%I', r.nspname, target);
+    END LOOP;
+
+    FOR r IN
+        SELECT n.nspname, c.relname FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relkind IN ('r','p','S','v','m','f')
+           AND n.nspname NOT LIKE 'pg\_%%' AND n.nspname <> 'information_schema'
+           AND pg_get_userbyid(c.relowner) <> target
+           AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                            WHERE d.classid = 'pg_class'::regclass
+                              AND d.objid = c.oid AND d.deptype = 'e')
+    LOOP
+        EXECUTE format('ALTER TABLE %%I.%%I OWNER TO %%I', r.nspname, r.relname, target);
+    END LOOP;
+
+    FOR r IN
+        SELECT p.oid::regprocedure AS sig FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname NOT LIKE 'pg\_%%' AND n.nspname <> 'information_schema'
+           AND pg_get_userbyid(p.proowner) <> target
+           AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                            WHERE d.classid = 'pg_proc'::regclass
+                              AND d.objid = p.oid AND d.deptype = 'e')
+    LOOP
+        EXECUTE format('ALTER ROUTINE %%s OWNER TO %%I', r.sig, target);
+    END LOOP;
+END $$;`
+
+	if _, err := conn.Exec(ctx, fmt.Sprintf(reassign, quoteLiteral(resourceName))); err != nil {
+		return fmt.Errorf("移交库内对象属主失败: %w", err)
+	}
+	logger.GetLogger().WithEntryName("DBProvisionPG").
+		WithField("resource_name", resourceName).Info("临时库内对象属主已移交给临时角色")
+	return nil
 }
