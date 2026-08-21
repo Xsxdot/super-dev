@@ -6,9 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-08-21
+
 ### Added
 
-- Added AI real-test database provisioning through `acquire_test_database`, `release_test_database`, `renew_test_database`, and `list_test_databases`, plus desktop data-source registration, project binding, dry-run, TTL reclamation, and reconciliation. Redis isolation relies on convention and the assigned db number rather than database-level permissions; `db0` is reserved and users must not place unrelated data in a leased db.
+- Added AI real-test database provisioning through `acquire_test_database`, `release_test_database`, `renew_test_database`, and `list_test_databases`, plus desktop data-source registration, project binding, dry-run, TTL reclamation, and reconciliation. The point is to remove the reason an agent silently downgrades to sqlite or an in-memory stand-in when a test needs a real database: it can now lease a clone of the project's development database, on demand, with its own credentials and an expiry. PostgreSQL temporary databases are cloned with `CREATE DATABASE ... TEMPLATE`, which requires the template to have no other sessions at that instant, so cloning is preceded by an approval-gated `pg_terminate_backend` — the approval is raised only when active connections are actually detected, and can be exempted per installation. Provisioners are a plugin interface keyed by kind, so adding MySQL or a message queue later means implementing that interface rather than touching the lease manager.
+- Two isolation boundaries are worth stating plainly, because both are narrower than the word "isolation" suggests. PostgreSQL isolation is at the data layer only: the per-lease role owns its own cloned database and the objects inside it, but it remains an ordinary login role on the same instance and can still connect to other databases it has connect rights on, and read `pg_database`. Redis has no database-level permission model at all, so isolation there rests entirely on the lease holder using only the db number it was assigned; `db0` is never allocated, and unrelated data must not be placed in a leased db. Reclamation reflects this asymmetry — orphaned PostgreSQL databases are reconciled by the `sdev_eph_` name prefix, while Redis reconciliation deliberately returns nothing, since a db number carries no marking that could distinguish a leaked lease from a user's own data and a wrong `FLUSHDB` is the one irreversible act in this feature.
+
+### Changed
+
+- Updated repository, agent runtime, desktop package, Tauri, Cargo metadata, and Cargo lock metadata to version `0.2.6`.
 
 ## [0.2.5] - 2026-08-21
 
