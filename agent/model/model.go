@@ -13,6 +13,8 @@ package model
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/xsxdot/super-dev/agent/dbprovision"
 )
 
 // ServiceStatus 表示服务的运行状态。
@@ -269,6 +271,11 @@ type Project struct {
 	// 填充。归属主机若已被删除，此字段留空但 HomeHostID 仍保留——优雅降级，
 	// 不能让主机被删导致整个项目列表接口出错。
 	HomeHostName string `json:"home_host_name,omitempty" yaml:"-"`
+	// DataSourceBinding 是该项目的 AI 临时库数据源绑定。
+	//
+	// 注意：只含数据源名与库名，不含任何密码——密码保存在机器层
+	// datasources.json，因此本字段随 project.yaml 入库共享是安全的。
+	DataSourceBinding *dbprovision.ProjectBinding `json:"data_source_binding,omitempty" yaml:"data_source_binding,omitempty"`
 }
 
 // LogEntry 表示一条从服务进程捕获的日志记录。

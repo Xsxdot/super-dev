@@ -25,7 +25,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/xsxdot/gokit/logger"
+	"github.com/xsxdot/super-dev/agent/dbprovision"
 	"github.com/xsxdot/super-dev/agent/langdetect"
 	"github.com/xsxdot/super-dev/agent/langruntime"
 	"github.com/xsxdot/super-dev/agent/model"
@@ -179,20 +182,22 @@ func (l *Loader) readMainConfig(path string) (model.Project, map[string][]string
 	}
 
 	var raw struct {
-		ID                    string                  `yaml:"id,omitempty"`
-		Name                  string                  `yaml:"name"`
-		AINote                string                  `yaml:"ai_note,omitempty"`
-		AuthHint              string                  `yaml:"auth_hint,omitempty"`
-		Variables             map[string]string       `yaml:"variables,omitempty"`
-		DebugCredentials      []model.DebugCredential `yaml:"debug_credentials,omitempty"`
-		Environments          []envYAML               `yaml:"environments"`
-		Services              []serviceYAML           `yaml:"services"`
-		Pipelines             []model.ProjectPipeline `yaml:"pipelines,omitempty"`
-		EnvSelectedServiceIDs map[string][]string     `yaml:"env_selected_service_ids"`
+		ID                    string                      `yaml:"id,omitempty"`
+		Name                  string                      `yaml:"name"`
+		AINote                string                      `yaml:"ai_note,omitempty"`
+		AuthHint              string                      `yaml:"auth_hint,omitempty"`
+		Variables             map[string]string           `yaml:"variables,omitempty"`
+		DebugCredentials      []model.DebugCredential     `yaml:"debug_credentials,omitempty"`
+		Environments          []envYAML                   `yaml:"environments"`
+		Services              []serviceYAML               `yaml:"services"`
+		Pipelines             []model.ProjectPipeline     `yaml:"pipelines,omitempty"`
+		EnvSelectedServiceIDs map[string][]string         `yaml:"env_selected_service_ids"`
+		DataSourceBinding     *dbprovision.ProjectBinding `yaml:"data_source_binding,omitempty"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return model.Project{}, nil, fmt.Errorf("parse config: %w", err)
 	}
+	logDataSourceBinding(raw.Name, raw.DataSourceBinding)
 
 	services := make([]model.Service, len(raw.Services))
 	for i, s := range raw.Services {
@@ -200,17 +205,40 @@ func (l *Loader) readMainConfig(path string) (model.Project, map[string][]string
 	}
 
 	return model.Project{
-		ID:               raw.ID,
-		Name:             raw.Name,
-		RootPath:         l.rootPath,
-		AINote:           raw.AINote,
-		AuthHint:         raw.AuthHint,
-		Variables:        raw.Variables,
-		DebugCredentials: raw.DebugCredentials,
-		Environments:     envsFromYAML(raw.Environments),
-		Services:         services,
-		Pipelines:        raw.Pipelines,
+		ID:                raw.ID,
+		Name:              raw.Name,
+		RootPath:          l.rootPath,
+		AINote:            raw.AINote,
+		AuthHint:          raw.AuthHint,
+		Variables:         raw.Variables,
+		DebugCredentials:  raw.DebugCredentials,
+		Environments:      envsFromYAML(raw.Environments),
+		Services:          services,
+		Pipelines:         raw.Pipelines,
+		DataSourceBinding: raw.DataSourceBinding,
 	}, raw.EnvSelectedServiceIDs, nil
+}
+
+// logDataSourceBinding 记录项目绑定的解析结果与不完整配置警告。
+//
+// 注意：日志只记录是否绑定及 kind，不记录数据源名、库名或任何凭据，避免
+// 配置解析日志成为敏感连接信息的旁路出口。
+func logDataSourceBinding(projectName string, binding *dbprovision.ProjectBinding) {
+	if binding == nil {
+		return
+	}
+	logger.GetLogger().WithEntryName("ProjectConfig").WithField("project", projectName).
+		WithField("has_pg_binding", binding.Postgres != nil).
+		WithField("has_redis_binding", binding.Redis != nil).
+		Debug("项目数据源绑定已解析")
+	if binding.Postgres != nil && strings.TrimSpace(binding.Postgres.DataSourceName) == "" {
+		logger.GetLogger().WithEntryName("ProjectConfig").WithField("project", projectName).
+			WithField("kind", dbprovision.KindPostgres).Warn("项目数据源绑定缺少数据源名")
+	}
+	if binding.Redis != nil && strings.TrimSpace(binding.Redis.DataSourceName) == "" {
+		logger.GetLogger().WithEntryName("ProjectConfig").WithField("project", projectName).
+			WithField("kind", dbprovision.KindRedis).Warn("项目数据源绑定缺少数据源名")
+	}
 }
 
 // ScanSharedLayer 扫描磁盘上的共享层（project.yaml）里有哪些疑似密钥。
@@ -301,6 +329,9 @@ func buildRawConfig(p model.Project, rootPath string, includeEnvSelected bool) m
 	}
 	if len(p.Pipelines) > 0 {
 		raw["pipelines"] = p.Pipelines
+	}
+	if p.DataSourceBinding != nil {
+		raw["data_source_binding"] = p.DataSourceBinding
 	}
 	return raw
 }
