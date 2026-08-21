@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -364,7 +366,7 @@ func (m *Manager) Release(ctx context.Context, leaseID string) error {
 	if markErr := m.store.MarkLeaseReleased(leaseID); markErr != nil {
 		errs = append(errs, markErr)
 	}
-	logger.GetLogger().WithFields(map[string]any{"lease_id": leaseID, "reclaimed_count": reclaimed}).Info("租约回收完成")
+	logger.GetLogger().WithEntryName("DBProvisionLease").WithFields(map[string]any{"lease_id": leaseID, "reclaimed_count": reclaimed}).Info("租约回收完成")
 	_ = lease
 	return errors.Join(errs...)
 }
@@ -382,6 +384,151 @@ func (m *Manager) List(ctx context.Context, projectID string) ([]Lease, error) {
 		}
 	}
 	return leases, nil
+}
+
+// DryRun 规划并短暂创建每种资源以验证供给路径，返回步骤与脱敏 DSN。
+//
+// 注意：DryRun 刻意跳过配额和审批，不写租约登记；无论中途成功或失败，已创建资源都会在返回前回收。
+func (m *Manager) DryRun(ctx context.Context, projectID string) (result DryRunResult, err error) {
+	log := logger.GetLogger().WithEntryName("DBProvisionLease").WithField("project_id", projectID)
+	log.Info("开始临时资源试跑")
+	binding, projectName, err := m.bindings.Binding(projectID)
+	if err != nil {
+		return DryRunResult{Succeeded: false, Error: err.Error()}, err
+	}
+	kinds, err := selectedKinds(binding, nil)
+	if err != nil {
+		return DryRunResult{Succeeded: false, Error: err.Error()}, err
+	}
+	nameSeed, err := NewResourceName(projectName)
+	if err != nil {
+		return DryRunResult{Succeeded: false, Error: err.Error()}, err
+	}
+	plans := make([]plannedResource, 0, len(kinds))
+	for _, kind := range kinds {
+		planned, planErr := m.planResource(ctx, projectID, projectName, binding, kind, nameSeed)
+		if planErr != nil {
+			result.Plans = planValues(plans)
+			result.Succeeded = false
+			result.Error = planErr.Error()
+			log.WithErr(planErr).Error("临时资源试跑计划失败")
+			return result, planErr
+		}
+		plans = append(plans, planned)
+	}
+	result.Plans = planValues(plans)
+	var created []createdResource
+	defer func() {
+		for _, item := range created {
+			if reclaimErr := item.provisioner.Reclaim(ctx, item.datasource, item.resource); reclaimErr != nil {
+				log.WithField("resource_name", item.resource.Name).WithErr(reclaimErr).Error("试跑资源回收失败")
+				result.Succeeded = false
+				if result.Error == "" {
+					result.Error = reclaimErr.Error()
+				}
+			}
+		}
+		log.WithFields(map[string]any{"project_id": projectID, "succeeded": result.Succeeded, "plan_count": len(result.Plans)}).Info("临时资源试跑完成")
+	}()
+	for _, planned := range plans {
+		resource, provisionErr := planned.provisioner.Provision(ctx, planned.datasource, planned.plan)
+		if provisionErr != nil {
+			result.Succeeded = false
+			result.Error = provisionErr.Error()
+			return result, provisionErr
+		}
+		resource.Meta = mergeMeta(resource.Meta, map[string]string{"datasource_name": planned.datasource.Name})
+		created = append(created, createdResource{datasource: planned.datasource, provisioner: planned.provisioner, resource: resource})
+		result.MaskedDSNs = append(result.MaskedDSNs, maskDSN(resource.DSN))
+	}
+	result.Succeeded = true
+	return result, nil
+}
+
+// Reconcile 回收过期租约并对已登记数据源执行安全对账。
+//
+// 注意：单个租约、数据源或孤儿回收失败只记录到报告，不中断同一轮的其余回收动作。
+func (m *Manager) Reconcile(ctx context.Context) (ReconcileReport, error) {
+	var report ReconcileReport
+	expired, err := m.store.ListExpiredLeases(m.now())
+	if err != nil {
+		return report, err
+	}
+	for _, lease := range expired {
+		if releaseErr := m.Release(ctx, lease.ID); releaseErr != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("lease %s: %v", lease.ID, releaseErr))
+			logger.GetLogger().WithEntryName("DBProvisionReaper").WithField("lease_id", lease.ID).WithErr(releaseErr).Error("回收过期租约失败")
+			continue
+		}
+		report.ExpiredReclaimed++
+	}
+	if m.listSources == nil {
+		return report, nil
+	}
+	sources, err := m.listSources(ctx)
+	if err != nil {
+		report.Errors = append(report.Errors, err.Error())
+		return report, nil
+	}
+	active, err := m.store.ListAllActiveResources()
+	if err != nil {
+		report.Errors = append(report.Errors, err.Error())
+		return report, nil
+	}
+	for _, ds := range sources {
+		provisioner, ok := LookupProvisioner(ds.Kind)
+		if !ok {
+			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", ds.Kind, ErrUnsupportedKind))
+			continue
+		}
+		var known []Resource
+		for _, resource := range active {
+			if resource.DataSourceID == ds.ID && resource.Kind == ds.Kind && resource.Status != "reclaimed" {
+				known = append(known, Resource{Kind: resource.Kind, Name: resource.Name, Meta: resource.Meta})
+			}
+		}
+		orphans, reconcileErr := provisioner.Reconcile(ctx, ds, known)
+		if reconcileErr != nil {
+			report.Errors = append(report.Errors, reconcileErr.Error())
+			continue
+		}
+		for _, orphan := range orphans {
+			resource := Resource{Kind: orphan.Kind, Name: orphan.Name}
+			if reclaimErr := provisioner.Reclaim(ctx, ds, resource); reclaimErr != nil {
+				report.Errors = append(report.Errors, fmt.Sprintf("orphan %s: %v", orphan.Name, reclaimErr))
+				logger.GetLogger().WithEntryName("DBProvisionReaper").WithField("orphan_name", orphan.Name).WithErr(reclaimErr).Error("回收对账孤儿失败")
+				continue
+			}
+			report.OrphansReclaimed = append(report.OrphansReclaimed, orphan)
+		}
+	}
+	return report, nil
+}
+
+func planValues(plans []plannedResource) []Plan {
+	result := make([]Plan, 0, len(plans))
+	for _, planned := range plans {
+		result = append(result, planned.plan)
+	}
+	return result
+}
+
+var credentialPattern = regexp.MustCompile(`^([^:]+://[^/@:]*):([^@/]*)@`)
+
+func maskDSN(dsn string) string {
+	parsed, err := url.Parse(dsn)
+	if err == nil && parsed.User != nil {
+		username := parsed.User.Username()
+		parsed.User = url.UserPassword(username, "***")
+		return parsed.String()
+	}
+	if replaced := credentialPattern.ReplaceAllString(dsn, `${1}:***@`); replaced != dsn {
+		return replaced
+	}
+	if strings.Contains(dsn, "?") {
+		return dsn + "&password=***"
+	}
+	return dsn + "?password=***"
 }
 
 func (m *Manager) planResource(ctx context.Context, projectID, projectName string, binding ProjectBinding, kind, nameSeed string) (plannedResource, error) {
@@ -415,7 +562,7 @@ func (m *Manager) rollbackCreated(ctx context.Context, resources []createdResour
 			logger.GetLogger().WithEntryName("DBProvisionLease").WithFields(map[string]any{"kind": created.stored.Kind, "resource_name": created.stored.Name}).WithErr(err).Error("回滚资源回收失败")
 		}
 		if err := m.store.MarkResourceReclaimed(created.stored.ID); err != nil {
-			logger.GetLogger().WithField("resource_id", created.stored.ID).WithErr(err).Error("回滚资源登记失败")
+			logger.GetLogger().WithEntryName("DBProvisionLease").WithField("resource_id", created.stored.ID).WithErr(err).Error("回滚资源登记失败")
 		}
 	}
 }
