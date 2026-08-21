@@ -76,9 +76,18 @@ function defaultProjectDataSourceBinding(): ProjectDataSourceBinding {
 function ensureProjectDataSourceBinding() {
   const source = draft.value.data_source_binding
   const defaults = defaultProjectDataSourceBinding()
+  // 逐字段兜底而不是展开合并：postgres/redis 整块是可选的，`...(source?.postgres ?? {})`
+  // 会让 TS 把展开结果推成「每个字段都可能缺失」，与内层字段全必填的类型对不上。
   draft.value.data_source_binding = {
-    postgres: { ...defaults.postgres, ...(source?.postgres ?? {}) },
-    redis: { ...defaults.redis, ...(source?.redis ?? {}) },
+    postgres: {
+      datasource_name: source?.postgres?.datasource_name ?? defaults.postgres!.datasource_name,
+      dev_database: source?.postgres?.dev_database ?? defaults.postgres!.dev_database,
+      terminate_connections:
+        source?.postgres?.terminate_connections ?? defaults.postgres!.terminate_connections,
+    },
+    redis: {
+      datasource_name: source?.redis?.datasource_name ?? defaults.redis!.datasource_name,
+    },
     max_concurrent_leases: source?.max_concurrent_leases ?? defaults.max_concurrent_leases,
     default_ttl_minutes: source?.default_ttl_minutes ?? defaults.default_ttl_minutes,
   }
